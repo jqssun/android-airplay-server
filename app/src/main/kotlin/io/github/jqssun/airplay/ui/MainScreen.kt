@@ -21,6 +21,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
+import io.github.jqssun.airplay.viewmodel.DebugInfo
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
 
@@ -132,6 +133,8 @@ private fun OverviewContent(
     val serverName by viewModel.serverName.collectAsState()
     val videoAspect by viewModel.videoAspect.collectAsState()
     val videoResolution by viewModel.videoResolution.collectAsState()
+    val debugEnabled by viewModel.debugEnabled.collectAsState()
+    val debugInfo by viewModel.debugInfo.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Video area
@@ -181,6 +184,9 @@ private fun OverviewContent(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                     )
                 }
+            }
+            if (debugEnabled && connections > 0) {
+                DebugOverlay(debugInfo, Modifier.align(Alignment.TopStart).padding(8.dp))
             }
             var showRes by remember { mutableStateOf(false) }
             LaunchedEffect(videoResolution) {
@@ -269,6 +275,8 @@ private fun FullscreenVideo(
     onExitFullscreen: () -> Unit
 ) {
     val videoResolution by viewModel.videoResolution.collectAsState()
+    val debugEnabled by viewModel.debugEnabled.collectAsState()
+    val debugInfo by viewModel.debugInfo.collectAsState()
 
     Box(
         modifier = Modifier.fillMaxSize().background(Color.Black),
@@ -288,6 +296,9 @@ private fun FullscreenVideo(
                 tint = Color.White.copy(alpha = 0.7f)
             )
         }
+        if (debugEnabled) {
+            DebugOverlay(debugInfo, Modifier.align(Alignment.TopStart).padding(8.dp))
+        }
         var showRes by remember { mutableStateOf(false) }
         LaunchedEffect(videoResolution) {
             if (videoResolution.isNotEmpty()) {
@@ -306,5 +317,28 @@ private fun FullscreenVideo(
                 color = Color.White.copy(alpha = 0.6f)
             )
         }
+    }
+}
+
+@Composable
+private fun DebugOverlay(info: DebugInfo, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        val style = MaterialTheme.typography.labelSmall
+        val color = Color.White.copy(alpha = 0.9f)
+
+        if (info.videoCodec.isNotEmpty()) {
+            Text("Video: ${info.videoCodec} ${info.videoRes}", style = style, color = color)
+            Text("FPS: ${info.videoFps}  Bitrate: ${info.bitrateStr}", style = style, color = color)
+            Text("Frames: ${info.videoFrames}", style = style, color = color)
+        }
+        if (info.audioCodec.isNotEmpty()) {
+            Text("Audio: ${info.audioCodec}  Vol: ${info.audioVolume}%", style = style, color = color)
+        }
+        Text("Clients: ${info.connections}", style = style, color = color)
     }
 }

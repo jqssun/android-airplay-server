@@ -18,6 +18,22 @@ import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
 
+data class DebugInfo(
+    val videoCodec: String = "",
+    val videoRes: String = "",
+    val videoFps: Int = 0,
+    val videoBitrate: Long = 0,
+    val videoFrames: Long = 0,
+    val audioCodec: String = "",
+    val audioVolume: Int = 100,
+    val connections: Int = 0,
+) {
+    val bitrateStr: String get() {
+        val kbps = videoBitrate / 1000
+        return if (kbps >= 1000) "${"%.1f".format(kbps / 1000.0)} Mbps" else "$kbps Kbps"
+    }
+}
+
 @HiltViewModel
 class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app) {
 
@@ -72,6 +88,13 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     private val _audioLatencyMs = MutableStateFlow(prefs.getInt("audio_latency_ms", -1))
     val audioLatencyMs: StateFlow<Int> = _audioLatencyMs.asStateFlow()
+
+    // Debug
+    private val _debugEnabled = MutableStateFlow(prefs.getBoolean("debug_enabled", false))
+    val debugEnabled: StateFlow<Boolean> = _debugEnabled.asStateFlow()
+
+    private val _debugInfo = MutableStateFlow(DebugInfo())
+    val debugInfo: StateFlow<DebugInfo> = _debugInfo.asStateFlow()
 
     // Logs
     private val _logs = MutableStateFlow<List<String>>(emptyList())
@@ -166,6 +189,11 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         prefs.edit().putInt("audio_latency_ms", v).apply()
     }
 
+    fun setDebugEnabled(v: Boolean) {
+        _debugEnabled.value = v
+        prefs.edit().putBoolean("debug_enabled", v).apply()
+    }
+
     // Service binding
     fun bindService(svc: AirPlayService) {
         service = svc
@@ -205,6 +233,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             _connectionCount.value = it.connectionCount.value
             _videoAspect.value = it.videoAspect.value
             _videoResolution.value = it.videoResolution.value
+            if (_debugEnabled.value) {
+                _debugInfo.value = it.collectDebugInfo()
+            }
         }
     }
 }

@@ -21,6 +21,15 @@ class VideoRenderer {
     private var cachedKeyframePts: Long = 0
     private var cachedKeyframeH265 = false
 
+    // Stats
+    @Volatile var fps = 0; private set
+    @Volatile var bitrateBps = 0L; private set
+    @Volatile var frameCount = 0L; private set
+    @Volatile var codecName = ""; private set
+    private var _framesThisSec = 0
+    private var _bytesThisSec = 0L
+    private var _lastStatReset = 0L
+
     fun setResolution(w: Int, h: Int) {
         videoWidth = w
         videoHeight = h
@@ -32,7 +41,23 @@ class VideoRenderer {
         if (changed && codec != null) stopCodec()
     }
 
+    private fun _updateStats(size: Int) {
+        val now = System.currentTimeMillis()
+        if (now - _lastStatReset >= 1000) {
+            fps = _framesThisSec
+            bitrateBps = _bytesThisSec * 8
+            _framesThisSec = 0
+            _bytesThisSec = 0
+            _lastStatReset = now
+        }
+        _framesThisSec++
+        _bytesThisSec += size
+        frameCount++
+    }
+
     fun feedFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
+        _updateStats(data.size)
+
         // Always cache keyframes, even without a surface
         if (_isKeyframe(data, isH265)) {
             cachedKeyframe = data.copyOf()
@@ -102,6 +127,7 @@ class VideoRenderer {
             it.configure(format, s, null, 0)
             it.start()
         }
+        codecName = if (h265) "H.265" else "H.264"
         running = true
         Log.i(TAG, "Video codec started: $mime")
     }
@@ -133,6 +159,8 @@ class VideoRenderer {
     fun release() = synchronized(lock) {
         stopCodec()
         cachedKeyframe = null
+        fps = 0; bitrateBps = 0; frameCount = 0; codecName = ""
+        _framesThisSec = 0; _bytesThisSec = 0
     }
 
     companion object {

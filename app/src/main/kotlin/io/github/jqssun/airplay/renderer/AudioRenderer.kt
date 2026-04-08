@@ -13,7 +13,8 @@ class AudioRenderer {
     private var codec: MediaCodec? = null
     private var track: AudioTrack? = null
     private var currentCt = -1
-    @Volatile private var volume = 1.0f
+    @Volatile var volume = 1.0f; private set
+    @Volatile var codecLabel = ""; private set
 
     fun feedAudio(data: ByteArray, ct: Int, ntpTimeNs: Long) {
         if (ct != currentCt || codec == null) {
@@ -35,6 +36,7 @@ class AudioRenderer {
 
     private fun start(ct: Int) {
         currentCt = ct
+        codecLabel = when (ct) { CT_ALAC -> "ALAC"; CT_AAC_LC -> "AAC-LC"; CT_AAC_ELD -> "AAC-ELD"; else -> "?" }
         val format = when (ct) {
             CT_AAC_ELD -> {
                 MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, 44100, 2).apply {
@@ -142,6 +144,7 @@ class AudioRenderer {
         }
         codec = null
         currentCt = -1
+        codecLabel = ""
     }
 
     fun release() = stop()

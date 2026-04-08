@@ -16,6 +16,7 @@ import android.util.Log
 import android.view.Surface
 import io.github.jqssun.airplay.MainActivity
 import io.github.jqssun.airplay.R
+import io.github.jqssun.airplay.viewmodel.DebugInfo
 import io.github.jqssun.airplay.bridge.NativeBridge
 import io.github.jqssun.airplay.bridge.RaopCallbackHandler
 import io.github.jqssun.airplay.discovery.NsdServiceManager
@@ -216,6 +217,17 @@ class AirPlayService : Service(), RaopCallbackHandler {
     private fun clearPin() {
         pinCallback?.invoke(null)
     }
+
+    fun collectDebugInfo() = DebugInfo(
+        videoCodec = videoRenderer.codecName,
+        videoRes = _videoResolution.value,
+        videoFps = videoRenderer.fps,
+        videoBitrate = videoRenderer.bitrateBps,
+        videoFrames = videoRenderer.frameCount,
+        audioCodec = audioRenderer.codecLabel,
+        audioVolume = (audioRenderer.volume * 100).toInt(),
+        connections = _connectionCount.value,
+    )
 
     // Helpers
 

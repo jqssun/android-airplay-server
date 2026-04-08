@@ -29,6 +29,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val allowNewConn by viewModel.allowNewConn.collectAsState()
     val autoStart by viewModel.autoStart.collectAsState()
     val audioLatencyMs by viewModel.audioLatencyMs.collectAsState()
+    val debugEnabled by viewModel.debugEnabled.collectAsState()
 
     Column(
         modifier = Modifier
@@ -157,6 +158,15 @@ fun SettingsScreen(viewModel: MainViewModel) {
             description = "AAC-ELD / AAC-LC codec for screen mirroring audio",
             checked = aacEnabled,
             onCheckedChange = { viewModel.setAacEnabled(it) }
+        )
+
+        SectionHeader("Debug")
+
+        SettingSwitch(
+            title = "Show debug overlay",
+            description = "Display stats (bitrate, FPS, codec) over video",
+            checked = debugEnabled,
+            onCheckedChange = { viewModel.setDebugEnabled(it) }
         )
     }
 }
