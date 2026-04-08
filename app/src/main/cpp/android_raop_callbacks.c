@@ -3,6 +3,7 @@
  * All callbacks fire from RAOP's internal pthreads, so we AttachCurrentThread.
  */
 
+#include <stdlib.h>
 #include <string.h>
 #include <android/log.h>
 #include "android_raop_callbacks.h"
@@ -23,6 +24,10 @@ static JNIEnv *_get_env(android_callback_ctx_t *ctx) {
 void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject callback_obj) {
     (*env)->GetJavaVM(env, &ctx->jvm);
     ctx->callback_obj = (*env)->NewGlobalRef(env, callback_obj);
+    ctx->h265_enabled = 1;
+    ctx->require_pin = 0;
+    ctx->registered_count = 0;
+    memset(ctx->registered_keys, 0, sizeof(ctx->registered_keys));
 
     jclass cls = (*env)->GetObjectClass(env, callback_obj);
     ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZ)V");
@@ -42,6 +47,11 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env) {
         (*env)->DeleteGlobalRef(env, ctx->callback_obj);
         ctx->callback_obj = NULL;
     }
+    for (int i = 0; i < ctx->registered_count; i++) {
+        free(ctx->registered_keys[i]);
+        ctx->registered_keys[i] = NULL;
+    }
+    ctx->registered_count = 0;
 }
 
 /* --- RAOP callback implementations --- */
@@ -139,9 +149,30 @@ static void _audio_set_coverart(void *cls, const void *buf, int len) { (void)cls
 static void _audio_remote_control_id(void *cls, const char *a, const char *b) { (void)cls; }
 static void _audio_set_progress(void *cls, uint32_t *a, uint32_t *b, uint32_t *c) { (void)cls; }
 static void _mirror_video_running(void *cls, bool running) { LOGI("mirror running: %d", running); }
+static void _register_client(void *cls, const char *device_id, const char *pk_str, const char *name) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    (void)device_id; (void)name;
+    if (ctx->registered_count >= 16) return;
+    for (int i = 0; i < ctx->registered_count; i++) {
+        if (ctx->registered_keys[i] && strcmp(ctx->registered_keys[i], pk_str) == 0) return;
+    }
+    ctx->registered_keys[ctx->registered_count++] = strdup(pk_str);
+    LOGI("registered client pk (slot %d)", ctx->registered_count);
+}
+
+static bool _check_register(void *cls, const char *pk_str) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    for (int i = 0; i < ctx->registered_count; i++) {
+        if (ctx->registered_keys[i] && strcmp(ctx->registered_keys[i], pk_str) == 0) return true;
+    }
+    return false;
+}
+
 static int _video_set_codec(void *cls, video_codec_t codec) {
-    LOGI("video_set_codec: %d", codec);
-    return 0; /* accept all codecs */
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    LOGI("video_set_codec: %d (h265_enabled=%d)", codec, ctx->h265_enabled);
+    if (codec == VIDEO_CODEC_H265 && !ctx->h265_enabled) return -1;
+    return 0;
 }
 
 void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx) {
@@ -171,4 +202,8 @@ void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx) 
     cbs->mirror_video_running = _mirror_video_running;
     cbs->display_pin = _display_pin;
     cbs->video_set_codec = _video_set_codec;
+    if (ctx->require_pin) {
+        cbs->check_register = _check_register;
+        cbs->register_client = _register_client;
+    }
 }

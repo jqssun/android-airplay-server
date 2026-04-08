@@ -9,7 +9,9 @@ object NativeBridge {
         callback: RaopCallbackHandler,
         hwAddr: ByteArray,
         name: String,
-        keyFile: String
+        keyFile: String,
+        nohold: Boolean,
+        requirePin: Boolean
     ): Long
 
     external fun nativeStart(handle: Long): Int
@@ -17,6 +19,9 @@ object NativeBridge {
     external fun nativeDestroy(handle: Long)
 
     external fun nativeSetDisplaySize(handle: Long, w: Int, h: Int, fps: Int)
+    external fun nativeSetPlist(handle: Long, key: String, value: Int)
+    external fun nativeSetH265Enabled(handle: Long, enabled: Boolean)
+    external fun nativeSetCodecs(handle: Long, alac: Boolean, aac: Boolean)
 
     external fun nativeGetRaopTxtRecords(handle: Long): Map<String, String>?
     external fun nativeGetAirplayTxtRecords(handle: Long): Map<String, String>?

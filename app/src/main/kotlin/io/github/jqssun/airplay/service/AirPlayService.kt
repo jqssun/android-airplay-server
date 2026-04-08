@@ -11,6 +11,7 @@ import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.IBinder
 import android.os.PowerManager
+import androidx.core.content.ContextCompat
 import android.util.Log
 import android.view.Surface
 import io.github.jqssun.airplay.MainActivity
@@ -39,9 +40,6 @@ class AirPlayService : Service(), RaopCallbackHandler {
     private val _connectionCount = MutableStateFlow(0)
     val connectionCount = _connectionCount.asStateFlow()
 
-    private val _pinCode = MutableStateFlow<String?>(null)
-    val pinCode = _pinCode.asStateFlow()
-
     private val _videoAspect = MutableStateFlow(16f / 9f)
     val videoAspect = _videoAspect.asStateFlow()
 
@@ -49,6 +47,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
     val videoResolution = _videoResolution.asStateFlow()
 
     var logCallback: ((String) -> Unit)? = null
+    var pinCallback: ((String?) -> Unit)? = null
 
     private fun log(msg: String) {
         Log.i(TAG, msg)
@@ -66,9 +65,12 @@ class AirPlayService : Service(), RaopCallbackHandler {
         createNotificationChannel()
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
+
     fun startServer(name: String) {
         if (_serverState.value == ServerState.RUNNING) return
 
+        val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "airplay:server").apply { acquire() }
 
@@ -76,20 +78,43 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
         val hwAddr = getHwAddr()
         val keyFile = filesDir.resolve("airplay.pem").absolutePath
+        val nohold = prefs.getBoolean("allow_new_conn", false)
+        val requirePin = prefs.getBoolean("require_pin", false)
 
-        nativeHandle = NativeBridge.nativeInit(this, hwAddr, name, keyFile)
+        nativeHandle = NativeBridge.nativeInit(this, hwAddr, name, keyFile, nohold, requirePin)
         if (nativeHandle == 0L) {
             log("Native init failed")
             _serverState.value = ServerState.ERROR
             return
         }
 
-        // Set display params — also use as initial resolution fallback
+        // Apply settings from preferences
+        val maxFps = prefs.getInt("max_fps", 60)
+        val overscanned = prefs.getBoolean("overscanned", false)
+        val audioLatencyMs = prefs.getInt("audio_latency_ms", -1)
+        val h265 = prefs.getBoolean("h265_enabled", true)
+        val alac = prefs.getBoolean("alac_enabled", true)
+        val aac = prefs.getBoolean("aac_enabled", true)
+
+        NativeBridge.nativeSetH265Enabled(nativeHandle, h265)
+        NativeBridge.nativeSetCodecs(nativeHandle, alac, aac)
+        NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", maxFps)
+        NativeBridge.nativeSetPlist(nativeHandle, "overscanned", if (overscanned) 1 else 0)
+        if (audioLatencyMs >= 0) NativeBridge.nativeSetPlist(nativeHandle, "audio_delay_micros", audioLatencyMs * 1000)
+
+        // Set display params
         val dm = resources.displayMetrics
-        videoRenderer.setResolution(dm.widthPixels, dm.heightPixels)
-        _videoResolution.value = "${dm.widthPixels}x${dm.heightPixels}"
-        _videoAspect.value = dm.widthPixels.toFloat() / dm.heightPixels
-        NativeBridge.nativeSetDisplaySize(nativeHandle, dm.widthPixels, dm.heightPixels, 60)
+        val res = prefs.getString("resolution", "auto")!!
+        val (w, h) = if (res != "auto" && res.contains("x")) {
+            val parts = res.split("x")
+            parts[0].toInt() to parts[1].toInt()
+        } else {
+            dm.widthPixels to dm.heightPixels
+        }
+        videoRenderer.setResolution(w, h)
+        _videoResolution.value = "${w}x${h}"
+        _videoAspect.value = w.toFloat() / h
+        NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, maxFps)
 
         val port = NativeBridge.nativeStart(nativeHandle)
         if (port < 0) {
@@ -108,6 +133,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
         nsdManager?.registerAirplay(serverName, port, airplayTxt)
 
         _serverState.value = ServerState.RUNNING
+        ContextCompat.startForegroundService(this, Intent(this, AirPlayService::class.java))
         startForeground(NOTIFICATION_ID, buildNotification())
         log("Server started on port $port")
     }
@@ -127,6 +153,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
         _serverState.value = ServerState.STOPPED
         _connectionCount.value = 0
         stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
         log("Server stopped")
     }
 
@@ -150,10 +177,12 @@ class AirPlayService : Service(), RaopCallbackHandler {
     }
 
     override fun onAudioFormat(ct: Int, spf: Int, usingScreen: Boolean) {
+        clearPin()
         log("Audio format: ct=$ct spf=$spf screen=$usingScreen")
     }
 
     override fun onVideoSize(srcW: Float, srcH: Float, w: Float, h: Float) {
+        clearPin()
         if (w > 0 && h > 0) {
             _videoAspect.value = w / h
             _videoResolution.value = "${w.toInt()}x${h.toInt()}"
@@ -181,7 +210,11 @@ class AirPlayService : Service(), RaopCallbackHandler {
     }
 
     override fun onDisplayPin(pin: String) {
-        _pinCode.value = pin
+        pinCallback?.invoke(pin)
+    }
+
+    private fun clearPin() {
+        pinCallback?.invoke(null)
     }
 
     // Helpers

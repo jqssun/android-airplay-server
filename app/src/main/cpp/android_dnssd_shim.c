@@ -48,6 +48,8 @@ struct dnssd_s {
 
     unsigned char pin_pw;
 
+    char codec_cn[16]; /* dynamic "cn" value, e.g. "0,1,2,3" */
+
     char raop_servname[MAX_SERVNAME];
     unsigned short raop_port;
     unsigned short airplay_port;
@@ -79,6 +81,7 @@ dnssd_init(const char *name, int name_len, const char *hw_addr, int hw_addr_len,
     }
 
     dnssd->pin_pw = pin_pw;
+    strncpy(dnssd->codec_cn, RAOP_CN, sizeof(dnssd->codec_cn) - 1);
 
     char *end = NULL;
     unsigned long features = strtoul(FEATURES_1, &end, 16);
@@ -142,7 +145,7 @@ dnssd_register_raop(dnssd_t *dnssd, unsigned short port)
     rec->count = 0;
 
     _txt_set(rec, "ch", RAOP_CH);
-    _txt_set(rec, "cn", RAOP_CN);
+    _txt_set(rec, "cn", dnssd->codec_cn);
     _txt_set(rec, "da", RAOP_DA);
     _txt_set(rec, "et", RAOP_ET);
     _txt_set(rec, "vv", RAOP_VV);
@@ -321,6 +324,16 @@ const char *android_dnssd_get_airplay_txt_key(dnssd_t *dnssd, int index) {
 const char *android_dnssd_get_airplay_txt_val(dnssd_t *dnssd, int index) {
     if (index < 0 || index >= dnssd->airplay_record.count) return NULL;
     return dnssd->airplay_record.entries[index].val;
+}
+
+void android_dnssd_set_codecs(dnssd_t *dnssd, int alac, int aac) {
+    /* Build cn string: 0=PCM (always), 1=ALAC, 2=AAC, 3=AAC-ELD */
+    char buf[16];
+    int pos = 0;
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "0");
+    if (alac) pos += snprintf(buf + pos, sizeof(buf) - pos, ",1");
+    if (aac) pos += snprintf(buf + pos, sizeof(buf) - pos, ",2,3");
+    strncpy(dnssd->codec_cn, buf, sizeof(dnssd->codec_cn) - 1);
 }
 
 const char *android_dnssd_get_raop_servname(dnssd_t *dnssd) {

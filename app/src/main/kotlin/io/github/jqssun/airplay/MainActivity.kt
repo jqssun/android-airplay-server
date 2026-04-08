@@ -35,7 +35,11 @@ class MainActivity : ComponentActivity() {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             service = (binder as AirPlayService.LocalBinder).service
             service!!.logCallback = { viewModel.addLog(it) }
+            service!!.pinCallback = { viewModel.showPin(it) }
             viewModel.bindService(service!!)
+            if (viewModel.autoStart.value && viewModel.serverState.value == AirPlayService.ServerState.STOPPED) {
+                viewModel.startServer()
+            }
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             service = null
@@ -57,10 +61,8 @@ class MainActivity : ComponentActivity() {
             notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        // Start and bind service
-        val intent = Intent(this, AirPlayService::class.java)
-        startForegroundService(intent)
-        bindService(intent, connection, BIND_AUTO_CREATE)
+        // Bind service (foreground promotion happens in startServer)
+        bindService(Intent(this, AirPlayService::class.java), connection, BIND_AUTO_CREATE)
 
         // Poll service state into viewmodel
         lifecycleScope.launch {

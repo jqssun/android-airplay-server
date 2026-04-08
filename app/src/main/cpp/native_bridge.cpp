@@ -40,7 +40,8 @@ extern "C"
 JNIEXPORT jlong JNICALL
 Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
         JNIEnv *env, jobject thiz,
-        jobject callback, jbyteArray hwAddr, jstring name, jstring keyFile) {
+        jobject callback, jbyteArray hwAddr, jstring name, jstring keyFile,
+        jboolean nohold, jboolean requirePin) {
 
     server_ctx_t *ctx = (server_ctx_t *)calloc(1, sizeof(server_ctx_t));
     if (!ctx) return 0;
@@ -52,6 +53,7 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
 
     /* Init JNI callbacks */
     android_callbacks_init(&ctx->cb_ctx, env, callback);
+    ctx->cb_ctx.require_pin = requirePin ? 1 : 0;
     android_callbacks_fill(&ctx->callbacks, &ctx->cb_ctx);
 
     /* Init RAOP */
@@ -77,14 +79,19 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
              (unsigned char)ctx->hw_addr[2], (unsigned char)ctx->hw_addr[3],
              (unsigned char)ctx->hw_addr[4], (unsigned char)ctx->hw_addr[5]);
 
-    int ret = raop_init2(ctx->raop, 0, device_id, keyfile_c);
+    int ret = raop_init2(ctx->raop, nohold ? 1 : 0, device_id, keyfile_c);
     if (ret < 0) {
         LOGE("raop_init2 failed: %d", ret);
     }
 
+    if (requirePin) {
+        raop_set_plist(ctx->raop, "pin", 0);
+    }
+
     /* Init dnssd shim */
     int dns_err = 0;
-    ctx->dnssd = dnssd_init(name_c, (int)strlen(name_c), ctx->hw_addr, 6, &dns_err, 0);
+    unsigned char pin_pw = requirePin ? 1 : 0;
+    ctx->dnssd = dnssd_init(name_c, (int)strlen(name_c), ctx->hw_addr, 6, &dns_err, pin_pw);
     if (!ctx->dnssd) {
         LOGE("dnssd_init failed: %d", dns_err);
     } else {
@@ -171,8 +178,6 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetDisplaySize(
     raop_set_plist(ctx->raop, "width", w);
     raop_set_plist(ctx->raop, "height", h);
     raop_set_plist(ctx->raop, "refreshRate", fps);
-    raop_set_plist(ctx->raop, "maxFPS", fps);
-    raop_set_plist(ctx->raop, "overscanned", 0);
 }
 
 /* Returns a HashMap<String, String> of TXT records */
@@ -244,4 +249,40 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeGetServerName(
     int len = 0;
     const char *name = dnssd_get_name(ctx->dnssd, &len);
     return env->NewStringUTF(name);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetPlist(
+        JNIEnv *env, jobject thiz, jlong handle, jstring key, jint value) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx || !ctx->raop) return;
+    const char *key_c = env->GetStringUTFChars(key, NULL);
+    raop_set_plist(ctx->raop, key_c, value);
+    env->ReleaseStringUTFChars(key, key_c);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetH265Enabled(
+        JNIEnv *env, jobject thiz, jlong handle, jboolean enabled) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx) return;
+    ctx->cb_ctx.h265_enabled = enabled ? 1 : 0;
+    /* Set DNS-SD feature bit 42 (SupportsScreenMultiCodec) for H265 */
+    if (ctx->dnssd) {
+        dnssd_set_airplay_features(ctx->dnssd, 42, enabled ? 1 : 0);
+    }
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetCodecs(
+        JNIEnv *env, jobject thiz, jlong handle, jboolean alac, jboolean aac) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx || !ctx->dnssd) return;
+    android_dnssd_set_codecs(ctx->dnssd, alac ? 1 : 0, aac ? 1 : 0);
 }

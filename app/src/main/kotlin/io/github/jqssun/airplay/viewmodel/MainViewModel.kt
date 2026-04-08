@@ -14,7 +14,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.text.SimpleDateFormat
-import java.util.*
+import java.util.Date
+import java.util.Locale
 import javax.inject.Inject
 
 @HiltViewModel
@@ -42,6 +43,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     val serverName: StateFlow<String> = _serverName.asStateFlow()
 
     // Settings
+    private val _autoStart = MutableStateFlow(prefs.getBoolean("auto_start", true))
+    val autoStart: StateFlow<Boolean> = _autoStart.asStateFlow()
+
     private val _h265Enabled = MutableStateFlow(prefs.getBoolean("h265_enabled", true))
     val h265Enabled: StateFlow<Boolean> = _h265Enabled.asStateFlow()
 
@@ -51,20 +55,45 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _aacEnabled = MutableStateFlow(prefs.getBoolean("aac_enabled", true))
     val aacEnabled: StateFlow<Boolean> = _aacEnabled.asStateFlow()
 
+    private val _resolution = MutableStateFlow(prefs.getString("resolution", "auto")!!)
+    val resolution: StateFlow<String> = _resolution.asStateFlow()
+
+    private val _maxFps = MutableStateFlow(prefs.getInt("max_fps", 60))
+    val maxFps: StateFlow<Int> = _maxFps.asStateFlow()
+
+    private val _overscanned = MutableStateFlow(prefs.getBoolean("overscanned", false))
+    val overscanned: StateFlow<Boolean> = _overscanned.asStateFlow()
+
+    private val _requirePin = MutableStateFlow(prefs.getBoolean("require_pin", false))
+    val requirePin: StateFlow<Boolean> = _requirePin.asStateFlow()
+
+    private val _allowNewConn = MutableStateFlow(prefs.getBoolean("allow_new_conn", false))
+    val allowNewConn: StateFlow<Boolean> = _allowNewConn.asStateFlow()
+
+    private val _audioLatencyMs = MutableStateFlow(prefs.getInt("audio_latency_ms", -1))
+    val audioLatencyMs: StateFlow<Int> = _audioLatencyMs.asStateFlow()
+
     // Logs
     private val _logs = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = _logs.asStateFlow()
-    private val _logList = Collections.synchronizedList(mutableListOf<String>())
-    private val _dateFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+    private val _logLock = Any()
+    private val _logList = mutableListOf<String>()
+    private val _dateFmt = object : ThreadLocal<SimpleDateFormat>() {
+        override fun initialValue() = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+    }
 
     fun addLog(msg: String) {
-        val line = "${_dateFmt.format(Date())} $msg"
-        _logList.add(line)
-        _logs.value = _logList.toList()
+        val line = "${_dateFmt.get()!!.format(Date())} $msg"
+        val snapshot: List<String>
+        synchronized(_logLock) {
+            _logList.add(line)
+            snapshot = _logList.toList()
+        }
+        _logs.value = snapshot
     }
 
     fun clearLogs() {
-        _logList.clear()
+        synchronized(_logLock) { _logList.clear() }
         _logs.value = emptyList()
     }
 
@@ -87,6 +116,11 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         prefs.edit().putString("server_name", name).apply()
     }
 
+    fun setAutoStart(v: Boolean) {
+        _autoStart.value = v
+        prefs.edit().putBoolean("auto_start", v).apply()
+    }
+
     fun setH265Enabled(v: Boolean) {
         _h265Enabled.value = v
         prefs.edit().putBoolean("h265_enabled", v).apply()
@@ -100,6 +134,36 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setAacEnabled(v: Boolean) {
         _aacEnabled.value = v
         prefs.edit().putBoolean("aac_enabled", v).apply()
+    }
+
+    fun setResolution(v: String) {
+        _resolution.value = v
+        prefs.edit().putString("resolution", v).apply()
+    }
+
+    fun setMaxFps(v: Int) {
+        _maxFps.value = v
+        prefs.edit().putInt("max_fps", v).apply()
+    }
+
+    fun setOverscanned(v: Boolean) {
+        _overscanned.value = v
+        prefs.edit().putBoolean("overscanned", v).apply()
+    }
+
+    fun setRequirePin(v: Boolean) {
+        _requirePin.value = v
+        prefs.edit().putBoolean("require_pin", v).apply()
+    }
+
+    fun setAllowNewConn(v: Boolean) {
+        _allowNewConn.value = v
+        prefs.edit().putBoolean("allow_new_conn", v).apply()
+    }
+
+    fun setAudioLatencyMs(v: Int) {
+        _audioLatencyMs.value = v
+        prefs.edit().putInt("audio_latency_ms", v).apply()
     }
 
     // Service binding
@@ -131,11 +195,14 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         _pinCode.value = null
     }
 
+    fun showPin(pin: String?) {
+        _pinCode.value = pin
+    }
+
     fun updateFromService() {
         service?.let {
             _serverState.value = it.serverState.value
             _connectionCount.value = it.connectionCount.value
-            _pinCode.value = it.pinCode.value
             _videoAspect.value = it.videoAspect.value
             _videoResolution.value = it.videoResolution.value
         }

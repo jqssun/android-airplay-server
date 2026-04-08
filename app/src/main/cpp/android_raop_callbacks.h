@@ -20,6 +20,10 @@ typedef struct {
     jmethodID on_conn_destroy;
     jmethodID on_conn_reset;
     jmethodID on_display_pin;
+    int h265_enabled;
+    int require_pin;
+    char *registered_keys[16];
+    int registered_count;
 } android_callback_ctx_t;
 
 void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject callback_obj);
