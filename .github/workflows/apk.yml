@@ -1,0 +1,57 @@
+name: Generate APK
+
+env:
+  main_project_module: app
+
+on:
+  push:
+    branches:
+      - "release/**"
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "v*.*.*"
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set TAG
+        if: github.event_name == 'push'
+        run: |
+          echo "version=$(echo '${{ github.ref_name }}' | awk -F 'v' '{print $2}')" >> $GITHUB_ENV
+
+      - name: Set TAG
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "version=$(echo '${{ inputs.version }}' | awk -F 'v' '{print $2}')" >> $GITHUB_ENV
+
+      - name: Use JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: "zulu"
+          java-version: "21"
+          cache: "gradle"
+
+      - name: Build
+        run: |
+          echo ${{ secrets.STORE }} | base64 -d > upload.jks
+          echo ${{ secrets.LOCAL }} | base64 -d > local.properties
+          chmod +x ./gradlew;
+          ./gradlew assembleRelease --stacktrace
+          rm upload.jks local.properties
+
+      - name: Publish (GitHub)
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: v${{ env.version }}
+          tag_name: v${{ env.version }}
+          files: |
+            ${{ env.main_project_module }}/build/outputs/apk/release/app-release.apk

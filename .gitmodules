@@ -1,0 +1,9 @@
+[submodule "app/src/main/cpp/third_party/UxPlay"]
+	path = app/src/main/cpp/third_party/UxPlay
+	url = https://github.com/FDH2/UxPlay.git
+[submodule "app/src/main/cpp/third_party/libplist"]
+	path = app/src/main/cpp/third_party/libplist
+	url = https://github.com/libimobiledevice/libplist.git
+[submodule "app/src/main/cpp/third_party/openssl-cmake"]
+	path = app/src/main/cpp/third_party/openssl-cmake
+	url = https://github.com/viaduck/openssl-cmake.git

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AirPlay Server</string>
+    <string name="notification_channel">AirPlay Service</string>
+    <string name="notification_title">AirPlay Server Running</string>
+    <string name="notification_text">Accepting AirPlay connections</string>
+    <string name="stop_service">Stop</string>
+</resources>
