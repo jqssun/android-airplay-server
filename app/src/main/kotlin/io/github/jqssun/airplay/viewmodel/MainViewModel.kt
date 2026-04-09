@@ -6,6 +6,7 @@ import android.content.Intent
 import android.view.Surface
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
+import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.service.AirPlayService
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -65,8 +66,11 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _h265Enabled = MutableStateFlow(prefs.getBoolean("h265_enabled", true))
     val h265Enabled: StateFlow<Boolean> = _h265Enabled.asStateFlow()
 
-    private val _alacEnabled = MutableStateFlow(prefs.getBoolean("alac_enabled", true))
+    private val _alacEnabled = MutableStateFlow(prefs.getBoolean("alac_enabled", false))
     val alacEnabled: StateFlow<Boolean> = _alacEnabled.asStateFlow()
+
+    private val _swAlacEnabled = MutableStateFlow(prefs.getBoolean("sw_alac_enabled", true))
+    val swAlacEnabled: StateFlow<Boolean> = _swAlacEnabled.asStateFlow()
 
     private val _aacEnabled = MutableStateFlow(prefs.getBoolean("aac_enabled", true))
     val aacEnabled: StateFlow<Boolean> = _aacEnabled.asStateFlow()
@@ -95,6 +99,22 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     private val _debugInfo = MutableStateFlow(DebugInfo())
     val debugInfo: StateFlow<DebugInfo> = _debugInfo.asStateFlow()
+
+    // Audio mode
+    private val _audioOnly = MutableStateFlow(false)
+    val audioOnly: StateFlow<Boolean> = _audioOnly.asStateFlow()
+
+    private val _trackInfo = MutableStateFlow(TrackInfo())
+    val trackInfo: StateFlow<TrackInfo> = _trackInfo.asStateFlow()
+
+    private val _positionMs = MutableStateFlow(0L)
+    val positionMs: StateFlow<Long> = _positionMs.asStateFlow()
+
+    private val _durationMs = MutableStateFlow(0L)
+    val durationMs: StateFlow<Long> = _durationMs.asStateFlow()
+
+    private val _playing = MutableStateFlow(true)
+    val playing: StateFlow<Boolean> = _playing.asStateFlow()
 
     // Logs
     private val _logs = MutableStateFlow<List<String>>(emptyList())
@@ -147,6 +167,11 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setH265Enabled(v: Boolean) {
         _h265Enabled.value = v
         prefs.edit().putBoolean("h265_enabled", v).apply()
+    }
+
+    fun setSwAlacEnabled(v: Boolean) {
+        _swAlacEnabled.value = v
+        prefs.edit().putBoolean("sw_alac_enabled", v).apply()
     }
 
     fun setAlacEnabled(v: Boolean) {
@@ -219,6 +244,11 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         service?.setVideoSurface(null)
     }
 
+    // DACP controls
+    fun dacpPlayPause() { service?.togglePlayPause() }
+    fun dacpNext() { service?.dacpController?.nextItem() }
+    fun dacpPrev() { service?.dacpController?.prevItem() }
+
     fun dismissPin() {
         _pinCode.value = null
     }
@@ -233,6 +263,11 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             _connectionCount.value = it.connectionCount.value
             _videoAspect.value = it.videoAspect.value
             _videoResolution.value = it.videoResolution.value
+            _audioOnly.value = it.audioOnly.value
+            _trackInfo.value = it.trackInfo.value
+            _positionMs.value = it.currentPositionMs()
+            _durationMs.value = it.durationMs.value
+            _playing.value = it.playing.value
             if (_debugEnabled.value) {
                 _debugInfo.value = it.collectDebugInfo()
             }

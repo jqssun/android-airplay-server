@@ -32,8 +32,8 @@ android {
         applicationId = "io.github.jqssun.airplay"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.0.3"
+        versionCode = 4
+        versionName = "0.0.4"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -94,6 +94,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.androidx.lifecycle.viewmodel)
     implementation(libs.androidx.datastore.prefs)
+    implementation(libs.androidx.media)
     implementation(libs.kotlinx.coroutines)
 
     implementation(platform(libs.compose.bom))

@@ -27,4 +27,10 @@ object NativeBridge {
     external fun nativeGetAirplayTxtRecords(handle: Long): Map<String, String>?
     external fun nativeGetRaopServiceName(handle: Long): String?
     external fun nativeGetServerName(handle: Long): String?
+
+    // Software ALAC decoder
+    external fun nativeAlacInit(frameLength: Int, numChannels: Int, bitDepth: Int,
+                                pb: Int, mb: Int, kb: Int): Long
+    external fun nativeAlacDecode(handle: Long, input: ByteArray): ByteArray?
+    external fun nativeAlacDestroy(handle: Long)
 }

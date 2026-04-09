@@ -29,6 +29,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val allowNewConn by viewModel.allowNewConn.collectAsState()
     val autoStart by viewModel.autoStart.collectAsState()
     val audioLatencyMs by viewModel.audioLatencyMs.collectAsState()
+    val swAlacEnabled by viewModel.swAlacEnabled.collectAsState()
     val debugEnabled by viewModel.debugEnabled.collectAsState()
 
     Column(
@@ -151,6 +152,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
             description = "Apple Lossless codec for AirPlay music streaming",
             checked = alacEnabled,
             onCheckedChange = { viewModel.setAlacEnabled(it) }
+        )
+
+        SettingSwitch(
+            title = "Software ALAC decoder",
+            description = "Use built-in decoder if platform ALAC is unavailable",
+            checked = swAlacEnabled,
+            onCheckedChange = { viewModel.setSwAlacEnabled(it) }
         )
 
         SettingSwitch(

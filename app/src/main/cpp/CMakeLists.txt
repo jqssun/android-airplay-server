@@ -87,6 +87,17 @@ set(AIRPLAY_SOURCES
     ${UXPLAY_LIB}/utils.c
 )
 
+# ---------- Apple ALAC reference decoder (Apache 2.0) ----------
+set(ALAC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/alac/codec)
+set(ALAC_SOURCES
+    ${ALAC_DIR}/ALACDecoder.cpp
+    ${ALAC_DIR}/ALACBitUtilities.c
+    ${ALAC_DIR}/ag_dec.c
+    ${ALAC_DIR}/dp_dec.c
+    ${ALAC_DIR}/matrix_dec.c
+    ${ALAC_DIR}/EndianPortable.c
+)
+
 # ---------- Android JNI bridge + dnssd shim ----------
 set(BRIDGE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/android_dnssd_shim.c
@@ -97,6 +108,7 @@ set(BRIDGE_SOURCES
 # ---------- Final shared library ----------
 add_library(airplay_native SHARED
     ${AIRPLAY_SOURCES}
+    ${ALAC_SOURCES}
     ${BRIDGE_SOURCES}
 )
 
@@ -105,12 +117,14 @@ target_include_directories(airplay_native PRIVATE
     ${UXPLAY_LIB}/llhttp
     ${UXPLAY_LIB}/playfair
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${ALAC_DIR}
 )
 
 target_compile_definitions(airplay_native PRIVATE
     ANDROID
     __STDC_CONSTANT_MACROS
     PLIST_210
+    TARGET_RT_LITTLE_ENDIAN=1
 )
 
 target_link_libraries(airplay_native

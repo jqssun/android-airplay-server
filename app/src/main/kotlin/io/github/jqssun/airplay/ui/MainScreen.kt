@@ -3,6 +3,7 @@ package io.github.jqssun.airplay.ui
 import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,8 +15,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -44,6 +48,12 @@ fun MainScreen(
     val pin by viewModel.pinCode.collectAsState()
     val videoAspect by viewModel.videoAspect.collectAsState()
     val connections by viewModel.connectionCount.collectAsState()
+    val audioOnly by viewModel.audioOnly.collectAsState()
+    var showModePrompt by remember { mutableStateOf(false) }
+
+    LaunchedEffect(audioOnly) {
+        if (audioOnly) showModePrompt = true
+    }
 
     val activity = LocalContext.current as? Activity
     LaunchedEffect(fullscreen) {
@@ -122,7 +132,8 @@ fun MainScreen(
                 Tab.OVERVIEW -> OverviewContent(
                     viewModel, onSurfaceAvailable, onSurfaceDestroyed,
                     onFullscreen = { fullscreen = true },
-                    onPip = onPip
+                    onPip = onPip,
+                    showAudioMode = audioOnly
                 )
                 Tab.LOGS -> LogsScreen(viewModel)
                 Tab.SETTINGS -> SettingsScreen(viewModel)
@@ -148,6 +159,18 @@ fun MainScreen(
             }
         )
     }
+
+    // Audio mode notification
+    if (showModePrompt) {
+        AlertDialog(
+            onDismissRequest = { showModePrompt = false },
+            title = { Text("Audio Mode") },
+            text = { Text("Switching to Audio mode for track information and playback controls.") },
+            confirmButton = {
+                TextButton(onClick = { showModePrompt = false }) { Text("OK") }
+            }
+        )
+    }
 }
 
 @Composable
@@ -156,7 +179,8 @@ private fun OverviewContent(
     onSurfaceAvailable: (android.view.Surface) -> Unit,
     onSurfaceDestroyed: () -> Unit,
     onFullscreen: () -> Unit,
-    onPip: () -> Unit
+    onPip: () -> Unit,
+    showAudioMode: Boolean = false
 ) {
     val state by viewModel.serverState.collectAsState()
     val connections by viewModel.connectionCount.collectAsState()
@@ -167,7 +191,7 @@ private fun OverviewContent(
     val debugInfo by viewModel.debugInfo.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Video area
+        // Content area
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -177,69 +201,75 @@ private fun OverviewContent(
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
-            if (state == ServerState.RUNNING) {
-                MirroringView(
-                    onSurfaceAvailable = onSurfaceAvailable,
-                    onSurfaceDestroyed = onSurfaceDestroyed,
-                    aspectRatio = videoAspect
-                )
-            }
-            if (state != ServerState.RUNNING || connections == 0) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        imageVector = if (connections > 0) Icons.Default.CastConnected else Icons.Default.Cast,
-                        contentDescription = null,
-                        modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        text = when (state) {
-                            ServerState.STOPPED -> "Server stopped"
-                            ServerState.RUNNING -> "Waiting for connection..."
-                            ServerState.ERROR -> "Error starting server"
-                        },
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+            if (showAudioMode && state == ServerState.RUNNING && connections > 0) {
+                NowPlayingContent(viewModel)
+            } else {
+                if (state == ServerState.RUNNING) {
+                    MirroringView(
+                        onSurfaceAvailable = onSurfaceAvailable,
+                        onSurfaceDestroyed = onSurfaceDestroyed,
+                        aspectRatio = videoAspect
                     )
                 }
-            }
-            if (state == ServerState.RUNNING && connections > 0) {
-                Row(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
-                    IconButton(onClick = onPip) {
+                if (state != ServerState.RUNNING || connections == 0) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            painterResource(R.drawable.ic_pip), contentDescription = "Picture-in-Picture",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            imageVector = if (connections > 0) Icons.Default.CastConnected else Icons.Default.Cast,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                         )
-                    }
-                    IconButton(onClick = onFullscreen) {
-                        Icon(
-                            Icons.Default.Fullscreen, contentDescription = "Fullscreen",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = when (state) {
+                                ServerState.STOPPED -> "Server stopped"
+                                ServerState.RUNNING -> "Waiting for connection..."
+                                ServerState.ERROR -> "Error starting server"
+                            },
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
                     }
                 }
+                if (state == ServerState.RUNNING && connections > 0) {
+                    Row(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
+                        IconButton(onClick = onPip) {
+                            Icon(
+                                painterResource(R.drawable.ic_pip), contentDescription = "Picture-in-Picture",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
+                        IconButton(onClick = onFullscreen) {
+                            Icon(
+                                Icons.Default.Fullscreen, contentDescription = "Fullscreen",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
+                    }
+                }
             }
-            if (debugEnabled && connections > 0) {
+            if (debugEnabled && connections > 0 && !showAudioMode) {
                 DebugOverlay(debugInfo, Modifier.align(Alignment.TopStart).padding(8.dp))
             }
             var showRes by remember { mutableStateOf(false) }
             LaunchedEffect(videoResolution) {
-                if (videoResolution.isNotEmpty()) {
+                if (videoResolution.isNotEmpty() && !showAudioMode) {
                     showRes = true
                     delay(5000)
                     showRes = false
                 }
             }
-            androidx.compose.animation.AnimatedVisibility(
-                visible = showRes && connections > 0,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
-            ) {
-                Text(
-                    text = videoResolution,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
+            if (!showAudioMode) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showRes && connections > 0,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp)
+                ) {
+                    Text(
+                        text = videoResolution,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
             }
         }
 
@@ -359,6 +389,126 @@ private fun FullscreenVideo(
             )
         }
     }
+}
+
+@Composable
+private fun NowPlayingContent(viewModel: MainViewModel) {
+    val track by viewModel.trackInfo.collectAsState()
+    val positionMs by viewModel.positionMs.collectAsState()
+    val durationMs by viewModel.durationMs.collectAsState()
+    val playing by viewModel.playing.collectAsState()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        // Cover art
+        Box(
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .aspectRatio(1f)
+                .fillMaxWidth(0.7f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            contentAlignment = Alignment.Center
+        ) {
+            if (track.coverArt != null) {
+                Image(
+                    bitmap = track.coverArt!!.asImageBitmap(),
+                    contentDescription = "Cover art",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Icon(
+                    Icons.Default.MusicNote,
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // Track info
+        Text(
+            text = track.title.ifEmpty { "Unknown" },
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (track.artist.isNotEmpty()) {
+            Text(
+                text = track.artist,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (track.album.isNotEmpty()) {
+            Text(
+                text = track.album,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Progress bar (read-only, seeking not supported by AirPlay receiver)
+        if (durationMs > 0) {
+            LinearProgressIndicator(
+                progress = { (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(2.dp))
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(_formatTime(positionMs), style = MaterialTheme.typography.labelSmall)
+                Text(_formatTime(durationMs), style = MaterialTheme.typography.labelSmall)
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Playback controls
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            IconButton(onClick = { viewModel.dacpPrev() }) {
+                Icon(Icons.Default.SkipPrevious, "Previous", modifier = Modifier.size(36.dp))
+            }
+            FilledIconButton(
+                onClick = { viewModel.dacpPlayPause() },
+                modifier = Modifier.size(56.dp)
+            ) {
+                Icon(
+                    if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    "Play/Pause", modifier = Modifier.size(32.dp)
+                )
+            }
+            IconButton(onClick = { viewModel.dacpNext() }) {
+                Icon(Icons.Default.SkipNext, "Next", modifier = Modifier.size(36.dp))
+            }
+        }
+    }
+}
+
+private fun _formatTime(ms: Long): String {
+    val s = (ms / 1000).toInt()
+    return "%d:%02d".format(s / 60, s % 60)
 }
 
 @Composable

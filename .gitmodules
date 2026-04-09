@@ -7,3 +7,6 @@
 [submodule "app/src/main/cpp/third_party/openssl-cmake"]
 	path = app/src/main/cpp/third_party/openssl-cmake
 	url = https://github.com/viaduck/openssl-cmake.git
+[submodule "app/src/main/cpp/third_party/alac"]
+	path = app/src/main/cpp/third_party/alac
+	url = https://github.com/macosforge/alac.git

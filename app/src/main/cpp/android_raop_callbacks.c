@@ -18,6 +18,11 @@ static JNIEnv *_get_env(android_callback_ctx_t *ctx) {
     if (status == JNI_EDETACHED) {
         (*ctx->jvm)->AttachCurrentThread(ctx->jvm, &env, NULL);
     }
+    /* Clear any pending exception from a previous callback on this thread,
+       otherwise JNI calls like NewByteArray will fatally abort. */
+    if (env && (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionClear(env);
+    }
     return env;
 }
 
@@ -39,6 +44,11 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->on_conn_destroy = (*env)->GetMethodID(env, cls, "onConnectionDestroy", "()V");
     ctx->on_conn_reset = (*env)->GetMethodID(env, cls, "onConnectionReset", "(I)V");
     ctx->on_display_pin = (*env)->GetMethodID(env, cls, "onDisplayPin", "(Ljava/lang/String;)V");
+    ctx->on_metadata = (*env)->GetMethodID(env, cls, "onMetadata", "([B)V");
+    ctx->on_coverart = (*env)->GetMethodID(env, cls, "onCoverArt", "([B)V");
+    ctx->on_progress = (*env)->GetMethodID(env, cls, "onProgress", "(JJJ)V");
+    ctx->on_dacp_id = (*env)->GetMethodID(env, cls, "onDacpId", "(Ljava/lang/String;Ljava/lang/String;)V");
+    ctx->on_audio_only = (*env)->GetMethodID(env, cls, "onAudioOnly", "(Z)V");
     (*env)->DeleteLocalRef(env, cls);
 }
 
@@ -144,11 +154,53 @@ static void _video_reset(void *cls, reset_type_t t) { LOGI("video_reset %d", t);
 static void _audio_flush(void *cls) { LOGI("audio_flush"); }
 static void _video_flush(void *cls) { LOGI("video_flush"); }
 static double _audio_set_client_volume(void *cls) { return 0.0; }
-static void _audio_set_metadata(void *cls, const void *buf, int len) { (void)cls; }
-static void _audio_set_coverart(void *cls, const void *buf, int len) { (void)cls; }
-static void _audio_remote_control_id(void *cls, const char *a, const char *b) { (void)cls; }
-static void _audio_set_progress(void *cls, uint32_t *a, uint32_t *b, uint32_t *c) { (void)cls; }
-static void _mirror_video_running(void *cls, bool running) { LOGI("mirror running: %d", running); }
+static void _audio_set_metadata(void *cls, const void *buf, int len) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    JNIEnv *env = _get_env(ctx);
+    if (!env || !buf || len <= 0) return;
+    jbyteArray arr = (*env)->NewByteArray(env, len);
+    (*env)->SetByteArrayRegion(env, arr, 0, len, (jbyte *)buf);
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_metadata, arr);
+    (*env)->DeleteLocalRef(env, arr);
+}
+
+static void _audio_set_coverart(void *cls, const void *buf, int len) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    JNIEnv *env = _get_env(ctx);
+    if (!env || !buf || len <= 0) return;
+    jbyteArray arr = (*env)->NewByteArray(env, len);
+    (*env)->SetByteArrayRegion(env, arr, 0, len, (jbyte *)buf);
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_coverart, arr);
+    (*env)->DeleteLocalRef(env, arr);
+}
+
+static void _audio_remote_control_id(void *cls, const char *dacp_id, const char *active_remote) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    JNIEnv *env = _get_env(ctx);
+    if (!env) return;
+    jstring jdacp = (*env)->NewStringUTF(env, dacp_id ? dacp_id : "");
+    jstring jremote = (*env)->NewStringUTF(env, active_remote ? active_remote : "");
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_dacp_id, jdacp, jremote);
+    (*env)->DeleteLocalRef(env, jdacp);
+    (*env)->DeleteLocalRef(env, jremote);
+}
+
+static void _audio_set_progress(void *cls, uint32_t *start, uint32_t *curr, uint32_t *end) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    JNIEnv *env = _get_env(ctx);
+    if (!env || !start || !curr || !end) return;
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_progress,
+                           (jlong)*start, (jlong)*curr, (jlong)*end);
+}
+
+static void _mirror_video_running(void *cls, bool running) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    JNIEnv *env = _get_env(ctx);
+    if (!env) return;
+    LOGI("mirror running: %d", running);
+    /* audio-only = mirror NOT running */
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_audio_only, (jboolean)!running);
+}
 static void _register_client(void *cls, const char *device_id, const char *pk_str, const char *name) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     (void)device_id; (void)name;

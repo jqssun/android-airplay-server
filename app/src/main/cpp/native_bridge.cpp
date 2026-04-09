@@ -15,6 +15,9 @@ extern "C" {
 #include "android_dnssd_shim.h"
 }
 
+#include "ALACDecoder.h"
+#include "ALACBitUtilities.h"
+
 #define TAG "AirPlayNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
@@ -285,4 +288,93 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetCodecs(
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
     if (!ctx || !ctx->dnssd) return;
     android_dnssd_set_codecs(ctx->dnssd, alac ? 1 : 0, aac ? 1 : 0);
+}
+
+/* ---------- Software ALAC decoder (Apple reference, Apache 2.0) ---------- */
+
+extern "C"
+JNIEXPORT jlong JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeAlacInit(
+        JNIEnv *env, jobject thiz,
+        jint frameLength, jint numChannels, jint bitDepth,
+        jint pb, jint mb, jint kb) {
+
+    ALACDecoder *dec = new ALACDecoder();
+    if (!dec) return 0;
+
+    /* Build the 24-byte ALACSpecificConfig (big-endian) */
+    uint8_t cookie[24];
+    cookie[0] = (frameLength >> 24) & 0xFF;
+    cookie[1] = (frameLength >> 16) & 0xFF;
+    cookie[2] = (frameLength >> 8) & 0xFF;
+    cookie[3] = frameLength & 0xFF;
+    cookie[4] = 0;                /* compatibleVersion */
+    cookie[5] = (uint8_t)bitDepth;
+    cookie[6] = (uint8_t)pb;
+    cookie[7] = (uint8_t)mb;
+    cookie[8] = (uint8_t)kb;
+    cookie[9] = (uint8_t)numChannels;
+    cookie[10] = 0; cookie[11] = 0xFF; /* maxRun = 255 (big-endian) */
+    cookie[12] = cookie[13] = cookie[14] = cookie[15] = 0; /* maxFrameBytes */
+    cookie[16] = cookie[17] = cookie[18] = cookie[19] = 0; /* avgBitRate */
+    cookie[20] = 0; cookie[21] = 0;                        /* sampleRate 44100 */
+    cookie[22] = 0xAC; cookie[23] = 0x44;                  /* (big-endian) */
+
+    int32_t status = dec->Init(cookie, sizeof(cookie));
+    if (status != 0) {
+        LOGE("ALACDecoder::Init failed: %d", status);
+        delete dec;
+        return 0;
+    }
+    LOGI("ALACDecoder initialized: %dx%d @%d-bit", frameLength, numChannels, bitDepth);
+    return (jlong)(intptr_t)dec;
+}
+
+extern "C"
+JNIEXPORT jbyteArray JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeAlacDecode(
+        JNIEnv *env, jobject thiz, jlong handle, jbyteArray input) {
+
+    ALACDecoder *dec = (ALACDecoder *)(intptr_t)handle;
+    if (!dec || !input) return NULL;
+
+    int input_len = env->GetArrayLength(input);
+    jbyte *input_data = env->GetByteArrayElements(input, NULL);
+
+    /* Set up BitBuffer for the Apple decoder */
+    BitBuffer bits;
+    BitBufferInit(&bits, (uint8_t *)input_data, input_len);
+
+    uint32_t numFrames = dec->mConfig.frameLength;
+    uint32_t numChannels = dec->mConfig.numChannels;
+    uint32_t outBytes = numFrames * numChannels * (dec->mConfig.bitDepth / 8);
+    uint8_t *pcm = (uint8_t *)calloc(outBytes, 1);
+    if (!pcm) {
+        env->ReleaseByteArrayElements(input, input_data, JNI_ABORT);
+        return NULL;
+    }
+
+    uint32_t outSamples = 0;
+    int32_t status = dec->Decode(&bits, pcm, numFrames, numChannels, &outSamples);
+    env->ReleaseByteArrayElements(input, input_data, JNI_ABORT);
+
+    if (status != 0 || outSamples == 0) {
+        free(pcm);
+        return NULL;
+    }
+
+    int pcm_bytes = outSamples * numChannels * (dec->mConfig.bitDepth / 8);
+    jbyteArray result = env->NewByteArray(pcm_bytes);
+    env->SetByteArrayRegion(result, 0, pcm_bytes, (jbyte *)pcm);
+    free(pcm);
+    return result;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeAlacDestroy(
+        JNIEnv *env, jobject thiz, jlong handle) {
+
+    ALACDecoder *dec = (ALACDecoder *)(intptr_t)handle;
+    delete dec;
 }
