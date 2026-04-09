@@ -20,9 +20,11 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import io.github.jqssun.airplay.viewmodel.DebugInfo
 import io.github.jqssun.airplay.viewmodel.MainViewModel
+import androidx.compose.ui.res.painterResource
 import kotlinx.coroutines.delay
 
 private enum class Tab(val label: String) {
@@ -32,8 +34,10 @@ private enum class Tab(val label: String) {
 @Composable
 fun MainScreen(
     viewModel: MainViewModel,
+    isInPip: Boolean = false,
     onSurfaceAvailable: (android.view.Surface) -> Unit,
-    onSurfaceDestroyed: () -> Unit
+    onSurfaceDestroyed: () -> Unit,
+    onPip: () -> Unit = {}
 ) {
     var tab by remember { mutableStateOf(Tab.OVERVIEW) }
     var fullscreen by remember { mutableStateOf(false) }
@@ -53,6 +57,29 @@ fun MainScreen(
         }
     }
 
+    // PiP mode: show only the video surface
+    if (isInPip) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            MirroringView(
+                onSurfaceAvailable = onSurfaceAvailable,
+                onSurfaceDestroyed = onSurfaceDestroyed,
+                aspectRatio = videoAspect
+            )
+        }
+        return
+    }
+
+    // Restore system bars when exiting PiP back to non-fullscreen
+    LaunchedEffect(isInPip) {
+        if (!isInPip && !fullscreen) {
+            val window = activity?.window ?: return@LaunchedEffect
+            WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
     if (fullscreen) {
         BackHandler { fullscreen = false }
         FullscreenVideo(
@@ -60,7 +87,8 @@ fun MainScreen(
             onSurfaceAvailable = onSurfaceAvailable,
             onSurfaceDestroyed = onSurfaceDestroyed,
             aspectRatio = videoAspect,
-            onExitFullscreen = { fullscreen = false }
+            onExitFullscreen = { fullscreen = false },
+            onPip = onPip
         )
         return
     }
@@ -93,7 +121,8 @@ fun MainScreen(
             when (tab) {
                 Tab.OVERVIEW -> OverviewContent(
                     viewModel, onSurfaceAvailable, onSurfaceDestroyed,
-                    onFullscreen = { fullscreen = true }
+                    onFullscreen = { fullscreen = true },
+                    onPip = onPip
                 )
                 Tab.LOGS -> LogsScreen(viewModel)
                 Tab.SETTINGS -> SettingsScreen(viewModel)
@@ -126,7 +155,8 @@ private fun OverviewContent(
     viewModel: MainViewModel,
     onSurfaceAvailable: (android.view.Surface) -> Unit,
     onSurfaceDestroyed: () -> Unit,
-    onFullscreen: () -> Unit
+    onFullscreen: () -> Unit,
+    onPip: () -> Unit
 ) {
     val state by viewModel.serverState.collectAsState()
     val connections by viewModel.connectionCount.collectAsState()
@@ -175,14 +205,19 @@ private fun OverviewContent(
                 }
             }
             if (state == ServerState.RUNNING && connections > 0) {
-                IconButton(
-                    onClick = onFullscreen,
-                    modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Fullscreen, contentDescription = "Fullscreen",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                    )
+                Row(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
+                    IconButton(onClick = onPip) {
+                        Icon(
+                            painterResource(R.drawable.ic_pip), contentDescription = "Picture-in-Picture",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                    IconButton(onClick = onFullscreen) {
+                        Icon(
+                            Icons.Default.Fullscreen, contentDescription = "Fullscreen",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
                 }
             }
             if (debugEnabled && connections > 0) {
@@ -272,7 +307,8 @@ private fun FullscreenVideo(
     onSurfaceAvailable: (android.view.Surface) -> Unit,
     onSurfaceDestroyed: () -> Unit,
     aspectRatio: Float,
-    onExitFullscreen: () -> Unit
+    onExitFullscreen: () -> Unit,
+    onPip: () -> Unit
 ) {
     val videoResolution by viewModel.videoResolution.collectAsState()
     val debugEnabled by viewModel.debugEnabled.collectAsState()
@@ -287,14 +323,19 @@ private fun FullscreenVideo(
             onSurfaceDestroyed = onSurfaceDestroyed,
             aspectRatio = aspectRatio
         )
-        IconButton(
-            onClick = onExitFullscreen,
-            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
-        ) {
-            Icon(
-                Icons.Default.FullscreenExit, contentDescription = "Exit fullscreen",
-                tint = Color.White.copy(alpha = 0.7f)
-            )
+        Row(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+            IconButton(onClick = onPip) {
+                Icon(
+                    painterResource(R.drawable.ic_pip), contentDescription = "Picture-in-Picture",
+                    tint = Color.White.copy(alpha = 0.7f)
+                )
+            }
+            IconButton(onClick = onExitFullscreen) {
+                Icon(
+                    Icons.Default.FullscreenExit, contentDescription = "Exit fullscreen",
+                    tint = Color.White.copy(alpha = 0.7f)
+                )
+            }
         }
         if (debugEnabled) {
             DebugOverlay(debugInfo, Modifier.align(Alignment.TopStart).padding(8.dp))
