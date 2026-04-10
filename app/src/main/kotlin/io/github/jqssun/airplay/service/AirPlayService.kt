@@ -136,6 +136,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
     fun startServer(name: String) {
         if (_serverState.value == ServerState.RUNNING) return
+        val name = name.ifBlank { Prefs.DEF_SERVER_NAME }
 
         val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -185,6 +186,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
         NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, maxFps)
 
         val requestedPort = prefs.getInt(Prefs.SERVER_PORT, Prefs.DEF_SERVER_PORT)
+            .coerceIn(1, 65535)
         val port = NativeBridge.nativeStart(nativeHandle, requestedPort)
         if (port < 0) {
             log("Failed to start on port $requestedPort")
@@ -225,6 +227,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
             NativeBridge.nativeDestroy(nativeHandle)
             nativeHandle = 0L
         }
+        dacpController?.release()
         nsdManager?.release()
         nsdManager = null
         wakeLock?.release()
@@ -443,7 +446,9 @@ class AirPlayService : Service(), RaopCallbackHandler {
                     if (mac != null && mac.size == 6) return mac
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to get hardware address", e)
+        }
         // Fallback: random-ish address
         return byteArrayOf(0xAA.toByte(), 0xBB.toByte(), 0xCC.toByte(), 0xDD.toByte(), 0xEE.toByte(), 0xFF.toByte())
     }

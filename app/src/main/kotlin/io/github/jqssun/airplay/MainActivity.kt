@@ -38,10 +38,11 @@ class MainActivity : ComponentActivity() {
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            service = (binder as AirPlayService.LocalBinder).service
-            service!!.logCallback = { viewModel.addLog(it) }
-            service!!.pinCallback = { viewModel.showPin(it) }
-            viewModel.bindService(service!!)
+            val svc = (binder as? AirPlayService.LocalBinder)?.service ?: return
+            service = svc
+            svc.logCallback = { viewModel.addLog(it) }
+            svc.pinCallback = { viewModel.showPin(it) }
+            viewModel.bindService(svc)
             if (viewModel.autoStart.value && viewModel.serverState.value == AirPlayService.ServerState.STOPPED) {
                 viewModel.startServer()
             }
