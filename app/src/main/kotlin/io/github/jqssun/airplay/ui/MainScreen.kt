@@ -29,10 +29,11 @@ import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import io.github.jqssun.airplay.viewmodel.DebugInfo
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import kotlinx.coroutines.delay
 
-private enum class Tab(val label: String) {
-    OVERVIEW("Overview"), LOGS("Logs"), SETTINGS("Settings")
+private enum class Tab(val labelRes: Int) {
+    OVERVIEW(R.string.tab_overview), LOGS(R.string.tab_logs), SETTINGS(R.string.tab_settings)
 }
 
 @Composable
@@ -49,10 +50,20 @@ fun MainScreen(
     val videoAspect by viewModel.videoAspect.collectAsState()
     val connections by viewModel.connectionCount.collectAsState()
     val audioOnly by viewModel.audioOnly.collectAsState()
+    val autoFullscreen by viewModel.autoFullscreen.collectAsState()
+    val autoAudioMode by viewModel.autoAudioMode.collectAsState()
     var showModePrompt by remember { mutableStateOf(false) }
 
+    // Auto audio mode: skip prompt if preference is on
     LaunchedEffect(audioOnly) {
-        if (audioOnly) showModePrompt = true
+        if (audioOnly && !autoAudioMode) showModePrompt = true
+    }
+
+    // Auto fullscreen when client connects (non-audio)
+    LaunchedEffect(connections, audioOnly) {
+        if (connections > 0 && !audioOnly && autoFullscreen && !fullscreen) {
+            fullscreen = true
+        }
     }
 
     val activity = LocalContext.current as? Activity
@@ -110,19 +121,19 @@ fun MainScreen(
                     selected = tab == Tab.OVERVIEW,
                     onClick = { tab = Tab.OVERVIEW },
                     icon = { Icon(Icons.Default.Cast, null) },
-                    label = { Text(Tab.OVERVIEW.label) }
+                    label = { Text(stringResource(Tab.OVERVIEW.labelRes)) }
                 )
                 NavigationBarItem(
                     selected = tab == Tab.LOGS,
                     onClick = { tab = Tab.LOGS },
                     icon = { Icon(Icons.Default.Article, null) },
-                    label = { Text(Tab.LOGS.label) }
+                    label = { Text(stringResource(Tab.LOGS.labelRes)) }
                 )
                 NavigationBarItem(
                     selected = tab == Tab.SETTINGS,
                     onClick = { tab = Tab.SETTINGS },
                     icon = { Icon(Icons.Default.Settings, null) },
-                    label = { Text(Tab.SETTINGS.label) }
+                    label = { Text(stringResource(Tab.SETTINGS.labelRes)) }
                 )
             }
         }
@@ -145,7 +156,7 @@ fun MainScreen(
     if (pin != null) {
         AlertDialog(
             onDismissRequest = { viewModel.dismissPin() },
-            title = { Text("AirPlay PIN") },
+            title = { Text(stringResource(R.string.dialog_pin_title)) },
             text = {
                 Text(
                     text = pin!!,
@@ -155,7 +166,7 @@ fun MainScreen(
                 )
             },
             confirmButton = {
-                TextButton(onClick = { viewModel.dismissPin() }) { Text("OK") }
+                TextButton(onClick = { viewModel.dismissPin() }) { Text(stringResource(R.string.btn_ok)) }
             }
         )
     }
@@ -164,10 +175,10 @@ fun MainScreen(
     if (showModePrompt) {
         AlertDialog(
             onDismissRequest = { showModePrompt = false },
-            title = { Text("Audio Mode") },
-            text = { Text("Switching to Audio mode for track information and playback controls.") },
+            title = { Text(stringResource(R.string.dialog_audio_mode_title)) },
+            text = { Text(stringResource(R.string.dialog_audio_mode_text)) },
             confirmButton = {
-                TextButton(onClick = { showModePrompt = false }) { Text("OK") }
+                TextButton(onClick = { showModePrompt = false }) { Text(stringResource(R.string.btn_ok)) }
             }
         )
     }
@@ -187,6 +198,7 @@ private fun OverviewContent(
     val serverName by viewModel.serverName.collectAsState()
     val videoAspect by viewModel.videoAspect.collectAsState()
     val videoResolution by viewModel.videoResolution.collectAsState()
+    val idlePreview by viewModel.idlePreview.collectAsState()
     val debugEnabled by viewModel.debugEnabled.collectAsState()
     val debugInfo by viewModel.debugInfo.collectAsState()
 
@@ -204,7 +216,7 @@ private fun OverviewContent(
             if (showAudioMode && state == ServerState.RUNNING && connections > 0) {
                 NowPlayingContent(viewModel)
             } else {
-                if (state == ServerState.RUNNING) {
+                if (state == ServerState.RUNNING && (connections > 0 || idlePreview)) {
                     MirroringView(
                         onSurfaceAvailable = onSurfaceAvailable,
                         onSurfaceDestroyed = onSurfaceDestroyed,
@@ -222,9 +234,9 @@ private fun OverviewContent(
                         Spacer(Modifier.height(12.dp))
                         Text(
                             text = when (state) {
-                                ServerState.STOPPED -> "Server stopped"
-                                ServerState.RUNNING -> "Waiting for connection..."
-                                ServerState.ERROR -> "Error starting server"
+                                ServerState.STOPPED -> stringResource(R.string.server_stopped)
+                                ServerState.RUNNING -> stringResource(R.string.waiting_for_connection)
+                                ServerState.ERROR -> stringResource(R.string.error_starting_server)
                             },
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
@@ -235,13 +247,13 @@ private fun OverviewContent(
                     Row(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
                         IconButton(onClick = onPip) {
                             Icon(
-                                painterResource(R.drawable.ic_pip), contentDescription = "Picture-in-Picture",
+                                painterResource(R.drawable.ic_pip), contentDescription = stringResource(R.string.cd_pip),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                             )
                         }
                         IconButton(onClick = onFullscreen) {
                             Icon(
-                                Icons.Default.Fullscreen, contentDescription = "Fullscreen",
+                                Icons.Default.Fullscreen, contentDescription = stringResource(R.string.cd_fullscreen),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                             )
                         }
@@ -302,9 +314,9 @@ private fun OverviewContent(
                         )
                         Text(
                             text = when (state) {
-                                ServerState.RUNNING -> "$connections connected"
-                                ServerState.ERROR -> "Error"
-                                ServerState.STOPPED -> "Stopped"
+                                ServerState.RUNNING -> stringResource(R.string.connected_count, connections)
+                                ServerState.ERROR -> stringResource(R.string.error_label)
+                                ServerState.STOPPED -> stringResource(R.string.stopped_label)
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = statusColor
@@ -323,7 +335,7 @@ private fun OverviewContent(
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(Modifier.width(6.dp))
-                        Text(if (state == ServerState.RUNNING) "Stop" else "Start")
+                        Text(if (state == ServerState.RUNNING) stringResource(R.string.btn_stop) else stringResource(R.string.btn_start))
                     }
                 }
             }
@@ -356,13 +368,13 @@ private fun FullscreenVideo(
         Row(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
             IconButton(onClick = onPip) {
                 Icon(
-                    painterResource(R.drawable.ic_pip), contentDescription = "Picture-in-Picture",
+                    painterResource(R.drawable.ic_pip), contentDescription = stringResource(R.string.cd_pip),
                     tint = Color.White.copy(alpha = 0.7f)
                 )
             }
             IconButton(onClick = onExitFullscreen) {
                 Icon(
-                    Icons.Default.FullscreenExit, contentDescription = "Exit fullscreen",
+                    Icons.Default.FullscreenExit, contentDescription = stringResource(R.string.cd_exit_fullscreen),
                     tint = Color.White.copy(alpha = 0.7f)
                 )
             }
@@ -418,7 +430,7 @@ private fun NowPlayingContent(viewModel: MainViewModel) {
             if (track.coverArt != null) {
                 Image(
                     bitmap = track.coverArt!!.asImageBitmap(),
-                    contentDescription = "Cover art",
+                    contentDescription = stringResource(R.string.cd_cover_art),
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
                 )
@@ -436,7 +448,7 @@ private fun NowPlayingContent(viewModel: MainViewModel) {
 
         // Track info
         Text(
-            text = track.title.ifEmpty { "Unknown" },
+            text = track.title.ifEmpty { stringResource(R.string.unknown_track) },
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
@@ -488,7 +500,7 @@ private fun NowPlayingContent(viewModel: MainViewModel) {
             modifier = Modifier.fillMaxWidth()
         ) {
             IconButton(onClick = { viewModel.dacpPrev() }) {
-                Icon(Icons.Default.SkipPrevious, "Previous", modifier = Modifier.size(36.dp))
+                Icon(Icons.Default.SkipPrevious, stringResource(R.string.cd_previous), modifier = Modifier.size(36.dp))
             }
             FilledIconButton(
                 onClick = { viewModel.dacpPlayPause() },
@@ -496,11 +508,11 @@ private fun NowPlayingContent(viewModel: MainViewModel) {
             ) {
                 Icon(
                     if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    "Play/Pause", modifier = Modifier.size(32.dp)
+                    stringResource(R.string.cd_play_pause), modifier = Modifier.size(32.dp)
                 )
             }
             IconButton(onClick = { viewModel.dacpNext() }) {
-                Icon(Icons.Default.SkipNext, "Next", modifier = Modifier.size(36.dp))
+                Icon(Icons.Default.SkipNext, stringResource(R.string.cd_next), modifier = Modifier.size(36.dp))
             }
         }
     }

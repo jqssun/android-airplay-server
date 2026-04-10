@@ -14,7 +14,7 @@ object NativeBridge {
         requirePin: Boolean
     ): Long
 
-    external fun nativeStart(handle: Long): Int
+    external fun nativeStart(handle: Long, port: Int): Int
     external fun nativeStop(handle: Long)
     external fun nativeDestroy(handle: Long)
 

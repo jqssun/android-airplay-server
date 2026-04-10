@@ -24,6 +24,7 @@ import android.view.Surface
 import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import io.github.jqssun.airplay.MainActivity
+import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.audio.DacpController
 import io.github.jqssun.airplay.audio.DmapParser
@@ -136,7 +137,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
     fun startServer(name: String) {
         if (_serverState.value == ServerState.RUNNING) return
 
-        val prefs = getSharedPreferences("settings", Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "airplay:server").apply { acquire() }
 
@@ -144,25 +145,25 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
         val hwAddr = getHwAddr()
         val keyFile = filesDir.resolve("airplay.pem").absolutePath
-        val nohold = prefs.getBoolean("allow_new_conn", false)
-        val requirePin = prefs.getBoolean("require_pin", false)
+        val nohold = prefs.getBoolean(Prefs.ALLOW_NEW_CONN, Prefs.DEF_ALLOW_NEW_CONN)
+        val requirePin = prefs.getBoolean(Prefs.REQUIRE_PIN, Prefs.DEF_REQUIRE_PIN)
 
         nativeHandle = NativeBridge.nativeInit(this, hwAddr, name, keyFile, nohold, requirePin)
         if (nativeHandle == 0L) {
             log("Native init failed")
-            _serverState.value = ServerState.ERROR
+            _failStart()
             return
         }
 
         // Apply settings from preferences
-        val maxFps = prefs.getInt("max_fps", 60)
-        val overscanned = prefs.getBoolean("overscanned", false)
-        val audioLatencyMs = prefs.getInt("audio_latency_ms", -1)
-        val h265 = prefs.getBoolean("h265_enabled", true)
-        val alac = prefs.getBoolean("alac_enabled", true)
-        val aac = prefs.getBoolean("aac_enabled", true)
+        val maxFps = prefs.getInt(Prefs.MAX_FPS, Prefs.DEF_MAX_FPS)
+        val overscanned = prefs.getBoolean(Prefs.OVERSCANNED, Prefs.DEF_OVERSCANNED)
+        val audioLatencyMs = prefs.getInt(Prefs.AUDIO_LATENCY_MS, Prefs.DEF_AUDIO_LATENCY_MS)
+        val h265 = prefs.getBoolean(Prefs.H265_ENABLED, Prefs.DEF_H265_ENABLED)
+        val alac = prefs.getBoolean(Prefs.ALAC_ENABLED, Prefs.DEF_ALAC_ENABLED)
+        val aac = prefs.getBoolean(Prefs.AAC_ENABLED, Prefs.DEF_AAC_ENABLED)
 
-        audioRenderer.swAlacEnabled = prefs.getBoolean("sw_alac_enabled", true)
+        audioRenderer.swAlacEnabled = prefs.getBoolean(Prefs.SW_ALAC_ENABLED, Prefs.DEF_SW_ALAC_ENABLED)
         NativeBridge.nativeSetH265Enabled(nativeHandle, h265)
         NativeBridge.nativeSetCodecs(nativeHandle, alac, aac)
         NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", maxFps)
@@ -171,7 +172,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
         // Set display params
         val dm = resources.displayMetrics
-        val res = prefs.getString("resolution", "auto")!!
+        val res = prefs.getString(Prefs.RESOLUTION, Prefs.DEF_RESOLUTION)!!
         val (w, h) = if (res != "auto" && res.contains("x")) {
             val parts = res.split("x")
             parts[0].toInt() to parts[1].toInt()
@@ -183,10 +184,11 @@ class AirPlayService : Service(), RaopCallbackHandler {
         _videoAspect.value = w.toFloat() / h
         NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, maxFps)
 
-        val port = NativeBridge.nativeStart(nativeHandle)
+        val requestedPort = prefs.getInt(Prefs.SERVER_PORT, Prefs.DEF_SERVER_PORT)
+        val port = NativeBridge.nativeStart(nativeHandle, requestedPort)
         if (port < 0) {
-            log("Native start failed")
-            _serverState.value = ServerState.ERROR
+            log("Failed to start on port $requestedPort")
+            _failStart()
             return
         }
 
@@ -203,6 +205,18 @@ class AirPlayService : Service(), RaopCallbackHandler {
         ContextCompat.startForegroundService(this, Intent(this, AirPlayService::class.java))
         startForeground(NOTIFICATION_ID, buildNotification())
         log("Server started on port $port")
+    }
+
+    private fun _failStart() {
+        if (nativeHandle != 0L) {
+            NativeBridge.nativeDestroy(nativeHandle)
+            nativeHandle = 0L
+        }
+        nsdManager?.release()
+        nsdManager = null
+        wakeLock?.release()
+        wakeLock = null
+        _serverState.value = ServerState.ERROR
     }
 
     fun stopServer() {

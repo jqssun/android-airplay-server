@@ -23,10 +23,7 @@ class AudioRenderer {
     fun feedAudio(data: ByteArray, ct: Int, ntpTimeNs: Long) {
         if (ct != currentCt || (codec == null && swAlacHandle == 0L)) {
             if (ct == failedCt) {
-                if (ct == CT_ALAC && swAlacEnabled && swAlacHandle == 0L) {
-                    _startSoftwareAlac()
-                }
-                if (swAlacHandle == 0L) return
+                if (!_ensureSoftwareAlac(ct)) return
             } else {
                 stop()
                 start(ct)
@@ -35,8 +32,7 @@ class AudioRenderer {
 
         // Software ALAC path
         if (swAlacHandle != 0L && ct == CT_ALAC) {
-            val pcm = NativeBridge.nativeAlacDecode(swAlacHandle, data) ?: return
-            track?.write(pcm, 0, pcm.size)
+            _feedSoftwareAlac(data)
             return
         }
 
@@ -54,14 +50,21 @@ class AudioRenderer {
         } catch (_: IllegalStateException) {
             codec = null
             failedCt = ct
-            if (ct == CT_ALAC && swAlacEnabled) {
-                _startSoftwareAlac()
-                if (swAlacHandle != 0L) {
-                    val pcm = NativeBridge.nativeAlacDecode(swAlacHandle, data) ?: return
-                    track?.write(pcm, 0, pcm.size)
-                }
-            }
+            if (_ensureSoftwareAlac(ct)) _feedSoftwareAlac(data)
         }
+    }
+
+    /** Try to start software ALAC if applicable. Returns true if SW decoder is ready. */
+    private fun _ensureSoftwareAlac(ct: Int): Boolean {
+        if (ct != CT_ALAC || !swAlacEnabled) return false
+        if (swAlacHandle != 0L) return true
+        _startSoftwareAlac()
+        return swAlacHandle != 0L
+    }
+
+    private fun _feedSoftwareAlac(data: ByteArray) {
+        val pcm = NativeBridge.nativeAlacDecode(swAlacHandle, data) ?: return
+        track?.write(pcm, 0, pcm.size)
     }
 
     private fun _startSoftwareAlac() {

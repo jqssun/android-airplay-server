@@ -1,8 +1,105 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AirPlay Server</string>
+
+    <!-- Notification -->
     <string name="notification_channel">AirPlay Service</string>
     <string name="notification_title">AirPlay Server Running</string>
     <string name="notification_text">Accepting AirPlay connections</string>
     <string name="stop_service">Stop</string>
+
+    <!-- Tabs -->
+    <string name="tab_overview">Overview</string>
+    <string name="tab_logs">Logs</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- Overview -->
+    <string name="server_stopped">Server stopped</string>
+    <string name="waiting_for_connection">Waiting for connection…</string>
+    <string name="error_starting_server">Error starting server</string>
+    <string name="connected_count">%d connected</string>
+    <string name="error_label">Error</string>
+    <string name="stopped_label">Stopped</string>
+    <string name="btn_start">Start</string>
+    <string name="btn_stop">Stop</string>
+    <string name="unknown_track">Unknown</string>
+
+    <!-- Content descriptions -->
+    <string name="cd_pip">Picture-in-Picture</string>
+    <string name="cd_fullscreen">Fullscreen</string>
+    <string name="cd_exit_fullscreen">Exit fullscreen</string>
+    <string name="cd_cover_art">Cover art</string>
+    <string name="cd_previous">Previous</string>
+    <string name="cd_play_pause">Play/Pause</string>
+    <string name="cd_next">Next</string>
+
+    <!-- Dialogs -->
+    <string name="dialog_pin_title">AirPlay PIN</string>
+    <string name="dialog_audio_mode_title">Audio Mode</string>
+    <string name="dialog_audio_mode_text">Switching to Audio mode for track information and playback controls.</string>
+    <string name="btn_ok">OK</string>
+
+    <!-- Logs screen -->
+    <string name="btn_export">Export</string>
+    <string name="btn_clear">Clear</string>
+
+    <!-- Settings sections -->
+    <string name="section_server">Server</string>
+    <string name="section_connection">Connection</string>
+    <string name="section_display">Display</string>
+    <string name="section_audio">Audio</string>
+    <string name="section_decode">Decode</string>
+    <string name="section_debug">Debug</string>
+
+    <!-- Settings: Server -->
+    <string name="setting_server_name">Server name</string>
+    <string name="setting_server_name_desc">Name shown to AirPlay clients</string>
+    <string name="setting_server_port">Server port</string>
+    <string name="setting_server_port_desc">Port for the AirPlay server</string>
+    <string name="setting_auto_start">Start server automatically</string>
+    <string name="setting_auto_start_desc">Start the AirPlay server when the app launches</string>
+    <string name="btn_save">Save</string>
+
+    <!-- Settings: Connection -->
+    <string name="setting_require_pin">Require PIN (Beta)</string>
+    <string name="setting_require_pin_desc">Require 4-digit PIN for each new connection</string>
+    <string name="setting_allow_new_conn">Allow new connections</string>
+    <string name="setting_allow_new_conn_desc">Drop current client when a new one connects</string>
+
+    <!-- Settings: Display -->
+    <string name="setting_idle_preview">Idle screen preview</string>
+    <string name="setting_idle_preview_desc">Show video surface while waiting for a connection</string>
+    <string name="setting_auto_fullscreen">Enter fullscreen automatically</string>
+    <string name="setting_auto_fullscreen_desc">Enter fullscreen when a client connects</string>
+    <string name="setting_auto_audio_mode">Enter audio mode automatically</string>
+    <string name="setting_auto_audio_mode_desc">Skip the prompt and switch to audio mode immediately</string>
+    <string name="setting_resolution">Resolution</string>
+    <string name="setting_resolution_desc">Video resolution advertised to clients</string>
+    <string name="setting_resolution_placeholder">[W]x[H]</string>
+    <string name="setting_resolution_auto">Auto</string>
+    <string name="setting_max_fps">Max FPS</string>
+    <string name="setting_max_fps_desc">Maximum frame rate advertised to clients</string>
+    <string name="setting_max_fps_placeholder">[FPS]</string>
+    <string name="setting_overscanned">Overscanned</string>
+    <string name="setting_overscanned_desc">Add pixel boundary for full-screen overscan displays</string>
+    <string name="chip_custom">Custom</string>
+
+    <!-- Settings: Audio -->
+    <string name="setting_audio_delay">Override audio delay</string>
+    <string name="setting_audio_delay_desc">Set a custom audio latency reported to client</string>
+    <string name="audio_delay_value">%dms</string>
+
+    <!-- Settings: Decode -->
+    <string name="setting_h265">H.265 (HEVC)</string>
+    <string name="setting_h265_desc">Enable H.265 video decoding if device supports it</string>
+    <string name="setting_alac">ALAC audio</string>
+    <string name="setting_alac_desc">Apple Lossless codec for AirPlay music streaming</string>
+    <string name="setting_sw_alac">Software ALAC decoder</string>
+    <string name="setting_sw_alac_desc">Use built-in decoder if platform ALAC is unavailable</string>
+    <string name="setting_aac">AAC audio</string>
+    <string name="setting_aac_desc">AAC-ELD / AAC-LC codec for screen mirroring audio</string>
+
+    <!-- Settings: Debug -->
+    <string name="setting_debug_overlay">Show debug overlay</string>
+    <string name="setting_debug_overlay_desc">Display stats (bitrate, FPS, codec) over video</string>
 </resources>

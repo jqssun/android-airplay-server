@@ -11,9 +11,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 
 @Composable
@@ -34,15 +36,15 @@ fun LogsScreen(viewModel: MainViewModel) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Logs",
+                text = stringResource(R.string.tab_logs),
                 style = MaterialTheme.typography.headlineSmall,
                 modifier = Modifier.weight(1f)
             )
             TextButton(onClick = { viewModel.exportLogs() }) {
-                Text("Export")
+                Text(stringResource(R.string.btn_export))
             }
             TextButton(onClick = { viewModel.clearLogs() }) {
-                Text("Clear")
+                Text(stringResource(R.string.btn_clear))
             }
         }
 

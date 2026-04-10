@@ -110,12 +110,12 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
 extern "C"
 JNIEXPORT jint JNICALL
 Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeStart(
-        JNIEnv *env, jobject thiz, jlong handle) {
+        JNIEnv *env, jobject thiz, jlong handle, jint requestedPort) {
 
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
     if (!ctx || !ctx->raop) return -1;
 
-    unsigned short port = 7000;
+    unsigned short port = (unsigned short)(requestedPort > 0 ? requestedPort : 7000);
     int ret = raop_start_httpd(ctx->raop, &port);
     if (ret < 0) {
         LOGE("raop_start_httpd failed: %d", ret);
