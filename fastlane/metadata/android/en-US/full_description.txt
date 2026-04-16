@@ -1,0 +1,9 @@
+- Screen mirroring with H.264 and H.265 (HEVC) video decoding
+- Audio streaming with AAC-ELD, AAC-LC and ALAC audio decoding
+- Music streaming with track information, cover art, and playback controls
+- Support for Picture-in-Picture, automatic resolution and mode switching
+- Optional PIN authentication
+- Video resolution, overscan, and frame rate control
+- Audio latency control and support for software decoder fallback
+- Debug overlay with real-time statistics (FPS, bitrate, codec, resolution, frame count, audio volume, etc.)
+- Android native media session integration with notification controls

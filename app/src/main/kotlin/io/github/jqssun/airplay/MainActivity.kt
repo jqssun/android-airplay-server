@@ -61,16 +61,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Request notification permission on Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        // Bind service (foreground promotion happens in startServer)
         bindService(Intent(this, AirPlayService::class.java), connection, BIND_AUTO_CREATE)
 
-        // Poll service state into viewmodel
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {
@@ -108,7 +105,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        // auto-enter PiP when user presses home while streaming
         if (viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&
             viewModel.connectionCount.value > 0) {
             enterPip()

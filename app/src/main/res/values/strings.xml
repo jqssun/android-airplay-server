@@ -72,14 +72,16 @@
     <string name="setting_auto_fullscreen">Enter fullscreen automatically</string>
     <string name="setting_auto_fullscreen_desc">Enter fullscreen when a client connects</string>
     <string name="setting_auto_audio_mode">Enter audio mode automatically</string>
-    <string name="setting_auto_audio_mode_desc">Skip the prompt and switch to audio mode immediately</string>
+    <string name="setting_auto_audio_mode_desc">Skip the prompt when switching to audio mode</string>
     <string name="setting_resolution">Resolution</string>
     <string name="setting_resolution_desc">Video resolution advertised to clients</string>
     <string name="setting_resolution_placeholder">[W]x[H]</string>
     <string name="setting_resolution_auto">Auto</string>
+    <string name="setting_resolution_width">Width</string>
+    <string name="setting_resolution_height">Height</string>
     <string name="setting_max_fps">Max FPS</string>
     <string name="setting_max_fps_desc">Maximum frame rate advertised to clients</string>
-    <string name="setting_max_fps_placeholder">[FPS]</string>
+    <string name="setting_max_fps_placeholder">FPS</string>
     <string name="setting_overscanned">Overscanned</string>
     <string name="setting_overscanned_desc">Add pixel boundary for full-screen overscan displays</string>
     <string name="chip_custom">Custom</string>
@@ -93,11 +95,11 @@
     <string name="setting_h265">H.265 (HEVC)</string>
     <string name="setting_h265_desc">Enable H.265 video decoding if device supports it</string>
     <string name="setting_alac">ALAC audio</string>
-    <string name="setting_alac_desc">Apple Lossless codec for AirPlay music streaming</string>
+    <string name="setting_alac_desc">ALAC codec for AirPlay music streaming</string>
     <string name="setting_sw_alac">Software ALAC decoder</string>
     <string name="setting_sw_alac_desc">Use built-in decoder if platform ALAC is unavailable</string>
     <string name="setting_aac">AAC audio</string>
-    <string name="setting_aac_desc">AAC-ELD / AAC-LC codec for screen mirroring audio</string>
+    <string name="setting_aac_desc">AAC-ELD or AAC-LC codec for screen mirroring audio</string>
 
     <!-- Settings: Debug -->
     <string name="setting_debug_overlay">Show debug overlay</string>
