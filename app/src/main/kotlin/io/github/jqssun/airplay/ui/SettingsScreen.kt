@@ -47,13 +47,11 @@ fun SettingsScreen(viewModel: MainViewModel) {
         SectionHeader(stringResource(R.string.section_server))
 
         var nameText by remember(serverName) { mutableStateOf(serverName) }
-        ListItem(
-            headlineContent = { Text(stringResource(R.string.setting_server_name)) },
-            supportingContent = { Text(stringResource(R.string.setting_server_name_desc)) }
-        )
         OutlinedTextField(
             value = nameText,
             onValueChange = { nameText = it },
+            label = { Text(stringResource(R.string.setting_server_name)) },
+            supportingText = { Text(stringResource(R.string.setting_server_name_desc)) },
             singleLine = true,
             modifier = Modifier
                 .fillMaxWidth()
@@ -70,13 +68,11 @@ fun SettingsScreen(viewModel: MainViewModel) {
 
         var portText by remember(serverPort) { mutableStateOf(serverPort.toString()) }
         val focus = LocalFocusManager.current
-        ListItem(
-            headlineContent = { Text(stringResource(R.string.setting_server_port)) },
-            supportingContent = { Text(stringResource(R.string.setting_server_port_desc)) }
-        )
         OutlinedTextField(
             value = portText,
             onValueChange = { portText = it.filter { c -> c.isDigit() }.take(5) },
+            label = { Text(stringResource(R.string.setting_server_port)) },
+            supportingText = { Text(stringResource(R.string.setting_server_port_desc)) },
             singleLine = true,
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Number,
@@ -142,12 +138,8 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onCheckedChange = { viewModel.setAutoAudioMode(it) }
         )
 
-        SettingChipField(
-            title = stringResource(R.string.setting_resolution),
-            description = stringResource(R.string.setting_resolution_desc),
+        SettingResolution(
             value = resolution,
-            presets = listOf("auto" to stringResource(R.string.setting_resolution_auto), "1280x720" to "1280x720", "1920x1080" to "1920x1080", "3840x2160" to "3840x2160"),
-            placeholder = stringResource(R.string.setting_resolution_placeholder),
             onValueChange = { viewModel.setResolution(it) }
         )
 
@@ -246,6 +238,90 @@ private fun SectionHeader(title: String) {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
+private fun SettingResolution(
+    value: String,
+    onValueChange: (String) -> Unit
+) {
+    val presets = listOf(
+        "auto" to stringResource(R.string.setting_resolution_auto),
+        "1280x720" to "1280x720",
+        "1920x1080" to "1920x1080",
+        "3840x2160" to "3840x2160"
+    )
+    val isPreset = presets.any { it.first == value }
+    var editing by remember { mutableStateOf(false) }
+    val parts = if (!isPreset && value.contains("x")) value.split("x", limit = 2) else listOf("", "")
+    var width by remember(value) { mutableStateOf(if (isPreset) "" else parts[0]) }
+    var height by remember(value) { mutableStateOf(if (isPreset) "" else parts.getOrElse(1) { "" }) }
+    val focus = LocalFocusManager.current
+
+    ListItem(
+        headlineContent = { Text(stringResource(R.string.setting_resolution)) },
+        supportingContent = {
+            Column {
+                Text(stringResource(R.string.setting_resolution_desc))
+                Spacer(Modifier.height(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    presets.forEach { (key, label) ->
+                        FilterChip(
+                            selected = value == key && !editing,
+                            onClick = {
+                                editing = false
+                                width = ""; height = ""
+                                onValueChange(key)
+                            },
+                            label = { Text(label) }
+                        )
+                    }
+                    FilterChip(
+                        selected = !isPreset || editing,
+                        onClick = { editing = true },
+                        label = { Text(stringResource(R.string.chip_custom)) }
+                    )
+                }
+                if (editing || !isPreset) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = width,
+                            onValueChange = { width = it.filter { c -> c.isDigit() }.take(5) },
+                            singleLine = true,
+                            label = { Text(stringResource(R.string.setting_resolution_width)) },
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Next
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = height,
+                            onValueChange = { height = it.filter { c -> c.isDigit() }.take(5) },
+                            singleLine = true,
+                            label = { Text(stringResource(R.string.setting_resolution_height)) },
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Done
+                            ),
+                            keyboardActions = KeyboardActions(onDone = {
+                                val w = width.toIntOrNull()
+                                val h = height.toIntOrNull()
+                                if (w != null && w > 0 && h != null && h > 0) {
+                                    onValueChange("${w}x${h}")
+                                    editing = false
+                                }
+                                focus.clearFocus()
+                            }),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
 private fun SettingChipField(
     title: String,
     description: String,
@@ -290,7 +366,7 @@ private fun SettingChipField(
                         value = text,
                         onValueChange = { text = it },
                         singleLine = true,
-                        placeholder = { Text(placeholder) },
+                        label = { Text(placeholder) },
                         keyboardOptions = KeyboardOptions(
                             keyboardType = keyboard,
                             imeAction = ImeAction.Done

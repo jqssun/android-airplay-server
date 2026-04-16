@@ -28,7 +28,6 @@ fun LogsScreen(viewModel: MainViewModel) {
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Header
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -48,7 +47,6 @@ fun LogsScreen(viewModel: MainViewModel) {
             }
         }
 
-        // Log list
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
