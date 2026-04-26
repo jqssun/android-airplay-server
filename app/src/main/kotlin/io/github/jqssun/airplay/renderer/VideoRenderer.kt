@@ -122,6 +122,12 @@ class VideoRenderer {
 
         val format = MediaFormat.createVideoFormat(mime, videoWidth, videoHeight)
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 1024 * 1024)
+        
+        // Phase 1 Improvements: High priority and low latency
+        format.setInteger(MediaFormat.KEY_PRIORITY, 0) // 0 = Real-time
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+        }
 
         codec = MediaCodec.createDecoderByType(mime).also {
             it.configure(format, s, null, 0)
@@ -129,7 +135,7 @@ class VideoRenderer {
         }
         codecName = if (h265) "H.265" else "H.264"
         running = true
-        Log.i(TAG, "Video codec started: $mime")
+        Log.i(TAG, "Video codec started: $mime (low-latency enabled)")
     }
 
     private fun stopCodec() {
@@ -149,7 +155,7 @@ class VideoRenderer {
         while (true) {
             val idx = c.dequeueOutputBuffer(info, 0)
             if (idx >= 0) {
-                c.releaseOutputBuffer(idx, true) // render to surface
+                c.releaseOutputBuffer(idx, true) // render to surface immediately
             } else {
                 break
             }
