@@ -14,6 +14,7 @@ object Prefs {
     const val QUALITY_VARIANT = "quality_variant"; const val DEF_QUALITY_VARIANT = "auto"
     const val RESOLUTION = "resolution"; const val DEF_RESOLUTION = "auto"
     const val MAX_FPS = "max_fps"; const val DEF_MAX_FPS = 60
+    const val BITRATE = "bitrate"; const val DEF_BITRATE = 20
     const val OVERSCANNED = "overscanned"; const val DEF_OVERSCANNED = false
     const val REQUIRE_PIN = "require_pin"; const val DEF_REQUIRE_PIN = false
     const val ALLOW_NEW_CONN = "allow_new_conn"; const val DEF_ALLOW_NEW_CONN = false

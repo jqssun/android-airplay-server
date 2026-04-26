@@ -92,6 +92,9 @@
     <string name="setting_max_fps">Max FPS</string>
     <string name="setting_max_fps_desc">Maximum frame rate advertised to clients</string>
     <string name="setting_max_fps_placeholder">FPS</string>
+    <string name="setting_bitrate">Bitrate Limit</string>
+    <string name="setting_bitrate_desc">Set the maximum manual bitrate limit for the decoder (Mbps)</string>
+    <string name="setting_bitrate_value">%d Mbps</string>
     <string name="setting_overscanned">Overscanned</string>
     <string name="setting_overscanned_desc">Add pixel boundary for full-screen overscan displays</string>
     <string name="chip_custom">Custom</string>

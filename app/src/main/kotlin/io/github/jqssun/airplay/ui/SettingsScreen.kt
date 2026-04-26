@@ -38,6 +38,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val swAlacEnabled by viewModel.swAlacEnabled.collectAsState()
     val debugEnabled by viewModel.debugEnabled.collectAsState()
     val qualityVariant by viewModel.qualityVariant.collectAsState()
+    val bitrate by viewModel.bitrate.collectAsState()
 
     Column(
         modifier = Modifier
@@ -142,6 +143,11 @@ fun SettingsScreen(viewModel: MainViewModel) {
         SettingQualityVariant(
             value = qualityVariant,
             onValueChange = { viewModel.setQualityVariant(it) }
+        )
+
+        SettingBitrate(
+            value = bitrate,
+            onValueChange = { viewModel.setBitrate(it) }
         )
 
         if (qualityVariant == "manual" || qualityVariant == "auto") {
@@ -362,6 +368,30 @@ private fun SettingResolution(
                 }
             }
         }
+    )
+}
+
+@Composable
+private fun SettingBitrate(
+    value: Int,
+    onValueChange: (Int) -> Unit
+) {
+    var sliderVal by remember(value) { mutableFloatStateOf(value.toFloat()) }
+    ListItem(
+        headlineContent = { Text(stringResource(R.string.setting_bitrate)) },
+        supportingContent = {
+            Column {
+                Text(stringResource(R.string.setting_bitrate_desc))
+                Slider(
+                    value = sliderVal,
+                    onValueChange = { sliderVal = it },
+                    onValueChangeFinished = { onValueChange(sliderVal.roundToInt()) },
+                    valueRange = 1f..150f,
+                    steps = 148
+                )
+            }
+        },
+        trailingContent = { Text(stringResource(R.string.setting_bitrate_value, sliderVal.roundToInt())) }
     )
 }
 

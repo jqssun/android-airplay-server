@@ -15,6 +15,8 @@ class VideoRenderer {
     @Volatile private var running = false
     private var videoWidth = 0
     private var videoHeight = 0
+    private var targetBitrateMbps = 20
+    private var targetFps = 60
 
     // Cache last keyframe so decoder can bootstrap after late surface attach
     private var cachedKeyframe: ByteArray? = null
@@ -33,6 +35,11 @@ class VideoRenderer {
     fun setResolution(w: Int, h: Int) {
         videoWidth = w
         videoHeight = h
+    }
+
+    fun setStreamParameters(bitrateMbps: Int, fps: Int) {
+        targetBitrateMbps = bitrateMbps
+        targetFps = fps
     }
 
     fun setSurface(surface: Surface?) = synchronized(lock) {
@@ -126,6 +133,10 @@ class VideoRenderer {
 
         val format = MediaFormat.createVideoFormat(mime, videoWidth, videoHeight)
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 1024 * 1024)
+        
+        // Settings requested from caller
+        format.setInteger(MediaFormat.KEY_BIT_RATE, targetBitrateMbps * 1000 * 1000)
+        format.setInteger(MediaFormat.KEY_FRAME_RATE, targetFps)
         
         // Phase 3 Improvements: Maximum operational rate instead of buggy low-latency mode.
         // Moonlight relies heavily on this to prevent reference frame corruption on Android TV.

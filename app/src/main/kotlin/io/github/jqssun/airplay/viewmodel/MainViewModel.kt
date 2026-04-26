@@ -85,6 +85,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _maxFps = MutableStateFlow(prefs.getInt(Prefs.MAX_FPS, Prefs.DEF_MAX_FPS))
     val maxFps: StateFlow<Int> = _maxFps.asStateFlow()
 
+    private val _bitrate = MutableStateFlow(prefs.getInt(Prefs.BITRATE, Prefs.DEF_BITRATE))
+    val bitrate: StateFlow<Int> = _bitrate.asStateFlow()
+
     private val _overscanned = MutableStateFlow(prefs.getBoolean(Prefs.OVERSCANNED, Prefs.DEF_OVERSCANNED))
     val overscanned: StateFlow<Boolean> = _overscanned.asStateFlow()
 
@@ -180,6 +183,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setAacEnabled(v: Boolean) { _aacEnabled.value = v; prefs.edit().putBoolean(Prefs.AAC_ENABLED, v).apply() }
     fun setResolution(v: String) { _resolution.value = v; prefs.edit().putString(Prefs.RESOLUTION, v).apply() }
     fun setMaxFps(v: Int) { _maxFps.value = v; prefs.edit().putInt(Prefs.MAX_FPS, v).apply() }
+    fun setBitrate(v: Int) { _bitrate.value = v; prefs.edit().putInt(Prefs.BITRATE, v).apply() }
     fun setOverscanned(v: Boolean) { _overscanned.value = v; prefs.edit().putBoolean(Prefs.OVERSCANNED, v).apply() }
     fun setRequirePin(v: Boolean) { _requirePin.value = v; prefs.edit().putBoolean(Prefs.REQUIRE_PIN, v).apply() }
     fun setAllowNewConn(v: Boolean) { _allowNewConn.value = v; prefs.edit().putBoolean(Prefs.ALLOW_NEW_CONN, v).apply() }
@@ -188,7 +192,22 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setAutoFullscreen(v: Boolean) { _autoFullscreen.value = v; prefs.edit().putBoolean(Prefs.AUTO_FULLSCREEN, v).apply() }
     fun setAutoAudioMode(v: Boolean) { _autoAudioMode.value = v; prefs.edit().putBoolean(Prefs.AUTO_AUDIO_MODE, v).apply() }
     fun setDebugEnabled(v: Boolean) { _debugEnabled.value = v; prefs.edit().putBoolean(Prefs.DEBUG_ENABLED, v).apply() }
-    fun setQualityVariant(v: String) { _qualityVariant.value = v; prefs.edit().putString(Prefs.QUALITY_VARIANT, v).apply() }
+    
+    fun setQualityVariant(v: String) { 
+        _qualityVariant.value = v
+        prefs.edit().putString(Prefs.QUALITY_VARIANT, v).apply()
+        
+        val suggestedBitrate = when (v) {
+            "4k_60" -> 40
+            "1080p_60" -> 20
+            "1080p_30" -> 10
+            "720p_60" -> 10
+            "720p_30" -> 5
+            "540p_30" -> 2
+            else -> null
+        }
+        suggestedBitrate?.let { setBitrate(it) }
+    }
 
     // Service binding
     fun bindService(svc: AirPlayService) {
