@@ -79,6 +79,16 @@
     <string name="setting_resolution_auto">Auto</string>
     <string name="setting_resolution_width">Width</string>
     <string name="setting_resolution_height">Height</string>
+    <string name="setting_quality">Stream Quality</string>
+    <string name="setting_quality_desc">Moonlight-style quality presets. Overrides resolution and FPS for optimal bitrate/latency.</string>
+    <string name="quality_auto">Native (Auto)</string>
+    <string name="quality_4k_60">4K Ultra (60 FPS)</string>
+    <string name="quality_1080p_60">1080p High (60 FPS)</string>
+    <string name="quality_1080p_30">1080p Mid (30 FPS)</string>
+    <string name="quality_720p_60">720p Balanced (60 FPS)</string>
+    <string name="quality_720p_30">720p Low Latency (30 FPS)</string>
+    <string name="quality_540p_30">540p Ultra Low (30 FPS)</string>
+    <string name="quality_manual">Manual (Custom)</string>
     <string name="setting_max_fps">Max FPS</string>
     <string name="setting_max_fps_desc">Maximum frame rate advertised to clients</string>
     <string name="setting_max_fps_placeholder">FPS</string>

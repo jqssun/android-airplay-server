@@ -106,6 +106,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _autoAudioMode = MutableStateFlow(prefs.getBoolean(Prefs.AUTO_AUDIO_MODE, Prefs.DEF_AUTO_AUDIO_MODE))
     val autoAudioMode: StateFlow<Boolean> = _autoAudioMode.asStateFlow()
 
+    private val _qualityVariant = MutableStateFlow(prefs.getString(Prefs.QUALITY_VARIANT, Prefs.DEF_QUALITY_VARIANT)!!)
+    val qualityVariant: StateFlow<String> = _qualityVariant.asStateFlow()
+
     // Debug
     private val _debugEnabled = MutableStateFlow(prefs.getBoolean(Prefs.DEBUG_ENABLED, Prefs.DEF_DEBUG_ENABLED))
     val debugEnabled: StateFlow<Boolean> = _debugEnabled.asStateFlow()
@@ -185,6 +188,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setAutoFullscreen(v: Boolean) { _autoFullscreen.value = v; prefs.edit().putBoolean(Prefs.AUTO_FULLSCREEN, v).apply() }
     fun setAutoAudioMode(v: Boolean) { _autoAudioMode.value = v; prefs.edit().putBoolean(Prefs.AUTO_AUDIO_MODE, v).apply() }
     fun setDebugEnabled(v: Boolean) { _debugEnabled.value = v; prefs.edit().putBoolean(Prefs.DEBUG_ENABLED, v).apply() }
+    fun setQualityVariant(v: String) { _qualityVariant.value = v; prefs.edit().putString(Prefs.QUALITY_VARIANT, v).apply() }
 
     // Service binding
     fun bindService(svc: AirPlayService) {

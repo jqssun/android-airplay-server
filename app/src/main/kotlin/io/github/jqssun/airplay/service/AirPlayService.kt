@@ -172,18 +172,33 @@ class AirPlayService : Service(), RaopCallbackHandler {
         if (audioLatencyMs >= 0) NativeBridge.nativeSetPlist(nativeHandle, "audio_delay_micros", audioLatencyMs * 1000)
 
         // Set display params
-        val dm = resources.displayMetrics
-        val res = prefs.getString(Prefs.RESOLUTION, Prefs.DEF_RESOLUTION)!!
-        val (w, h) = if (res != "auto" && res.contains("x")) {
-            val parts = res.split("x")
-            parts[0].toInt() to parts[1].toInt()
-        } else {
-            dm.widthPixels to dm.heightPixels
+        val variant = prefs.getString(Prefs.QUALITY_VARIANT, Prefs.DEF_QUALITY_VARIANT)
+        var (w, h) = 0 to 0
+        var fps = prefs.getInt(Prefs.MAX_FPS, Prefs.DEF_MAX_FPS)
+
+        when (variant) {
+            "4k_60" -> { w = 3840; h = 2160; fps = 60 }
+            "1080p_60" -> { w = 1920; h = 1080; fps = 60 }
+            "1080p_30" -> { w = 1920; h = 1080; fps = 30 }
+            "720p_60" -> { w = 1280; h = 720; fps = 60 }
+            "720p_30" -> { w = 1280; h = 720; fps = 30 }
+            "540p_30" -> { w = 960; h = 540; fps = 30 }
+            else -> { // auto or manual
+                val dm = resources.displayMetrics
+                val res = prefs.getString(Prefs.RESOLUTION, Prefs.DEF_RESOLUTION)!!
+                if (res != "auto" && res.contains("x")) {
+                    val parts = res.split("x")
+                    w = parts[0].toInt(); h = parts[1].toInt()
+                } else {
+                    w = dm.widthPixels; h = dm.heightPixels
+                }
+            }
         }
+
         videoRenderer.setResolution(w, h)
         _videoResolution.value = "${w}x${h}"
         _videoAspect.value = w.toFloat() / h
-        NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, maxFps)
+        NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, fps)
 
         val requestedPort = prefs.getInt(Prefs.SERVER_PORT, Prefs.DEF_SERVER_PORT)
             .coerceIn(1, 65535)

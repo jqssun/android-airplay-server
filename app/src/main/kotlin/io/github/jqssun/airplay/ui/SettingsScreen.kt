@@ -37,6 +37,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val audioLatencyMs by viewModel.audioLatencyMs.collectAsState()
     val swAlacEnabled by viewModel.swAlacEnabled.collectAsState()
     val debugEnabled by viewModel.debugEnabled.collectAsState()
+    val qualityVariant by viewModel.qualityVariant.collectAsState()
 
     Column(
         modifier = Modifier
@@ -138,20 +139,27 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onCheckedChange = { viewModel.setAutoAudioMode(it) }
         )
 
-        SettingResolution(
-            value = resolution,
-            onValueChange = { viewModel.setResolution(it) }
+        SettingQualityVariant(
+            value = qualityVariant,
+            onValueChange = { viewModel.setQualityVariant(it) }
         )
 
-        SettingChipField(
-            title = stringResource(R.string.setting_max_fps),
-            description = stringResource(R.string.setting_max_fps_desc),
-            value = maxFps.toString(),
-            presets = listOf("24" to "24", "30" to "30", "60" to "60", "120" to "120"),
-            placeholder = stringResource(R.string.setting_max_fps_placeholder),
-            keyboard = KeyboardType.Number,
-            onValueChange = { it.toIntOrNull()?.let { v -> viewModel.setMaxFps(v) } }
-        )
+        if (qualityVariant == "manual" || qualityVariant == "auto") {
+            SettingResolution(
+                value = resolution,
+                onValueChange = { viewModel.setResolution(it) }
+            )
+
+            SettingChipField(
+                title = stringResource(R.string.setting_max_fps),
+                description = stringResource(R.string.setting_max_fps_desc),
+                value = maxFps.toString(),
+                presets = listOf("24" to "24", "30" to "30", "60" to "60", "120" to "120"),
+                placeholder = stringResource(R.string.setting_max_fps_placeholder),
+                keyboard = KeyboardType.Number,
+                onValueChange = { it.toIntOrNull()?.let { v -> viewModel.setMaxFps(v) } }
+            )
+        }
 
         SettingSwitch(
             title = stringResource(R.string.setting_overscanned),
@@ -224,6 +232,43 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onCheckedChange = { viewModel.setDebugEnabled(it) }
         )
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SettingQualityVariant(
+    value: String,
+    onValueChange: (String) -> Unit
+) {
+    val presets = listOf(
+        "auto" to stringResource(R.string.quality_auto),
+        "4k_60" to stringResource(R.string.quality_4k_60),
+        "1080p_60" to stringResource(R.string.quality_1080p_60),
+        "1080p_30" to stringResource(R.string.quality_1080p_30),
+        "720p_60" to stringResource(R.string.quality_720p_60),
+        "720p_30" to stringResource(R.string.quality_720p_30),
+        "540p_30" to stringResource(R.string.quality_540p_30),
+        "manual" to stringResource(R.string.quality_manual)
+    )
+
+    ListItem(
+        headlineContent = { Text(stringResource(R.string.setting_quality)) },
+        supportingContent = {
+            Column {
+                Text(stringResource(R.string.setting_quality_desc))
+                Spacer(Modifier.height(8.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    presets.forEach { (key, label) ->
+                        FilterChip(
+                            selected = value == key,
+                            onClick = { onValueChange(key) },
+                            label = { Text(label) }
+                        )
+                    }
+                }
+            }
+        }
+    )
 }
 
 @Composable
