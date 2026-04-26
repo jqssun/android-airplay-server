@@ -87,12 +87,16 @@ class VideoRenderer {
 
     private fun _feedToCodec(data: ByteArray, ntpTimeNs: Long) {
         val c = codec ?: return
-        val idx = c.dequeueInputBuffer(5000)
+        // Phase 3 Improvement: Increased timeout to 500ms to prevent silent frame dropping
+        // on slower Android TV decoders handling 4K/60fps H.265 streams.
+        val idx = c.dequeueInputBuffer(500000)
         if (idx >= 0) {
             val buf = c.getInputBuffer(idx) ?: return
             buf.clear()
             buf.put(data)
             c.queueInputBuffer(idx, 0, data.size, ntpTimeNs / 1000, 0)
+        } else {
+            Log.w(TAG, "Decoder input queue full after 500ms timeout! Dropping frame.")
         }
     }
 
@@ -123,10 +127,14 @@ class VideoRenderer {
         val format = MediaFormat.createVideoFormat(mime, videoWidth, videoHeight)
         format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 1024 * 1024)
         
-        // Phase 1 Improvements: High priority and low latency
-        format.setInteger(MediaFormat.KEY_PRIORITY, 0) // 0 = Real-time
-        if (android.os.Build.VERSION.SDK_INT >= 30) {
-            format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+        // Phase 3 Improvements: Maximum operational rate instead of buggy low-latency mode.
+        // Moonlight relies heavily on this to prevent reference frame corruption on Android TV.
+        if (android.os.Build.VERSION.SDK_INT >= 23) {
+            format.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            // Explicitly tell decoder pipeline NOT to drop frames internally (which causes garbage/smearing)
+            format.setInteger(MediaFormat.KEY_ALLOW_FRAME_DROP, 0)
         }
 
         codec = MediaCodec.createDecoderByType(mime).also {
@@ -135,7 +143,7 @@ class VideoRenderer {
         }
         codecName = if (h265) "H.265" else "H.264"
         running = true
-        Log.i(TAG, "Video codec started: $mime (low-latency enabled)")
+        Log.i(TAG, "Video codec started: $mime (high operating rate enabled)")
     }
 
     private fun stopCodec() {
