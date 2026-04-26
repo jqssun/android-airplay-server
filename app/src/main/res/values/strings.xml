@@ -92,8 +92,8 @@
     <string name="setting_max_fps">Max FPS</string>
     <string name="setting_max_fps_desc">Maximum frame rate advertised to clients</string>
     <string name="setting_max_fps_placeholder">FPS</string>
-    <string name="setting_bitrate">Bitrate Limit</string>
-    <string name="setting_bitrate_desc">Set the maximum manual bitrate limit for the decoder (Mbps)</string>
+    <string name="setting_bitrate">Target Bandwidth</string>
+    <string name="setting_bitrate_desc">Sets your network bandwidth target. Automatically selects the best matching quality preset, which tells your Mac how much to encode.</string>
     <string name="setting_bitrate_value">%d Mbps</string>
     <string name="setting_overscanned">Overscanned</string>
     <string name="setting_overscanned_desc">Add pixel boundary for full-screen overscan displays</string>

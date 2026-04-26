@@ -183,7 +183,45 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setAacEnabled(v: Boolean) { _aacEnabled.value = v; prefs.edit().putBoolean(Prefs.AAC_ENABLED, v).apply() }
     fun setResolution(v: String) { _resolution.value = v; prefs.edit().putString(Prefs.RESOLUTION, v).apply() }
     fun setMaxFps(v: Int) { _maxFps.value = v; prefs.edit().putInt(Prefs.MAX_FPS, v).apply() }
-    fun setBitrate(v: Int) { _bitrate.value = v; prefs.edit().putInt(Prefs.BITRATE, v).apply() }
+    fun setBitrate(v: Int) {
+        _bitrate.value = v
+        prefs.edit().putInt(Prefs.BITRATE, v).apply()
+        // Map the chosen bandwidth target to the closest appropriate quality preset.
+        // This is the only real way to control bandwidth in AirPlay: tell the Mac
+        // what resolution/FPS we can handle, which drives its H.264/H.265 encoder output.
+        val derivedVariant = when {
+            v >= 30  -> "4k_60"
+            v >= 15  -> "1080p_60"
+            v >= 8   -> "1080p_30"
+            v >= 6   -> "720p_60"
+            v >= 3   -> "720p_30"
+            else     -> "540p_30"
+        }
+        if (_qualityVariant.value != derivedVariant) {
+            _qualityVariant.value = derivedVariant
+            prefs.edit().putString(Prefs.QUALITY_VARIANT, derivedVariant).apply()
+        }
+    }
+
+    fun setQualityVariant(v: String) {
+        _qualityVariant.value = v
+        prefs.edit().putString(Prefs.QUALITY_VARIANT, v).apply()
+        // Auto-populate the bandwidth slider with the recommended value for this preset.
+        val suggestedBitrate = when (v) {
+            "4k_60"    -> 40
+            "1080p_60" -> 20
+            "1080p_30" -> 10
+            "720p_60"  -> 8
+            "720p_30"  -> 5
+            "540p_30"  -> 2
+            else       -> null
+        }
+        suggestedBitrate?.let { b ->
+            _bitrate.value = b
+            prefs.edit().putInt(Prefs.BITRATE, b).apply()
+        }
+    }
+
     fun setOverscanned(v: Boolean) { _overscanned.value = v; prefs.edit().putBoolean(Prefs.OVERSCANNED, v).apply() }
     fun setRequirePin(v: Boolean) { _requirePin.value = v; prefs.edit().putBoolean(Prefs.REQUIRE_PIN, v).apply() }
     fun setAllowNewConn(v: Boolean) { _allowNewConn.value = v; prefs.edit().putBoolean(Prefs.ALLOW_NEW_CONN, v).apply() }
@@ -192,22 +230,6 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setAutoFullscreen(v: Boolean) { _autoFullscreen.value = v; prefs.edit().putBoolean(Prefs.AUTO_FULLSCREEN, v).apply() }
     fun setAutoAudioMode(v: Boolean) { _autoAudioMode.value = v; prefs.edit().putBoolean(Prefs.AUTO_AUDIO_MODE, v).apply() }
     fun setDebugEnabled(v: Boolean) { _debugEnabled.value = v; prefs.edit().putBoolean(Prefs.DEBUG_ENABLED, v).apply() }
-    
-    fun setQualityVariant(v: String) { 
-        _qualityVariant.value = v
-        prefs.edit().putString(Prefs.QUALITY_VARIANT, v).apply()
-        
-        val suggestedBitrate = when (v) {
-            "4k_60" -> 40
-            "1080p_60" -> 20
-            "1080p_30" -> 10
-            "720p_60" -> 10
-            "720p_30" -> 5
-            "540p_30" -> 2
-            else -> null
-        }
-        suggestedBitrate?.let { setBitrate(it) }
-    }
 
     // Service binding
     fun bindService(svc: AirPlayService) {

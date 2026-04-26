@@ -196,8 +196,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
         }
 
         videoRenderer.setResolution(w, h)
-        val targetBitrate = prefs.getInt(Prefs.BITRATE, Prefs.DEF_BITRATE)
-        videoRenderer.setStreamParameters(targetBitrate, fps)
+        videoRenderer.setStreamParameters(fps)
 
         _videoResolution.value = "${w}x${h}"
         _videoAspect.value = w.toFloat() / h
