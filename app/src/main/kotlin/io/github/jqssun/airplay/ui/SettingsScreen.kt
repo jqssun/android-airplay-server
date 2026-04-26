@@ -145,9 +145,14 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onValueChange = { viewModel.setQualityVariant(it) }
         )
 
-        SettingBitrate(
-            value = bitrate,
-            onValueChange = { viewModel.setBitrate(it) }
+        SettingChipField(
+            title = stringResource(R.string.setting_bitrate),
+            description = stringResource(R.string.setting_bitrate_desc),
+            value = bitrate.toString(),
+            presets = listOf("2" to "2 Mbps", "5" to "5 Mbps", "10" to "10 Mbps", "20" to "20 Mbps", "40" to "40 Mbps"),
+            placeholder = "Mbps",
+            keyboard = KeyboardType.Number,
+            onValueChange = { it.toIntOrNull()?.coerceIn(1, 150)?.let { v -> viewModel.setBitrate(v) } }
         )
 
         if (qualityVariant == "manual" || qualityVariant == "auto") {
@@ -371,29 +376,6 @@ private fun SettingResolution(
     )
 }
 
-@Composable
-private fun SettingBitrate(
-    value: Int,
-    onValueChange: (Int) -> Unit
-) {
-    var sliderVal by remember(value) { mutableFloatStateOf(value.toFloat()) }
-    ListItem(
-        headlineContent = { Text(stringResource(R.string.setting_bitrate)) },
-        supportingContent = {
-            Column {
-                Text(stringResource(R.string.setting_bitrate_desc))
-                Slider(
-                    value = sliderVal,
-                    onValueChange = { sliderVal = it },
-                    onValueChangeFinished = { onValueChange(sliderVal.roundToInt()) },
-                    valueRange = 1f..150f,
-                    steps = 148
-                )
-            }
-        },
-        trailingContent = { Text(stringResource(R.string.setting_bitrate_value, sliderVal.roundToInt())) }
-    )
-}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

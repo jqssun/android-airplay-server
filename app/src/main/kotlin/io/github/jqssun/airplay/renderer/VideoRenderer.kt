@@ -17,6 +17,12 @@ class VideoRenderer {
     private var videoHeight = 0
     private var targetFps = 60
 
+    // Frame pacing: maps NTP presentation timestamps to System.nanoTime() domain
+    // so SurfaceFlinger can schedule frames at the correct VSYNC boundary.
+    // Without this, frames render instantly when decoded → network jitter causes judder.
+    private var ptsBaseUs = Long.MIN_VALUE  // first PTS seen (microseconds)
+    private var wallBaseNs = 0L             // System.nanoTime() at that PTS
+
     // Cache last keyframe so decoder can bootstrap after late surface attach
     private var cachedKeyframe: ByteArray? = null
     private var cachedKeyframePts: Long = 0
@@ -161,6 +167,8 @@ class VideoRenderer {
 
     private fun stopCodec() {
         running = false
+        ptsBaseUs = Long.MIN_VALUE
+        wallBaseNs = 0L
         codec?.let {
             try {
                 it.stop()
@@ -176,7 +184,16 @@ class VideoRenderer {
         while (true) {
             val idx = c.dequeueOutputBuffer(info, 0)
             if (idx >= 0) {
-                c.releaseOutputBuffer(idx, true) // render to surface immediately
+                // Timestamp-based frame pacing: map the NTP presentation timestamp
+                // to the System.nanoTime() domain so SurfaceFlinger can schedule
+                // each frame at the correct VSYNC boundary, eliminating judder.
+                val ptsUs = info.presentationTimeUs
+                if (ptsBaseUs == Long.MIN_VALUE) {
+                    ptsBaseUs = ptsUs
+                    wallBaseNs = System.nanoTime()
+                }
+                val renderNs = wallBaseNs + (ptsUs - ptsBaseUs) * 1000L
+                c.releaseOutputBuffer(idx, renderNs)
             } else {
                 break
             }
