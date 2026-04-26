@@ -129,6 +129,7 @@ class VideoRenderer {
         
         // Phase 3 Improvements: Maximum operational rate instead of buggy low-latency mode.
         // Moonlight relies heavily on this to prevent reference frame corruption on Android TV.
+        format.setInteger(MediaFormat.KEY_PRIORITY, 0) // Real-time
         if (android.os.Build.VERSION.SDK_INT >= 23) {
             format.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE.toInt())
         }
