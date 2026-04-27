@@ -7,10 +7,16 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -184,6 +190,7 @@ fun MainScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun OverviewContent(
     viewModel: MainViewModel,
@@ -244,18 +251,60 @@ private fun OverviewContent(
                     }
                 }
                 if (state == ServerState.RUNNING && connections > 0) {
-                    Row(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
-                        IconButton(onClick = onPip) {
-                            Icon(
-                                painterResource(R.drawable.ic_pip), contentDescription = stringResource(R.string.cd_pip),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    var showControls by remember { mutableStateOf(true) }
+                    var lastInteraction by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+                    LaunchedEffect(lastInteraction) {
+                        delay(5000)
+                        showControls = false
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .combinedClickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {
+                                    showControls = true
+                                    lastInteraction = System.currentTimeMillis()
+                                }
                             )
-                        }
-                        IconButton(onClick = onFullscreen) {
-                            Icon(
-                                Icons.Default.Fullscreen, contentDescription = stringResource(R.string.cd_fullscreen),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                            )
+                            .onKeyEvent {
+                                showControls = true
+                                lastInteraction = System.currentTimeMillis()
+                                false
+                            }
+                            .pointerInput(Unit) {
+                                awaitPointerEventScope {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        showControls = true
+                                        lastInteraction = System.currentTimeMillis()
+                                    }
+                                }
+                            }
+                    ) {
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = showControls,
+                            enter = androidx.compose.animation.fadeIn(),
+                            exit = androidx.compose.animation.fadeOut(),
+                            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)
+                        ) {
+                            Row {
+                                IconButton(onClick = onPip) {
+                                    Icon(
+                                        painterResource(R.drawable.ic_pip), contentDescription = stringResource(R.string.cd_pip),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                    )
+                                }
+                                IconButton(onClick = onFullscreen) {
+                                    Icon(
+                                        Icons.Default.Fullscreen, contentDescription = stringResource(R.string.cd_fullscreen),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -343,6 +392,7 @@ private fun OverviewContent(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FullscreenVideo(
     viewModel: MainViewModel,
@@ -356,8 +406,40 @@ private fun FullscreenVideo(
     val debugEnabled by viewModel.debugEnabled.collectAsState()
     val debugInfo by viewModel.debugInfo.collectAsState()
 
+    var showControls by remember { mutableStateOf(true) }
+    var lastInteraction by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(lastInteraction) {
+        delay(5000)
+        showControls = false
+    }
+
     Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .combinedClickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {
+                    showControls = true
+                    lastInteraction = System.currentTimeMillis()
+                }
+            )
+            .onKeyEvent {
+                showControls = true
+                lastInteraction = System.currentTimeMillis()
+                false
+            }
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        showControls = true
+                        lastInteraction = System.currentTimeMillis()
+                    }
+                }
+            },
         contentAlignment = Alignment.Center
     ) {
         MirroringView(
@@ -365,18 +447,25 @@ private fun FullscreenVideo(
             onSurfaceDestroyed = onSurfaceDestroyed,
             aspectRatio = aspectRatio
         )
-        Row(modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-            IconButton(onClick = onPip) {
-                Icon(
-                    painterResource(R.drawable.ic_pip), contentDescription = stringResource(R.string.cd_pip),
-                    tint = Color.White.copy(alpha = 0.7f)
-                )
-            }
-            IconButton(onClick = onExitFullscreen) {
-                Icon(
-                    Icons.Default.FullscreenExit, contentDescription = stringResource(R.string.cd_exit_fullscreen),
-                    tint = Color.White.copy(alpha = 0.7f)
-                )
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showControls,
+            enter = androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.fadeOut(),
+            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)
+        ) {
+            Row {
+                IconButton(onClick = onPip) {
+                    Icon(
+                        painterResource(R.drawable.ic_pip), contentDescription = stringResource(R.string.cd_pip),
+                        tint = Color.White.copy(alpha = 0.7f)
+                    )
+                }
+                IconButton(onClick = onExitFullscreen) {
+                    Icon(
+                        Icons.Default.FullscreenExit, contentDescription = stringResource(R.string.cd_exit_fullscreen),
+                        tint = Color.White.copy(alpha = 0.7f)
+                    )
+                }
             }
         }
         if (debugEnabled) {
