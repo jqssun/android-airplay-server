@@ -132,7 +132,14 @@ class AirPlayService : Service(), RaopCallbackHandler {
         ContextCompat.registerReceiver(this, mediaReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_AUTO_START && _serverState.value != ServerState.RUNNING) {
+            val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+            val name = prefs.getString(Prefs.SERVER_NAME, Prefs.DEF_SERVER_NAME) ?: Prefs.DEF_SERVER_NAME
+            startServer(name)
+        }
+        return START_NOT_STICKY
+    }
 
     fun startServer(name: String) {
         if (_serverState.value == ServerState.RUNNING) return
@@ -521,5 +528,6 @@ class AirPlayService : Service(), RaopCallbackHandler {
         const val ACTION_PLAY_PAUSE = "io.github.jqssun.airplay.PLAY_PAUSE"
         const val ACTION_NEXT = "io.github.jqssun.airplay.NEXT"
         const val ACTION_PREV = "io.github.jqssun.airplay.PREV"
+        const val ACTION_AUTO_START = "io.github.jqssun.airplay.AUTO_START"
     }
 }
