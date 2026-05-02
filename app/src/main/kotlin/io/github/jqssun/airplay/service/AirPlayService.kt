@@ -5,39 +5,40 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.BitmapFactory
-import android.net.wifi.WifiManager
 import android.os.Binder
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
-import androidx.core.app.NotificationCompat
-import androidx.media.app.NotificationCompat as MediaNotificationCompat
-import androidx.core.content.ContextCompat
 import android.util.Log
 import android.view.Surface
-import android.content.BroadcastReceiver
-import android.content.IntentFilter
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import androidx.media.app.NotificationCompat as MediaNotificationCompat
 import io.github.jqssun.airplay.MainActivity
 import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.audio.DacpController
 import io.github.jqssun.airplay.audio.DmapParser
 import io.github.jqssun.airplay.audio.TrackInfo
-import io.github.jqssun.airplay.viewmodel.DebugInfo
 import io.github.jqssun.airplay.bridge.NativeBridge
 import io.github.jqssun.airplay.bridge.RaopCallbackHandler
 import io.github.jqssun.airplay.discovery.NsdServiceManager
 import io.github.jqssun.airplay.renderer.AudioRenderer
 import io.github.jqssun.airplay.renderer.VideoRenderer
+import io.github.jqssun.airplay.viewmodel.DebugInfo
+import java.net.NetworkInterface
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.net.NetworkInterface
 
 class AirPlayService : Service(), RaopCallbackHandler {
 
@@ -84,13 +85,20 @@ class AirPlayService : Service(), RaopCallbackHandler {
         return (_progressBaseMs + elapsed).coerceIn(0, _durationMs.value)
     }
 
-    var dacpController: DacpController? = null; private set
+    var dacpController: DacpController? = null
+        private set
     private var mediaSession: MediaSessionCompat? = null
     private var mediaReceiver: BroadcastReceiver? = null
 
     var logCallback: ((String) -> Unit)? = null
-    var pinCallback: ((String?) -> Unit)? = null
     var modeCallback: ((Boolean) -> Unit)? = null
+
+    @Volatile private var _lastPin: String? = null
+    var pinCallback: ((String?) -> Unit)? = null
+        set(value) {
+            field = value
+            value?.invoke(_lastPin)
+        }
 
     private fun log(msg: String) {
         Log.i(TAG, msg)
@@ -98,7 +106,8 @@ class AirPlayService : Service(), RaopCallbackHandler {
     }
 
     inner class LocalBinder : Binder() {
-        val service: AirPlayService get() = this@AirPlayService
+        val service: AirPlayService
+            get() = this@AirPlayService
     }
 
     override fun onBind(intent: Intent?): IBinder = LocalBinder()
@@ -107,29 +116,49 @@ class AirPlayService : Service(), RaopCallbackHandler {
         super.onCreate()
         createNotificationChannel()
         dacpController = DacpController(this)
-        mediaSession = MediaSessionCompat(this, "AirPlay").apply {
-            setCallback(object : MediaSessionCompat.Callback() {
-                override fun onPlay() { _setPlaying(true); dacpController?.play() }
-                override fun onPause() { _setPlaying(false); dacpController?.pause() }
-                override fun onSkipToNext() { dacpController?.nextItem() }
-                override fun onSkipToPrevious() { dacpController?.prevItem() }
-            })
-        }
-        mediaReceiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context, intent: Intent) {
-                when (intent.action) {
-                    ACTION_PLAY_PAUSE -> togglePlayPause()
-                    ACTION_NEXT -> dacpController?.nextItem()
-                    ACTION_PREV -> dacpController?.prevItem()
+        mediaSession =
+                MediaSessionCompat(this, "AirPlay").apply {
+                    setCallback(
+                            object : MediaSessionCompat.Callback() {
+                                override fun onPlay() {
+                                    _setPlaying(true)
+                                    dacpController?.play()
+                                }
+                                override fun onPause() {
+                                    _setPlaying(false)
+                                    dacpController?.pause()
+                                }
+                                override fun onSkipToNext() {
+                                    dacpController?.nextItem()
+                                }
+                                override fun onSkipToPrevious() {
+                                    dacpController?.prevItem()
+                                }
+                            }
+                    )
                 }
-            }
-        }
-        val filter = IntentFilter().apply {
-            addAction(ACTION_PLAY_PAUSE)
-            addAction(ACTION_NEXT)
-            addAction(ACTION_PREV)
-        }
-        ContextCompat.registerReceiver(this, mediaReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        mediaReceiver =
+                object : BroadcastReceiver() {
+                    override fun onReceive(ctx: Context, intent: Intent) {
+                        when (intent.action) {
+                            ACTION_PLAY_PAUSE -> togglePlayPause()
+                            ACTION_NEXT -> dacpController?.nextItem()
+                            ACTION_PREV -> dacpController?.prevItem()
+                        }
+                    }
+                }
+        val filter =
+                IntentFilter().apply {
+                    addAction(ACTION_PLAY_PAUSE)
+                    addAction(ACTION_NEXT)
+                    addAction(ACTION_PREV)
+                }
+        ContextCompat.registerReceiver(
+                this,
+                mediaReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+        )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
@@ -140,7 +169,8 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
         val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "airplay:server").apply { acquire() }
+        wakeLock =
+                pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "airplay:server").apply { acquire() }
 
         nsdManager = NsdServiceManager(this).apply { acquireMulticastLock() }
 
@@ -164,29 +194,36 @@ class AirPlayService : Service(), RaopCallbackHandler {
         val alac = prefs.getBoolean(Prefs.ALAC_ENABLED, Prefs.DEF_ALAC_ENABLED)
         val aac = prefs.getBoolean(Prefs.AAC_ENABLED, Prefs.DEF_AAC_ENABLED)
 
-        audioRenderer.swAlacEnabled = prefs.getBoolean(Prefs.SW_ALAC_ENABLED, Prefs.DEF_SW_ALAC_ENABLED)
+        audioRenderer.swAlacEnabled =
+                prefs.getBoolean(Prefs.SW_ALAC_ENABLED, Prefs.DEF_SW_ALAC_ENABLED)
         NativeBridge.nativeSetH265Enabled(nativeHandle, h265)
         NativeBridge.nativeSetCodecs(nativeHandle, alac, aac)
         NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", maxFps)
         NativeBridge.nativeSetPlist(nativeHandle, "overscanned", if (overscanned) 1 else 0)
-        if (audioLatencyMs >= 0) NativeBridge.nativeSetPlist(nativeHandle, "audio_delay_micros", audioLatencyMs * 1000)
+        if (audioLatencyMs >= 0)
+                NativeBridge.nativeSetPlist(
+                        nativeHandle,
+                        "audio_delay_micros",
+                        audioLatencyMs * 1000
+                )
 
         // Set display params
         val dm = resources.displayMetrics
         val res = prefs.getString(Prefs.RESOLUTION, Prefs.DEF_RESOLUTION)!!
-        val (w, h) = if (res != "auto" && res.contains("x")) {
-            val parts = res.split("x")
-            parts[0].toInt() to parts[1].toInt()
-        } else {
-            dm.widthPixels to dm.heightPixels
-        }
+        val (w, h) =
+                if (res != "auto" && res.contains("x")) {
+                    val parts = res.split("x")
+                    parts[0].toInt() to parts[1].toInt()
+                } else {
+                    dm.widthPixels to dm.heightPixels
+                }
         videoRenderer.setResolution(w, h)
         _videoResolution.value = "${w}x${h}"
         _videoAspect.value = w.toFloat() / h
         NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, maxFps)
 
-        val requestedPort = prefs.getInt(Prefs.SERVER_PORT, Prefs.DEF_SERVER_PORT)
-            .coerceIn(1, 65535)
+        val requestedPort =
+                prefs.getInt(Prefs.SERVER_PORT, Prefs.DEF_SERVER_PORT).coerceIn(1, 65535)
         val port = NativeBridge.nativeStart(nativeHandle, requestedPort)
         if (port < 0) {
             log("Failed to start on port $requestedPort")
@@ -252,7 +289,11 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
     override fun onDestroy() {
         stopServer()
-        mediaReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
+        mediaReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (_: Exception) {}
+        }
         mediaReceiver = null
         dacpController?.release()
         dacpController = null
@@ -295,11 +336,21 @@ class AirPlayService : Service(), RaopCallbackHandler {
     }
 
     override fun onConnectionInit() {
+        val firstConnection = _connectionCount.value == 0
         _connectionCount.value++
         log("Client connected (${_connectionCount.value})")
-        val launchIntent = Intent(this, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-        try { startActivity(launchIntent) } catch (e: Exception) { Log.w(TAG, "UI launch failed", e) }
+        if (!firstConnection) return
+        val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+        if (!prefs.getBoolean(Prefs.LAUNCH_ON_CONNECT, Prefs.DEF_LAUNCH_ON_CONNECT)) return
+        Handler(Looper.getMainLooper()).post {
+            val launchIntent =
+                    Intent(this, MainActivity::class.java)
+                            .addFlags(
+                                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+                            )
+            startActivity(launchIntent)
+        }
     }
 
     override fun onConnectionDestroy() {
@@ -319,6 +370,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
     }
 
     override fun onDisplayPin(pin: String) {
+        _lastPin = pin
         pinCallback?.invoke(pin)
     }
 
@@ -373,14 +425,13 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
     private fun _updateMediaMetadata() {
         val info = _trackInfo.value
-        val builder = MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, info.title)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, info.artist)
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, info.album)
-            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, _durationMs.value)
-        info.coverArt?.let {
-            builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it)
-        }
+        val builder =
+                MediaMetadataCompat.Builder()
+                        .putString(MediaMetadataCompat.METADATA_KEY_TITLE, info.title)
+                        .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, info.artist)
+                        .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, info.album)
+                        .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, _durationMs.value)
+        info.coverArt?.let { builder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it) }
         mediaSession?.setMetadata(builder.build())
         _updateMediaNotification()
     }
@@ -407,36 +458,41 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
     private fun _updatePlaybackState() {
         val isPlaying = _playing.value
-        val pbState = if (isPlaying) PlaybackStateCompat.STATE_PLAYING
-                      else PlaybackStateCompat.STATE_PAUSED
+        val pbState =
+                if (isPlaying) PlaybackStateCompat.STATE_PLAYING
+                else PlaybackStateCompat.STATE_PAUSED
         val speed = if (isPlaying) 1f else 0f
-        val state = PlaybackStateCompat.Builder()
-            .setActions(
-                PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or
-                PlaybackStateCompat.ACTION_PLAY_PAUSE or
-                PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
-                PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
-            )
-            .setState(pbState, _positionMs.value, speed, SystemClock.elapsedRealtime())
-            .build()
+        val state =
+                PlaybackStateCompat.Builder()
+                        .setActions(
+                                PlaybackStateCompat.ACTION_PLAY or
+                                        PlaybackStateCompat.ACTION_PAUSE or
+                                        PlaybackStateCompat.ACTION_PLAY_PAUSE or
+                                        PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+                                        PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+                        )
+                        .setState(pbState, _positionMs.value, speed, SystemClock.elapsedRealtime())
+                        .build()
         mediaSession?.setPlaybackState(state)
         _updateMediaNotification()
     }
 
     private fun clearPin() {
+        _lastPin = null
         pinCallback?.invoke(null)
     }
 
-    fun collectDebugInfo() = DebugInfo(
-        videoCodec = videoRenderer.codecName,
-        videoRes = _videoResolution.value,
-        videoFps = videoRenderer.fps,
-        videoBitrate = videoRenderer.bitrateBps,
-        videoFrames = videoRenderer.frameCount,
-        audioCodec = audioRenderer.codecLabel,
-        audioVolume = (audioRenderer.volume * 100).toInt(),
-        connections = _connectionCount.value,
-    )
+    fun collectDebugInfo() =
+            DebugInfo(
+                    videoCodec = videoRenderer.codecName,
+                    videoRes = _videoResolution.value,
+                    videoFps = videoRenderer.fps,
+                    videoBitrate = videoRenderer.bitrateBps,
+                    videoFrames = videoRenderer.frameCount,
+                    audioCodec = audioRenderer.codecLabel,
+                    audioVolume = (audioRenderer.volume * 100).toInt(),
+                    connections = _connectionCount.value,
+            )
 
     // Helpers
 
@@ -452,14 +508,27 @@ class AirPlayService : Service(), RaopCallbackHandler {
         } catch (e: Exception) {
             Log.w(TAG, "Failed to get hardware address", e)
         }
-        // Fallback: random-ish address
-        return byteArrayOf(0xAA.toByte(), 0xBB.toByte(), 0xCC.toByte(), 0xDD.toByte(), 0xEE.toByte(), 0xFF.toByte())
+        // fallback: random-ish address
+        return byteArrayOf(
+                0xAA.toByte(),
+                0xBB.toByte(),
+                0xCC.toByte(),
+                0xDD.toByte(),
+                0xEE.toByte(),
+                0xFF.toByte()
+        )
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(CHANNEL_ID, getString(R.string.notification_channel),
-            NotificationManager.IMPORTANCE_LOW)
-        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
+        val channel =
+                NotificationChannel(
+                        CHANNEL_ID,
+                        getString(R.string.notification_channel),
+                        NotificationManager.IMPORTANCE_LOW
+                )
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(
+                channel
+        )
     }
 
     private fun buildNotification(): Notification {
@@ -472,41 +541,53 @@ class AirPlayService : Service(), RaopCallbackHandler {
         val info = _trackInfo.value
         val isAudio = _audioOnly.value && info.title.isNotEmpty()
 
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentIntent(pi)
-            .setOngoing(true)
+        val builder =
+                NotificationCompat.Builder(this, CHANNEL_ID)
+                        .setSmallIcon(android.R.drawable.ic_media_play)
+                        .setContentIntent(pi)
+                        .setOngoing(true)
 
         if (isAudio) {
-            builder.setContentTitle(info.title)
-                .setContentText(info.artist)
-                .setSubText(info.album)
+            builder.setContentTitle(info.title).setContentText(info.artist).setSubText(info.album)
             info.coverArt?.let { builder.setLargeIcon(it) }
             mediaSession?.sessionToken?.let { token ->
                 builder.setStyle(
-                    MediaNotificationCompat.MediaStyle()
-                        .setMediaSession(token)
-                        .setShowActionsInCompactView(0, 1, 2)
+                        MediaNotificationCompat.MediaStyle()
+                                .setMediaSession(token)
+                                .setShowActionsInCompactView(0, 1, 2)
                 )
                 // Transport action buttons
-                builder.addAction(android.R.drawable.ic_media_previous, "Prev",
-                    _mediaAction(ACTION_PREV))
-                builder.addAction(android.R.drawable.ic_media_pause, "Pause",
-                    _mediaAction(ACTION_PLAY_PAUSE))
-                builder.addAction(android.R.drawable.ic_media_next, "Next",
-                    _mediaAction(ACTION_NEXT))
+                builder.addAction(
+                        android.R.drawable.ic_media_previous,
+                        "Prev",
+                        _mediaAction(ACTION_PREV)
+                )
+                builder.addAction(
+                        android.R.drawable.ic_media_pause,
+                        "Pause",
+                        _mediaAction(ACTION_PLAY_PAUSE)
+                )
+                builder.addAction(
+                        android.R.drawable.ic_media_next,
+                        "Next",
+                        _mediaAction(ACTION_NEXT)
+                )
             }
         } else {
             builder.setContentTitle(getString(R.string.notification_title))
-                .setContentText(getString(R.string.notification_text))
+                    .setContentText(getString(R.string.notification_text))
         }
         return builder.build()
     }
 
     private fun _mediaAction(action: String): PendingIntent {
         val intent = Intent(action).setPackage(packageName)
-        return PendingIntent.getBroadcast(this, action.hashCode(), intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        return PendingIntent.getBroadcast(
+                this,
+                action.hashCode(),
+                intent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
     }
 
     private fun _updateMediaNotification() {
@@ -515,7 +596,11 @@ class AirPlayService : Service(), RaopCallbackHandler {
         nm.notify(NOTIFICATION_ID, _buildMediaNotification())
     }
 
-    enum class ServerState { STOPPED, RUNNING, ERROR }
+    enum class ServerState {
+        STOPPED,
+        RUNNING,
+        ERROR
+    }
 
     companion object {
         private const val TAG = "AirPlayService"

@@ -73,6 +73,9 @@
     <string name="setting_auto_fullscreen_desc">Enter fullscreen when a client connects</string>
     <string name="setting_auto_audio_mode">Enter audio mode automatically</string>
     <string name="setting_auto_audio_mode_desc">Skip the prompt when switching to audio mode</string>
+    <string name="setting_launch_on_connect">Open this application on connect</string>
+    <string name="setting_launch_on_connect_desc">Show the screen when a client connects</string>
+    <string name="setting_launch_on_connect_no_permission">Tap to grant Display over other apps permission</string>
     <string name="setting_resolution">Resolution</string>
     <string name="setting_resolution_desc">Video resolution advertised to clients</string>
     <string name="setting_resolution_placeholder">[W]x[H]</string>

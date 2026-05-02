@@ -1,5 +1,11 @@
 package io.github.jqssun.airplay.ui
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
@@ -9,10 +15,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 import androidx.compose.ui.res.stringResource
@@ -28,6 +38,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val idlePreview by viewModel.idlePreview.collectAsState()
     val autoFullscreen by viewModel.autoFullscreen.collectAsState()
     val autoAudioMode by viewModel.autoAudioMode.collectAsState()
+    val launchOnConnect by viewModel.launchOnConnect.collectAsState()
     val maxFps by viewModel.maxFps.collectAsState()
     val overscanned by viewModel.overscanned.collectAsState()
     val requirePin by viewModel.requirePin.collectAsState()
@@ -138,6 +149,39 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onCheckedChange = { viewModel.setAutoAudioMode(it) }
         )
 
+        val ctx = LocalContext.current
+        val lifecycleOwner = LocalLifecycleOwner.current
+        var hasOverlayPermission by remember { mutableStateOf(canAutoLaunch(ctx)) }
+        DisposableEffect(lifecycleOwner) {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) hasOverlayPermission = canAutoLaunch(ctx)
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        }
+        val needsOverlayPermission = launchOnConnect && !hasOverlayPermission
+        ListItem(
+            modifier = if (needsOverlayPermission) {
+                Modifier.clickable { ctx.startActivity(_overlayIntent(ctx)) }
+            } else Modifier,
+            headlineContent = { Text(stringResource(R.string.setting_launch_on_connect)) },
+            supportingContent = {
+                Text(stringResource(
+                    if (needsOverlayPermission) R.string.setting_launch_on_connect_no_permission
+                    else R.string.setting_launch_on_connect_desc
+                ))
+            },
+            trailingContent = {
+                Switch(
+                    checked = launchOnConnect,
+                    onCheckedChange = {
+                        viewModel.setLaunchOnConnect(it)
+                        if (it && !canAutoLaunch(ctx)) ctx.startActivity(_overlayIntent(ctx))
+                    }
+                )
+            }
+        )
+
         SettingResolution(
             value = resolution,
             onValueChange = { viewModel.setResolution(it) }
@@ -225,6 +269,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
         )
     }
 }
+
+private fun canAutoLaunch(ctx: Context): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || Settings.canDrawOverlays(ctx)
+
+private fun _overlayIntent(ctx: Context): Intent =
+    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${ctx.packageName}"))
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
 @Composable
 private fun SectionHeader(title: String) {

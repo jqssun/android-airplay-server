@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -59,9 +60,9 @@ fun MainScreen(
         if (audioOnly && !autoAudioMode) showModePrompt = true
     }
 
-    // Auto fullscreen when client connects (non-audio)
-    LaunchedEffect(connections, audioOnly) {
-        if (connections > 0 && !audioOnly && autoFullscreen && !fullscreen) {
+    // Auto fullscreen when client connects (non-audio), but never while a PIN is pending.
+    LaunchedEffect(connections, audioOnly, pin) {
+        if (connections > 0 && !audioOnly && autoFullscreen && !fullscreen && pin == null) {
             fullscreen = true
         }
     }
@@ -101,6 +102,11 @@ fun MainScreen(
         }
     }
 
+    // Exit fullscreen while a PIN is being shown so the dialog isn't covered.
+    LaunchedEffect(pin) {
+        if (pin != null) fullscreen = false
+    }
+
     if (fullscreen) {
         BackHandler { fullscreen = false }
         FullscreenVideo(
@@ -111,43 +117,42 @@ fun MainScreen(
             onExitFullscreen = { fullscreen = false },
             onPip = onPip
         )
-        return
-    }
-
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    selected = tab == Tab.OVERVIEW,
-                    onClick = { tab = Tab.OVERVIEW },
-                    icon = { Icon(Icons.Default.Cast, null) },
-                    label = { Text(stringResource(Tab.OVERVIEW.labelRes)) }
-                )
-                NavigationBarItem(
-                    selected = tab == Tab.LOGS,
-                    onClick = { tab = Tab.LOGS },
-                    icon = { Icon(Icons.Default.Article, null) },
-                    label = { Text(stringResource(Tab.LOGS.labelRes)) }
-                )
-                NavigationBarItem(
-                    selected = tab == Tab.SETTINGS,
-                    onClick = { tab = Tab.SETTINGS },
-                    icon = { Icon(Icons.Default.Settings, null) },
-                    label = { Text(stringResource(Tab.SETTINGS.labelRes)) }
-                )
+    } else {
+        Scaffold(
+            bottomBar = {
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = tab == Tab.OVERVIEW,
+                        onClick = { tab = Tab.OVERVIEW },
+                        icon = { Icon(Icons.Default.Cast, null) },
+                        label = { Text(stringResource(Tab.OVERVIEW.labelRes)) }
+                    )
+                    NavigationBarItem(
+                        selected = tab == Tab.LOGS,
+                        onClick = { tab = Tab.LOGS },
+                        icon = { Icon(Icons.AutoMirrored.Filled.Article, null) },
+                        label = { Text(stringResource(Tab.LOGS.labelRes)) }
+                    )
+                    NavigationBarItem(
+                        selected = tab == Tab.SETTINGS,
+                        onClick = { tab = Tab.SETTINGS },
+                        icon = { Icon(Icons.Default.Settings, null) },
+                        label = { Text(stringResource(Tab.SETTINGS.labelRes)) }
+                    )
+                }
             }
-        }
-    ) { padding ->
-        Box(modifier = Modifier.padding(padding)) {
-            when (tab) {
-                Tab.OVERVIEW -> OverviewContent(
-                    viewModel, onSurfaceAvailable, onSurfaceDestroyed,
-                    onFullscreen = { fullscreen = true },
-                    onPip = onPip,
-                    showAudioMode = audioOnly
-                )
-                Tab.LOGS -> LogsScreen(viewModel)
-                Tab.SETTINGS -> SettingsScreen(viewModel)
+        ) { padding ->
+            Box(modifier = Modifier.padding(padding)) {
+                when (tab) {
+                    Tab.OVERVIEW -> OverviewContent(
+                        viewModel, onSurfaceAvailable, onSurfaceDestroyed,
+                        onFullscreen = { fullscreen = true },
+                        onPip = onPip,
+                        showAudioMode = audioOnly
+                    )
+                    Tab.LOGS -> LogsScreen(viewModel)
+                    Tab.SETTINGS -> SettingsScreen(viewModel)
+                }
             }
         }
     }
