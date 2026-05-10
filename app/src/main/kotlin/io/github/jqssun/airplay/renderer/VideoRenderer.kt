@@ -37,6 +37,14 @@ class VideoRenderer {
     private var _bytesThisSec = 0L
     private var _lastStatReset = 0L
 
+    // Benchmark telemetry: frame pacing jitter + dropped frames
+    @Volatile var framePacingJitterUs = 0L; private set  // std-dev of inter-frame intervals
+    @Volatile var droppedFrames = 0L; private set
+    private val _frameTimes = LongArray(120)  // circular buffer for inter-frame intervals (ns)
+    private var _frameTimeIdx = 0
+    private var _frameTimeCount = 0
+    private var _lastFrameNs = 0L
+
     fun setResolution(w: Int, h: Int) {
         videoWidth = w
         videoHeight = h
@@ -57,6 +65,28 @@ class VideoRenderer {
         if (now - _lastStatReset >= 1000) {
             fps = _framesThisSec
             bitrateBps = _bytesThisSec * 8
+
+            // Compute frame pacing jitter (std-dev of inter-frame intervals)
+            val n = _frameTimeCount.coerceAtMost(_frameTimes.size)
+            if (n > 1) {
+                var sum = 0.0
+                var sumSq = 0.0
+                for (i in 0 until n) {
+                    val v = _frameTimes[i].toDouble()
+                    sum += v
+                    sumSq += v * v
+                }
+                val mean = sum / n
+                val variance = (sumSq / n) - (mean * mean)
+                framePacingJitterUs = (kotlin.math.sqrt(variance.coerceAtLeast(0.0)) / 1000.0).toLong()
+            }
+
+            // Structured logcat line for benchmark script scraping
+            Log.i(BENCH_TAG, "fps=$fps bitrate=${bitrateBps/1000}kbps " +
+                "jitter=${framePacingJitterUs}us frames=$frameCount " +
+                "dropped=$droppedFrames codec=$codecName " +
+                "res=${videoWidth}x${videoHeight}")
+
             _framesThisSec = 0
             _bytesThisSec = 0
             _lastStatReset = now
@@ -107,7 +137,8 @@ class VideoRenderer {
             buf.put(data)
             c.queueInputBuffer(idx, 0, data.size, ntpTimeNs / 1000, 0)
         } else {
-            Log.w(TAG, "Decoder input queue full after 500ms timeout! Dropping frame.")
+            droppedFrames++
+            Log.w(TAG, "Decoder input queue full after 500ms timeout! Dropping frame. (total=$droppedFrames)")
         }
     }
 
@@ -184,6 +215,17 @@ class VideoRenderer {
         while (true) {
             val idx = c.dequeueOutputBuffer(info, 0)
             if (idx >= 0) {
+                val now = System.nanoTime()
+
+                // Track inter-frame timing for jitter measurement
+                if (_lastFrameNs > 0) {
+                    val delta = now - _lastFrameNs
+                    _frameTimes[_frameTimeIdx % _frameTimes.size] = delta
+                    _frameTimeIdx++
+                    _frameTimeCount++
+                }
+                _lastFrameNs = now
+
                 // Timestamp-based frame pacing: map the NTP presentation timestamp
                 // to the System.nanoTime() domain so SurfaceFlinger can schedule
                 // each frame at the correct VSYNC boundary, eliminating judder.
@@ -204,11 +246,14 @@ class VideoRenderer {
         stopCodec()
         cachedKeyframe = null
         fps = 0; bitrateBps = 0; frameCount = 0; codecName = ""
+        framePacingJitterUs = 0; droppedFrames = 0
         _framesThisSec = 0; _bytesThisSec = 0
+        _frameTimeIdx = 0; _frameTimeCount = 0; _lastFrameNs = 0
     }
 
     companion object {
         private const val TAG = "VideoRenderer"
+        private const val BENCH_TAG = "BENCHMARK"
 
         fun supportsH265(): Boolean {
             val list = MediaCodecList(MediaCodecList.ALL_CODECS)

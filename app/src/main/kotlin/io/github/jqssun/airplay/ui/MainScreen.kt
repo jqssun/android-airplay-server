@@ -626,7 +626,8 @@ private fun DebugOverlay(info: DebugInfo, modifier: Modifier = Modifier) {
         if (info.videoCodec.isNotEmpty()) {
             Text("Video: ${info.videoCodec} ${info.videoRes}", style = style, color = color)
             Text("FPS: ${info.videoFps}  Bitrate: ${info.bitrateStr}", style = style, color = color)
-            Text("Frames: ${info.videoFrames}", style = style, color = color)
+            Text("Frames: ${info.videoFrames}  Drops: ${info.droppedFrames}", style = style, color = color)
+            Text("Jitter: ${info.jitterStr}", style = style, color = color)
         }
         if (info.audioCodec.isNotEmpty()) {
             Text("Audio: ${info.audioCodec}  Vol: ${info.audioVolume}%", style = style, color = color)

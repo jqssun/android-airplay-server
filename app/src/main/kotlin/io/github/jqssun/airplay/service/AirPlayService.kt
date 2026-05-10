@@ -447,6 +447,8 @@ class AirPlayService : Service(), RaopCallbackHandler {
         videoFps = videoRenderer.fps,
         videoBitrate = videoRenderer.bitrateBps,
         videoFrames = videoRenderer.frameCount,
+        framePacingJitterUs = videoRenderer.framePacingJitterUs,
+        droppedFrames = videoRenderer.droppedFrames,
         audioCodec = audioRenderer.codecLabel,
         audioVolume = (audioRenderer.volume * 100).toInt(),
         connections = _connectionCount.value,

@@ -26,6 +26,8 @@ data class DebugInfo(
     val videoFps: Int = 0,
     val videoBitrate: Long = 0,
     val videoFrames: Long = 0,
+    val framePacingJitterUs: Long = 0,
+    val droppedFrames: Long = 0,
     val audioCodec: String = "",
     val audioVolume: Int = 100,
     val connections: Int = 0,
@@ -33,6 +35,9 @@ data class DebugInfo(
     val bitrateStr: String get() {
         val kbps = videoBitrate / 1000
         return if (kbps >= 1000) "${"%.1f".format(kbps / 1000.0)} Mbps" else "$kbps Kbps"
+    }
+    val jitterStr: String get() {
+        return if (framePacingJitterUs >= 1000) "${"%.1f".format(framePacingJitterUs / 1000.0)}ms" else "${framePacingJitterUs}μs"
     }
 }
 

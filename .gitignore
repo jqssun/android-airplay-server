@@ -9,4 +9,4 @@
 .externalNativeBuild/
 .cxx/
 
-*.jks
+*.jksbenchmark-results/
