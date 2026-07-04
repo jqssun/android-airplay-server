@@ -1,6 +1,7 @@
 package io.github.jqssun.airplay.ui
 
 import android.app.Activity
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
@@ -86,6 +87,18 @@ fun MainScreen(
     }
 
     val activity = LocalContext.current as? Activity
+
+    // keep the display awake (and the screensaver/daydream away) while a video
+    // client is mirroring; released when no video session is active
+    LaunchedEffect(connections, audioOnly) {
+        val window = activity?.window ?: return@LaunchedEffect
+        if (connections > 0) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
     LaunchedEffect(fullscreen) {
         val window = activity?.window ?: return@LaunchedEffect
         val controller = WindowInsetsControllerCompat(window, window.decorView)
