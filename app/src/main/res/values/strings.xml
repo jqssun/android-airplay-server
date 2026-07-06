@@ -44,6 +44,7 @@
     <!-- Logs screen -->
     <string name="btn_export">Export</string>
     <string name="btn_clear">Clear</string>
+    <string name="export_logs_chooser_title">Export logs</string>
 
     <!-- Settings sections -->
     <string name="section_server">Server</string>
@@ -127,4 +128,12 @@
     <string name="setting_debug_overlay_desc">Overlay stream stats on video: codec, FPS, bitrate, jitter, frames, drops</string>
     <string name="setting_benchmark_log">Enable debug logging</string>
     <string name="setting_benchmark_log_desc">Log stream stats to logcat: codec, FPS, bitrate, jitter, frames, drops</string>
+
+    <!-- Debug overlay -->
+    <string name="debug_video">Video: %1$s %2$s</string>
+    <string name="debug_fps_bitrate">FPS: %1$d  Bitrate: %2$s</string>
+    <string name="debug_frames_drops">Frames: %1$d  Drops: %2$d</string>
+    <string name="debug_jitter">Jitter: %1$s</string>
+    <string name="debug_audio">Audio: %1$s  Vol: %2$d%%</string>
+    <string name="debug_clients">Clients: %1$d</string>
 </resources>

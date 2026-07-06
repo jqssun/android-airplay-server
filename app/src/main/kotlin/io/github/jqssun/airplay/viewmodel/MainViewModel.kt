@@ -160,6 +160,10 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _audioOnly = MutableStateFlow(false)
     val audioOnly: StateFlow<Boolean> = _audioOnly.asStateFlow()
 
+    // AirPlay Video (HLS) playback mode, distinct from screen mirroring / audio-only
+    private val _videoPlaybackActive = MutableStateFlow(false)
+    val videoPlaybackActive: StateFlow<Boolean> = _videoPlaybackActive.asStateFlow()
+
     private val _trackInfo = MutableStateFlow(TrackInfo())
     val trackInfo: StateFlow<TrackInfo> = _trackInfo.asStateFlow()
 
@@ -215,7 +219,8 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        ctx.startActivity(Intent.createChooser(intent, "Export logs").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val chooserTitle = ctx.getString(io.github.jqssun.airplay.R.string.export_logs_chooser_title)
+        ctx.startActivity(Intent.createChooser(intent, chooserTitle).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     private fun loadPersistedLogs() {
@@ -315,6 +320,14 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         service?.clearVideoSurface(surface)
     }
 
+    fun onVideoPlaybackSurfaceAvailable(surface: Surface) {
+        service?.setVideoPlaybackSurface(surface)
+    }
+
+    fun onVideoPlaybackSurfaceDestroyed(surface: Surface) {
+        service?.clearVideoPlaybackSurface(surface)
+    }
+
     // dacp controls
     fun dacpPlayPause() { service?.togglePlayPause() }
     fun dacpNext() { service?.dacpController?.nextItem() }
@@ -335,6 +348,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             _videoAspect.value = it.videoAspect.value
             _videoResolution.value = it.videoResolution.value
             _audioOnly.value = it.audioOnly.value
+            _videoPlaybackActive.value = it.videoPlaybackActive.value
             _trackInfo.value = it.trackInfo.value
             _positionMs.value = it.currentPositionMs()
             _durationMs.value = it.durationMs.value

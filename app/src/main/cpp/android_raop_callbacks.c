@@ -34,6 +34,16 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->registered_count = 0;
     memset(ctx->registered_keys, 0, sizeof(ctx->registered_keys));
 
+    pthread_mutex_init(&ctx->playback_info_lock, NULL);
+    ctx->playback_position = 0.0;
+    /* NOT -1.0: raop.c's GET /playback-info handler treats duration==-1.0 as "video
+       finished, reset the session" -- and the client polls this speculatively before
+       any /play has happened, so a -1.0 default here tears down the session before it
+       starts. -1.0 is reserved for _video_stop, once a session has actually ended. */
+    ctx->playback_duration = 0.0;
+    ctx->playback_rate = 0.0f;
+    ctx->playback_ready = 0;
+
     jclass cls = (*env)->GetObjectClass(env, callback_obj);
     ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZ)V");
     ctx->on_audio_data = (*env)->GetMethodID(env, cls, "onAudioData", "([BIJI)V");
@@ -49,6 +59,10 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->on_progress = (*env)->GetMethodID(env, cls, "onProgress", "(JJJ)V");
     ctx->on_dacp_id = (*env)->GetMethodID(env, cls, "onDacpId", "(Ljava/lang/String;Ljava/lang/String;)V");
     ctx->on_audio_only = (*env)->GetMethodID(env, cls, "onAudioOnly", "(Z)V");
+    ctx->on_video_play = (*env)->GetMethodID(env, cls, "onVideoPlay", "(Ljava/lang/String;F)V");
+    ctx->on_video_scrub = (*env)->GetMethodID(env, cls, "onVideoScrub", "(F)V");
+    ctx->on_video_rate = (*env)->GetMethodID(env, cls, "onVideoRate", "(F)V");
+    ctx->on_video_stop = (*env)->GetMethodID(env, cls, "onVideoStop", "()V");
     (*env)->DeleteLocalRef(env, cls);
 }
 
@@ -62,6 +76,17 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env) {
         ctx->registered_keys[i] = NULL;
     }
     ctx->registered_count = 0;
+    pthread_mutex_destroy(&ctx->playback_info_lock);
+}
+
+void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double position,
+                                             double duration, float rate, int ready) {
+    pthread_mutex_lock(&ctx->playback_info_lock);
+    ctx->playback_position = position;
+    ctx->playback_duration = duration;
+    ctx->playback_rate = rate;
+    ctx->playback_ready = ready;
+    pthread_mutex_unlock(&ctx->playback_info_lock);
 }
 
 /* --- RAOP callback implementations --- */
@@ -92,6 +117,10 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
 
 static void _conn_init(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    /* clear any stale "finished" (-1.0) state left by a previous AirPlay Video
+       session, so a new connection's speculative /playback-info poll (which can
+       arrive before its own /play) doesn't get misread as "already finished". */
+    android_callbacks_update_playback_info(ctx, 0.0, 0.0, 0.0f, 0);
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_conn_init);
@@ -150,7 +179,22 @@ static void _noop_teardown(void *cls, bool *a, bool *b) { (void)cls; (void)a; (v
 static void _video_pause(void *cls) { LOGI("video_pause"); }
 static void _video_resume(void *cls) { LOGI("video_resume"); }
 static void _conn_feedback(void *cls) { (void)cls; }
-static void _video_reset(void *cls, reset_type_t t) { LOGI("video_reset %d", t); }
+static void _video_stop(void *cls);
+static void _video_reset(void *cls, reset_type_t t) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    LOGI("video_reset %d", t);
+    /* an AirPlay Video (HLS) session ended without an explicit POST /stop */
+    if (t == RESET_TYPE_HLS_SHUTDOWN || t == RESET_TYPE_HLS_EOS) {
+        _video_stop(cls);
+    }
+    if (t == RESET_TYPE_HLS_SHUTDOWN && ctx->raop) {
+        /* mirrors uxplay.cpp's own handling of this reset type: without this, the
+           HLS/reverse-http/airplay sub-connections for that video are left open,
+           and our connection counter never returns to the count it had before
+           the video started. */
+        raop_remove_hls_connections(ctx->raop);
+    }
+}
 static void _audio_flush(void *cls) { LOGI("audio_flush"); }
 static void _video_flush(void *cls) { LOGI("video_flush"); }
 static double _audio_set_client_volume(void *cls) { return 0.0; }
@@ -220,6 +264,67 @@ static bool _check_register(void *cls, const char *pk_str) {
     return false;
 }
 
+/* --- AirPlay Video (HLS) playback callbacks --- */
+
+static void _video_play(void *cls, const char *location, const float start_position) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    LOGI("video_play: %s @ %.2fs", location ? location : "(null)", start_position);
+    android_callbacks_update_playback_info(ctx, start_position, 0.0, 0.0f, 0);
+    JNIEnv *env = _get_env(ctx);
+    if (!env || !location) return;
+    jstring jloc = (*env)->NewStringUTF(env, location);
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_play, jloc, (jfloat)start_position);
+    (*env)->DeleteLocalRef(env, jloc);
+}
+
+static void _video_scrub(void *cls, const float position) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    JNIEnv *env = _get_env(ctx);
+    if (!env) return;
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_scrub, (jfloat)position);
+}
+
+static void _video_rate(void *cls, const float rate) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    JNIEnv *env = _get_env(ctx);
+    if (!env) return;
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_rate, (jfloat)rate);
+}
+
+static void _video_stop(void *cls) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    android_callbacks_update_playback_info(ctx, 0.0, -1.0, 0.0f, 0);
+    JNIEnv *env = _get_env(ctx);
+    if (!env) return;
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_stop);
+}
+
+/* Called synchronously from the native httpd thread (GET /playback-info). Must not
+   block on the app's main thread, so it only reads the snapshot Kotlin last pushed
+   via nativeUpdatePlaybackInfo, rather than querying the player directly. */
+static void _video_acquire_playback_info(void *cls, playback_info_t *info) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    pthread_mutex_lock(&ctx->playback_info_lock);
+    info->position = ctx->playback_position;
+    info->duration = ctx->playback_duration;
+    info->rate = ctx->playback_rate;
+    info->ready_to_play = ctx->playback_ready;
+    info->playback_buffer_empty = false;
+    info->playback_buffer_full = true;
+    info->playback_likely_to_keep_up = true;
+    info->seek_start = 0.0;
+    info->seek_duration = ctx->playback_duration > 0.0 ? ctx->playback_duration : 0.0;
+    pthread_mutex_unlock(&ctx->playback_info_lock);
+}
+
+static float _video_playlist_remove(void *cls) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    pthread_mutex_lock(&ctx->playback_info_lock);
+    double position = ctx->playback_position;
+    pthread_mutex_unlock(&ctx->playback_info_lock);
+    return (float) position;
+}
+
 static int _video_set_codec(void *cls, video_codec_t codec) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     LOGI("video_set_codec: %d (h265_enabled=%d)", codec, ctx->h265_enabled);
@@ -254,6 +359,12 @@ void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx) 
     cbs->mirror_video_running = _mirror_video_running;
     cbs->display_pin = _display_pin;
     cbs->video_set_codec = _video_set_codec;
+    cbs->on_video_play = _video_play;
+    cbs->on_video_scrub = _video_scrub;
+    cbs->on_video_rate = _video_rate;
+    cbs->on_video_stop = _video_stop;
+    cbs->on_video_acquire_playback_info = _video_acquire_playback_info;
+    cbs->on_video_playlist_remove = _video_playlist_remove;
     if (ctx->require_pin) {
         cbs->check_register = _check_register;
         cbs->register_client = _register_client;

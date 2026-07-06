@@ -22,6 +22,12 @@ object NativeBridge {
     external fun nativeSetPlist(handle: Long, key: String, value: Int)
     external fun nativeSetH265Enabled(handle: Long, enabled: Boolean)
     external fun nativeSetCodecs(handle: Long, alac: Boolean, aac: Boolean)
+    external fun nativeSetHlsEnabled(handle: Long, enabled: Boolean)
+
+    // AirPlay Video (HLS) playback info snapshot, polled by native httpd thread
+    external fun nativeUpdatePlaybackInfo(
+        handle: Long, position: Float, duration: Float, rate: Float, readyToPlay: Boolean
+    )
 
     external fun nativeGetRaopTxtRecords(handle: Long): Map<String, String>?
     external fun nativeGetAirplayTxtRecords(handle: Long): Map<String, String>?

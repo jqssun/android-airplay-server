@@ -36,6 +36,7 @@ import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.bridge.NativeBridge
 import io.github.jqssun.airplay.bridge.RaopCallbackHandler
 import io.github.jqssun.airplay.discovery.NsdServiceManager
+import io.github.jqssun.airplay.renderer.AirPlayVideoPlayer
 import io.github.jqssun.airplay.renderer.AudioRenderer
 import io.github.jqssun.airplay.renderer.VideoRenderer
 import io.github.jqssun.airplay.viewmodel.DebugInfo
@@ -52,6 +53,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
     val videoRenderer = VideoRenderer()
     val audioRenderer = AudioRenderer()
+    val airPlayVideoPlayer by lazy { AirPlayVideoPlayer(this) }
 
     private val _serverState = MutableStateFlow(ServerState.STOPPED)
     val serverState = _serverState.asStateFlow()
@@ -67,6 +69,9 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
     private val _audioOnly = MutableStateFlow(false)
     val audioOnly = _audioOnly.asStateFlow()
+
+    private val _videoPlaybackActive = MutableStateFlow(false)
+    val videoPlaybackActive = _videoPlaybackActive.asStateFlow()
 
     private val _trackInfo = MutableStateFlow(TrackInfo())
     val trackInfo = _trackInfo.asStateFlow()
@@ -150,6 +155,12 @@ class AirPlayService : Service(), RaopCallbackHandler {
             addAction(ACTION_PREV)
         }
         ContextCompat.registerReceiver(this, mediaReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+
+        airPlayVideoPlayer.onPlaybackInfo = { position, duration, rate, ready ->
+            if (nativeHandle != 0L) {
+                NativeBridge.nativeUpdatePlaybackInfo(nativeHandle, position, duration, rate, ready)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -210,6 +221,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
         audioRenderer.realtimeDecoderPriority = realtimePriority
         NativeBridge.nativeSetH265Enabled(nativeHandle, h265)
         NativeBridge.nativeSetCodecs(nativeHandle, alac, aac)
+        NativeBridge.nativeSetHlsEnabled(nativeHandle, true)
         NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", maxFps)
         NativeBridge.nativeSetPlist(nativeHandle, "overscanned", if (overscanned) 1 else 0)
         if (audioLatencyMs >= 0) {
@@ -284,8 +296,10 @@ class AirPlayService : Service(), RaopCallbackHandler {
         wakeLock = null
         videoRenderer.release()
         audioRenderer.release()
+        airPlayVideoPlayer.stop()
         mediaSession?.isActive = false
         _audioOnly.value = false
+        _videoPlaybackActive.value = false
         _trackInfo.value = TrackInfo()
         _positionMs.value = 0
         _durationMs.value = 0
@@ -303,6 +317,14 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
     fun clearVideoSurface(surface: Surface) {
         videoRenderer.clearSurface(surface)
+    }
+
+    fun setVideoPlaybackSurface(surface: Surface) {
+        airPlayVideoPlayer.setSurface(surface)
+    }
+
+    fun clearVideoPlaybackSurface(surface: Surface) {
+        airPlayVideoPlayer.clearSurface(surface)
     }
 
     override fun onDestroy() {
@@ -326,6 +348,26 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
     override fun onAudioData(data: ByteArray, ct: Int, ntpTimeNs: Long, seqNum: Int) {
         audioRenderer.feedAudio(data, ct, ntpTimeNs)
+    }
+
+    override fun onVideoPlay(location: String, startPositionSeconds: Float) {
+        _videoPlaybackActive.value = true
+        airPlayVideoPlayer.play(location, startPositionSeconds)
+        log("AirPlay Video play: $location @ ${startPositionSeconds}s")
+    }
+
+    override fun onVideoScrub(positionSeconds: Float) {
+        airPlayVideoPlayer.scrub(positionSeconds)
+    }
+
+    override fun onVideoRate(rate: Float) {
+        airPlayVideoPlayer.setRate(rate)
+    }
+
+    override fun onVideoStop() {
+        _videoPlaybackActive.value = false
+        airPlayVideoPlayer.stop()
+        log("AirPlay Video stopped")
     }
 
     override fun onAudioFormat(ct: Int, spf: Int, usingScreen: Boolean) {
@@ -372,6 +414,13 @@ class AirPlayService : Service(), RaopCallbackHandler {
             _durationMs.value = 0
             mediaSession?.isActive = false
             audioRenderer.markSessionEnded()
+            // the client may drop the connection without ever sending POST /stop
+            // (closing the app, leaving the video, losing the network), so don't
+            // rely solely on onVideoStop to end AirPlay Video playback
+            if (_videoPlaybackActive.value) {
+                _videoPlaybackActive.value = false
+                airPlayVideoPlayer.stop()
+            }
         }
         log("Client disconnected (${_connectionCount.value})")
     }
