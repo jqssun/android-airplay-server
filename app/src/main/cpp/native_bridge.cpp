@@ -68,6 +68,7 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
         free(ctx);
         return 0;
     }
+    ctx->cb_ctx.raop = ctx->raop;
 
     raop_set_log_level(ctx->raop, 3); /* INFO */
     raop_set_log_callback(ctx->raop, _log_callback, NULL);
@@ -128,6 +129,9 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeStart(
         LOGE("raop_start_httpd failed: %d", ret);
         return -1;
     }
+    /* raop_start_httpd doesn't record the bound port on raop itself; without this,
+       AirPlay Video's local HLS proxy URLs are built with port 0 (see airplay_video_init). */
+    raop_set_port(ctx->raop, port);
 
     LOGI("AirPlay server started on port %d", port);
 
@@ -287,6 +291,23 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetH265Enabled(
     }
 }
 
+/* Without this, raop.c silently drops the client's AirPlay Video (HLS) connection
+   attempt (see raop.c's "-hls" gate), and without the matching DNS-SD feature bits
+   the client (iOS) never attempts that connection in the first place. */
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetHlsEnabled(
+        JNIEnv *env, jobject thiz, jlong handle, jboolean enabled) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx || !ctx->raop) return;
+    raop_set_plist(ctx->raop, "hls", enabled ? 1 : 0);
+    if (ctx->dnssd) {
+        dnssd_set_airplay_features(ctx->dnssd, 0, enabled ? 1 : 0);
+        dnssd_set_airplay_features(ctx->dnssd, 4, enabled ? 1 : 0);
+    }
+}
+
 extern "C"
 JNIEXPORT void JNICALL
 Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetCodecs(
@@ -295,6 +316,19 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetCodecs(
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
     if (!ctx || !ctx->dnssd) return;
     android_dnssd_set_codecs(ctx->dnssd, alac ? 1 : 0, aac ? 1 : 0);
+}
+
+/* Pushed periodically by the Kotlin AirPlay Video player so the native httpd thread
+   can answer GET /playback-info without a blocking round-trip into the player. */
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeUpdatePlaybackInfo(
+        JNIEnv *env, jobject thiz, jlong handle,
+        jfloat position, jfloat duration, jfloat rate, jboolean readyToPlay) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx) return;
+    android_callbacks_update_playback_info(&ctx->cb_ctx, position, duration, rate, readyToPlay ? 1 : 0);
 }
 
 /* ---------- Software ALAC decoder (Apple reference, Apache 2.0) ---------- */

@@ -92,6 +92,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel)
     implementation(libs.androidx.datastore.prefs)
     implementation(libs.androidx.media)
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.exoplayer.hls)
     implementation(libs.kotlinx.coroutines)
 
     implementation(platform(libs.compose.bom))

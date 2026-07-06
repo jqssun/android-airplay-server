@@ -59,6 +59,7 @@ fun MainScreen(
     val pin by viewModel.pinCode.collectAsState()
     val connections by viewModel.connectionCount.collectAsState()
     val audioOnly by viewModel.audioOnly.collectAsState()
+    val videoPlaybackActive by viewModel.videoPlaybackActive.collectAsState()
     val autoFullscreen by viewModel.autoFullscreen.collectAsState()
     val autoAudioMode by viewModel.autoAudioMode.collectAsState()
     var showModePrompt by remember { mutableStateOf(false) }
@@ -78,11 +79,25 @@ fun MainScreen(
         if (audioOnly && !autoAudioMode) showModePrompt = true
     }
 
-    // auto fullscreen when client connects (non-audio), but never while a pin is pending
-    LaunchedEffect(connections, audioOnly, pin) {
-        if (connections > 0 && !audioOnly && autoFullscreen && !fullscreen && pin == null) {
+    // auto fullscreen only on a fresh connection (0 -> positive), never while a pin is
+    // pending. Re-checking on every recomposition where connections merely *stays*
+    // positive would also fire right as an AirPlay Video session ends (its connections
+    // linger briefly), dropping into the mirroring fullscreen view with no mirroring
+    // feed to show -- i.e. a black screen.
+    var prevConnections by remember { mutableStateOf(0) }
+    LaunchedEffect(connections, audioOnly, videoPlaybackActive, pin) {
+        val justConnected = prevConnections == 0 && connections > 0
+        prevConnections = connections
+        if (justConnected && !audioOnly && !videoPlaybackActive && autoFullscreen && pin == null) {
             fullscreen = true
         }
+    }
+
+    // an AirPlay Video session may start while a prior mirroring session had already
+    // set fullscreen=true; without this, ending the video falls through to the (empty,
+    // black) mirroring fullscreen view instead of the normal app UI
+    LaunchedEffect(videoPlaybackActive) {
+        if (videoPlaybackActive) fullscreen = false
     }
 
     val activity = LocalContext.current as? Activity
@@ -95,6 +110,21 @@ fun MainScreen(
         } else {
             controller.show(WindowInsetsCompat.Type.systemBars())
         }
+    }
+
+    // AirPlay Video (HLS /play protocol): full-screen, independent of mirroring's
+    // fullscreen/pip/tab state, since it's a wholly separate playback surface
+    if (videoPlaybackActive) {
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            AirPlayVideoView(
+                onSurfaceAvailable = { viewModel.onVideoPlaybackSurfaceAvailable(it) },
+                onSurfaceDestroyed = { viewModel.onVideoPlaybackSurfaceDestroyed(it) }
+            )
+        }
+        return
     }
 
     // pip mode: show only the video surface
