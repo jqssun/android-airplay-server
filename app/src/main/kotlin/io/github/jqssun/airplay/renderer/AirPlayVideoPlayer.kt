@@ -37,11 +37,6 @@ class AirPlayVideoPlayer(private val context: Context) {
 
     fun play(location: String, startPositionSeconds: Float) = mainHandler.post {
         stopInternal()
-        // Reverted: a custom minBuffer/live-offset tuning here (targeting 30-60s behind
-        // the live edge) caused live playback to stall instead of helping, because the
-        // relayed HLS source's available segment window doesn't go back nearly that far
-        // -- ExoPlayer sat waiting for content already aged out of the playlist. Back to
-        // ExoPlayer's own defaults, which handle the live offset adaptively.
         val p = ExoPlayer.Builder(context).build().also {
             it.addListener(_listener)
             pendingSurface?.let { s -> it.setVideoSurface(s) }
