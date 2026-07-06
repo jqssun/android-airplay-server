@@ -596,14 +596,14 @@ private fun DebugOverlay(info: DebugInfo, modifier: Modifier = Modifier) {
         val color = Color.White.copy(alpha = 0.9f)
 
         if (info.videoCodec.isNotEmpty()) {
-            Text("Video: ${info.videoCodec} ${info.videoRes}", style = style, color = color)
-            Text("FPS: ${info.videoFps}  Bitrate: ${info.bitrateStr}", style = style, color = color)
-            Text("Frames: ${info.videoFrames}  Drops: ${info.droppedFrames}", style = style, color = color)
-            Text("Jitter: ${info.jitterStr}", style = style, color = color)
+            Text(stringResource(R.string.debug_video, info.videoCodec, info.videoRes), style = style, color = color)
+            Text(stringResource(R.string.debug_fps_bitrate, info.videoFps, info.bitrateStr), style = style, color = color)
+            Text(stringResource(R.string.debug_frames_drops, info.videoFrames, info.droppedFrames), style = style, color = color)
+            Text(stringResource(R.string.debug_jitter, info.jitterStr), style = style, color = color)
         }
         if (info.audioCodec.isNotEmpty()) {
-            Text("Audio: ${info.audioCodec}  Vol: ${info.audioVolume}%", style = style, color = color)
+            Text(stringResource(R.string.debug_audio, info.audioCodec, info.audioVolume), style = style, color = color)
         }
-        Text("Clients: ${info.connections}", style = style, color = color)
+        Text(stringResource(R.string.debug_clients, info.connections), style = style, color = color)
     }
 }
