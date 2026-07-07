@@ -18,6 +18,7 @@
     <!-- Overview -->
     <string name="server_stopped">Server stopped</string>
     <string name="waiting_for_connection">Waiting for connection…</string>
+    <string name="connecting">Connecting…</string>
     <string name="error_starting_server">Error starting server</string>
     <string name="connected_count">%d connected</string>
     <string name="error_label">Error</string>

@@ -62,6 +62,14 @@ class AirPlayVideoPlayer(private val context: Context) {
         }
     }
 
+    // local-only control (tap-to-pause on the receiver's screen): the source device
+    // isn't told about this, it's purely how the tablet plays back what it already
+    // received -- matches how a TV's own remote can pause without the source knowing.
+    fun togglePlayPause() = mainHandler.post {
+        val p = player ?: return@post
+        p.playWhenReady = !p.playWhenReady
+    }
+
     fun setSurface(surface: Surface) = mainHandler.post {
         pendingSurface = surface
         player?.setVideoSurface(surface)

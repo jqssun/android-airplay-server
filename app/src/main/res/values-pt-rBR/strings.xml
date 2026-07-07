@@ -18,6 +18,7 @@
     <!-- Overview -->
     <string name="server_stopped">Servidor parado</string>
     <string name="waiting_for_connection">Aguardando conexão…</string>
+    <string name="connecting">Conectando…</string>
     <string name="error_starting_server">Erro ao iniciar o servidor</string>
     <string name="connected_count">%d conectado(s)</string>
     <string name="error_label">Erro</string>

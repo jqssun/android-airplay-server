@@ -164,6 +164,10 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _videoPlaybackActive = MutableStateFlow(false)
     val videoPlaybackActive: StateFlow<Boolean> = _videoPlaybackActive.asStateFlow()
 
+    // true only once real mirroring video size is known for the current session
+    private val _mirroringActive = MutableStateFlow(false)
+    val mirroringActive: StateFlow<Boolean> = _mirroringActive.asStateFlow()
+
     private val _trackInfo = MutableStateFlow(TrackInfo())
     val trackInfo: StateFlow<TrackInfo> = _trackInfo.asStateFlow()
 
@@ -328,6 +332,10 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         service?.clearVideoPlaybackSurface(surface)
     }
 
+    fun toggleVideoPlayPause() {
+        service?.toggleVideoPlayback()
+    }
+
     // dacp controls
     fun dacpPlayPause() { service?.togglePlayPause() }
     fun dacpNext() { service?.dacpController?.nextItem() }
@@ -349,6 +357,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             _videoResolution.value = it.videoResolution.value
             _audioOnly.value = it.audioOnly.value
             _videoPlaybackActive.value = it.videoPlaybackActive.value
+            _mirroringActive.value = it.mirroringActive.value
             _trackInfo.value = it.trackInfo.value
             _positionMs.value = it.currentPositionMs()
             _durationMs.value = it.durationMs.value

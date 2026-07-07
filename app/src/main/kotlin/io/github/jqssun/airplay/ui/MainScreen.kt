@@ -60,6 +60,7 @@ fun MainScreen(
     val connections by viewModel.connectionCount.collectAsState()
     val audioOnly by viewModel.audioOnly.collectAsState()
     val videoPlaybackActive by viewModel.videoPlaybackActive.collectAsState()
+    val mirroringActive by viewModel.mirroringActive.collectAsState()
     val autoFullscreen by viewModel.autoFullscreen.collectAsState()
     val autoAudioMode by viewModel.autoAudioMode.collectAsState()
     var showModePrompt by remember { mutableStateOf(false) }
@@ -79,18 +80,29 @@ fun MainScreen(
         if (audioOnly && !autoAudioMode) showModePrompt = true
     }
 
-    // auto fullscreen only on a fresh connection (0 -> positive), never while a pin is
-    // pending. Re-checking on every recomposition where connections merely *stays*
-    // positive would also fire right as an AirPlay Video session ends (its connections
-    // linger briefly), dropping into the mirroring fullscreen view with no mirroring
-    // feed to show -- i.e. a black screen.
-    var prevConnections by remember { mutableStateOf(0) }
-    LaunchedEffect(connections, audioOnly, videoPlaybackActive, pin) {
-        val justConnected = prevConnections == 0 && connections > 0
-        prevConnections = connections
-        if (justConnected && !audioOnly && !videoPlaybackActive && autoFullscreen && pin == null) {
+    // auto fullscreen on a fresh mirroring session (0 -> positive), never while a pin
+    // is pending. This is keyed on mirroringActive (real video size just reported by
+    // the mirroring-only video_report_size callback) rather than connections>0:
+    // connections rise well before we know whether this attempt is mirroring, an
+    // AirPlay Video session, or audio-only -- keying on that alone used to land in
+    // the (empty) mirroring fullscreen view, with its own PiP/exit controls, while an
+    // AirPlay Video session was still starting up or an attempt was resetting
+    // entirely, i.e. a black screen with the wrong controls on it.
+    var prevMirroringActive by remember { mutableStateOf(false) }
+    LaunchedEffect(mirroringActive, audioOnly, videoPlaybackActive, pin) {
+        val justStarted = !prevMirroringActive && mirroringActive
+        prevMirroringActive = mirroringActive
+        if (justStarted && !audioOnly && !videoPlaybackActive && autoFullscreen && pin == null) {
             fullscreen = true
         }
+    }
+
+    // safety net: leave fullscreen once every connection drops, whatever the attempt
+    // turned out to be (or didn't). Not keyed on mirroringActive alone -- manually
+    // entering fullscreen to look at the idle preview (no connection at all) is a
+    // deliberate, separate feature this shouldn't undo.
+    LaunchedEffect(connections) {
+        if (connections == 0) fullscreen = false
     }
 
     // an AirPlay Video session may start while a prior mirroring session had already
@@ -115,14 +127,49 @@ fun MainScreen(
     // AirPlay Video (HLS /play protocol): full-screen, independent of mirroring's
     // fullscreen/pip/tab state, since it's a wholly separate playback surface
     if (videoPlaybackActive) {
+        // local-only playback state for the tap-to-pause icon; not synced from the
+        // player (see AirPlayVideoPlayer.togglePlayPause), just mirrors what we just
+        // asked it to do so the icon shown always matches the tap that triggered it
+        var isPlaying by remember(videoPlaybackActive) { mutableStateOf(true) }
+        var showPlayPauseIcon by remember { mutableStateOf(false) }
+        LaunchedEffect(showPlayPauseIcon) {
+            if (showPlayPauseIcon) {
+                delay(700)
+                showPlayPauseIcon = false
+            }
+        }
         Box(
             modifier = Modifier.fillMaxSize().background(Color.Black),
             contentAlignment = Alignment.Center
         ) {
             AirPlayVideoView(
                 onSurfaceAvailable = { viewModel.onVideoPlaybackSurfaceAvailable(it) },
-                onSurfaceDestroyed = { viewModel.onVideoPlaybackSurfaceDestroyed(it) }
+                onSurfaceDestroyed = { viewModel.onVideoPlaybackSurfaceDestroyed(it) },
+                onTap = {
+                    isPlaying = !isPlaying
+                    showPlayPauseIcon = true
+                    viewModel.toggleVideoPlayPause()
+                }
             )
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showPlayPauseIcon,
+                enter = androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.fadeOut()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(88.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.PlayArrow else Icons.Default.Pause,
+                        contentDescription = stringResource(R.string.cd_play_pause),
+                        tint = Color.White,
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
+            }
         }
         return
     }
@@ -248,6 +295,8 @@ private fun OverviewContent(
     val serverName by viewModel.serverName.collectAsState()
     val videoResolution by viewModel.videoResolution.collectAsState()
     val idlePreview by viewModel.idlePreview.collectAsState()
+    val mirroringActive by viewModel.mirroringActive.collectAsState()
+    val videoPlaybackActive by viewModel.videoPlaybackActive.collectAsState()
     val debugEnabled by viewModel.debugEnabled.collectAsState()
     val debugInfo by viewModel.debugInfo.collectAsState()
     val tv = isTv()
@@ -267,10 +316,17 @@ private fun OverviewContent(
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
+            // connections > 0 rises well before we know whether this attempt is real
+            // mirroring, AirPlay Video, or audio-only -- showing the mirroring surface
+            // and its PiP/fullscreen controls this early was the same premature-UI bug
+            // fullscreen auto-entry had (see MainScreen's mirroringActive comment).
+            // Show a plain connecting spinner during that undetermined window instead.
+            val connecting = state == ServerState.RUNNING && connections > 0 &&
+                !mirroringActive && !videoPlaybackActive
             if (showAudioMode && state == ServerState.RUNNING && connections > 0) {
                 NowPlayingContent(viewModel)
             } else {
-                if (state == ServerState.RUNNING && (connections > 0 || idlePreview)) {
+                if (state == ServerState.RUNNING && (mirroringActive || idlePreview)) {
                     video()
                 }
                 if (state != ServerState.RUNNING || connections == 0) {
@@ -292,8 +348,18 @@ private fun OverviewContent(
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
                     }
+                } else if (connecting) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = stringResource(R.string.connecting),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
                 }
-                if (state == ServerState.RUNNING && connections > 0) {
+                if (state == ServerState.RUNNING && mirroringActive) {
                     Row(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
                         IconButton(onClick = onPip, modifier = Modifier.dpadFocus()) {
                             Icon(

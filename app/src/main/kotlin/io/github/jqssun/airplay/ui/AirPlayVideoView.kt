@@ -3,10 +3,12 @@ package io.github.jqssun.airplay.ui
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.viewinterop.AndroidView
 
 // Renders the ExoPlayer-backed AirPlay Video (HLS) surface, analogous to MirroringView
@@ -15,6 +17,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 fun AirPlayVideoView(
     onSurfaceAvailable: (Surface) -> Unit,
     onSurfaceDestroyed: (Surface) -> Unit,
+    onTap: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val callbacks = remember {
@@ -37,6 +40,10 @@ fun AirPlayVideoView(
                 it.holder.addCallback(callbacks)
             }
         },
-        modifier = modifier.fillMaxSize()
+        modifier = modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = { onTap() })
+            }
     )
 }

@@ -73,6 +73,14 @@ class AirPlayService : Service(), RaopCallbackHandler {
     private val _videoPlaybackActive = MutableStateFlow(false)
     val videoPlaybackActive = _videoPlaybackActive.asStateFlow()
 
+    // true only once onVideoSize (the mirroring-only video_report_size callback) has
+    // actually reported a real size for the current connection cycle -- unlike
+    // connectionCount, this can't be confused with an AirPlay Video or audio-only
+    // session that also briefly holds connections open before its own kind of
+    // playback (or none at all) becomes clear.
+    private val _mirroringActive = MutableStateFlow(false)
+    val mirroringActive = _mirroringActive.asStateFlow()
+
     private val _trackInfo = MutableStateFlow(TrackInfo())
     val trackInfo = _trackInfo.asStateFlow()
 
@@ -327,6 +335,10 @@ class AirPlayService : Service(), RaopCallbackHandler {
         airPlayVideoPlayer.clearSurface(surface)
     }
 
+    fun toggleVideoPlayback() {
+        airPlayVideoPlayer.togglePlayPause()
+    }
+
     override fun onDestroy() {
         stopServer()
         mediaReceiver?.let {
@@ -385,6 +397,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
             _videoAspect.value = w / h
             _videoResolution.value = "${w.toInt()}x${h.toInt()}"
             videoRenderer.setResolution(w.toInt(), h.toInt())
+            _mirroringActive.value = true
         }
         log("Video size: ${srcW}x${srcH} -> ${w}x${h}")
     }
@@ -409,6 +422,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
         _connectionCount.value = (_connectionCount.value - 1).coerceAtLeast(0)
         if (_connectionCount.value == 0) {
             _audioOnly.value = false
+            _mirroringActive.value = false
             _trackInfo.value = TrackInfo()
             _positionMs.value = 0
             _durationMs.value = 0
