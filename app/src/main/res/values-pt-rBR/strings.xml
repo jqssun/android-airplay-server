@@ -82,6 +82,8 @@
     <string name="setting_auto_audio_mode_desc">Pular o aviso ao mudar para o modo áudio</string>
     <string name="setting_launch_on_connect">Abrir este aplicativo ao conectar</string>
     <string name="setting_launch_on_connect_desc">Mostrar a tela quando um cliente se conectar</string>
+    <string name="setting_return_to_previous_app">Voltar ao app anterior após o casting</string>
+    <string name="setting_return_to_previous_app_desc">Quando o casting terminar, retornar ao aplicativo usado anteriormente</string>
     <string name="setting_launch_on_connect_no_permission">Toque para conceder a permissão de exibir sobre outros apps</string>
     <string name="setting_resolution">Resolução</string>
     <string name="setting_resolution_desc">Resolução de vídeo anunciada aos clientes</string>

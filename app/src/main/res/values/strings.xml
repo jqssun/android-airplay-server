@@ -56,13 +56,15 @@
 
     <!-- Settings: Server -->
     <string name="setting_server_name">Server name</string>
-    <string name="setting_server_name_desc">Name shown to AirPlay clients</string>
+    <string name="setting_server_name_desc">Name shown to AirPlay clients; leave empty to use the device name</string>
     <string name="setting_server_port">Server port</string>
     <string name="setting_server_port_desc">Port for the AirPlay server</string>
     <string name="setting_auto_start">Start server automatically</string>
     <string name="setting_auto_start_desc">Start the AirPlay server when the app launches</string>
     <string name="setting_boot_auto_start">Start server at boot</string>
     <string name="setting_boot_auto_start_desc">Start the AirPlay server when the device starts</string>
+    <string name="setting_run_in_background">Run in background</string>
+    <string name="setting_run_in_background_desc">Keep the server running after leaving the app</string>
     <string name="btn_save">Save</string>
 
     <!-- Settings: Connection -->
@@ -82,6 +84,8 @@
     <string name="setting_auto_audio_mode_desc">Skip the prompt when switching to audio mode</string>
     <string name="setting_launch_on_connect">Open this application on connect</string>
     <string name="setting_launch_on_connect_desc">Show the screen when a client connects</string>
+    <string name="setting_return_to_previous_app">Return to previous app after casting</string>
+    <string name="setting_return_to_previous_app_desc">When casting ends, switch back to the previously used app</string>
     <string name="setting_launch_on_connect_no_permission">Tap to grant Display over other apps permission</string>
     <string name="setting_resolution">Resolution</string>
     <string name="setting_resolution_desc">Video resolution advertised to clients</string>

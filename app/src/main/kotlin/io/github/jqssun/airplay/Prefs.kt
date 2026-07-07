@@ -1,15 +1,35 @@
 package io.github.jqssun.airplay
 
+import android.content.Context
 import android.media.MediaFormat
+import android.provider.Settings
 
 /** Centralized preference keys and defaults. */
 object Prefs {
     const val NAME = "settings"
 
     const val SERVER_NAME = "server_name"; const val DEF_SERVER_NAME = "Android AirPlay"
+
+    /**
+     * Default advertised name when the user hasn't set one: the device name from
+     * Android Settings > About ("device_name" in Settings.Global -- the constant is
+     * API 25+, the row itself exists on API 24), falling back to [DEF_SERVER_NAME].
+     */
+    fun defaultServerName(context: Context): String =
+        runCatching { Settings.Global.getString(context.contentResolver, "device_name") }
+            .getOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: DEF_SERVER_NAME
+
+    /** The configured server name, or [defaultServerName] when unset/blank. */
+    fun serverName(context: Context): String {
+        val prefs = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
+        return prefs.getString(SERVER_NAME, null)?.takeIf { it.isNotBlank() }
+            ?: defaultServerName(context)
+    }
+
     const val SERVER_PORT = "server_port"; const val DEF_SERVER_PORT = 7000
     const val AUTO_START = "auto_start"; const val DEF_AUTO_START = true
     const val BOOT_AUTO_START = "boot_auto_start"; const val DEF_BOOT_AUTO_START = true
+    const val RUN_IN_BACKGROUND = "run_in_background"; const val DEF_RUN_IN_BACKGROUND = true
     const val H265_ENABLED = "h265_enabled"; const val DEF_H265_ENABLED = true
     const val ENFORCE_SDR = "enforce_sdr"; const val DEF_ENFORCE_SDR = true
     val KEY_ALLOW_FRAME_DROP: String = MediaFormat.KEY_ALLOW_FRAME_DROP; const val DEF_KEY_ALLOW_FRAME_DROP = true
@@ -34,4 +54,9 @@ object Prefs {
     const val KEEP_SCREEN_ON = "keep_screen_on"; const val DEF_KEEP_SCREEN_ON = true
     const val AUTO_AUDIO_MODE = "auto_audio_mode"; const val DEF_AUTO_AUDIO_MODE = true
     const val LAUNCH_ON_CONNECT = "launch_on_connect"; const val DEF_LAUNCH_ON_CONNECT = true
+    const val RETURN_TO_PREVIOUS_APP = "return_to_previous_app"; const val DEF_RETURN_TO_PREVIOUS_APP = true
+
+    // internal bookkeeping (not user-facing settings): lets the watchdog tell a
+    // deliberate stopServer() apart from the process simply having been killed
+    const val SERVER_SHOULD_RUN = "server_should_run"
 }

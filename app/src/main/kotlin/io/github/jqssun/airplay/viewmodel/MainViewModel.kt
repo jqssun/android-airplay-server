@@ -6,11 +6,14 @@ import android.content.Intent
 import android.view.Surface
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.service.AirPlayService
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -67,7 +70,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _videoResolution = MutableStateFlow("")
     val videoResolution: StateFlow<String> = _videoResolution.asStateFlow()
 
-    private val _serverName = MutableStateFlow(prefs.getString(Prefs.SERVER_NAME, Prefs.DEF_SERVER_NAME)!!)
+    private val _serverName = MutableStateFlow(Prefs.serverName(app))
     val serverName: StateFlow<String> = _serverName.asStateFlow()
 
     // settings
@@ -79,6 +82,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     private val _bootAutoStart = MutableStateFlow(prefs.getBoolean(Prefs.BOOT_AUTO_START, Prefs.DEF_BOOT_AUTO_START))
     val bootAutoStart: StateFlow<Boolean> = _bootAutoStart.asStateFlow()
+
+    private val _runInBackground = MutableStateFlow(prefs.getBoolean(Prefs.RUN_IN_BACKGROUND, Prefs.DEF_RUN_IN_BACKGROUND))
+    val runInBackground: StateFlow<Boolean> = _runInBackground.asStateFlow()
 
     private val _h265Enabled = MutableStateFlow(prefs.getBoolean(Prefs.H265_ENABLED, Prefs.DEF_H265_ENABLED))
     val h265Enabled: StateFlow<Boolean> = _h265Enabled.asStateFlow()
@@ -143,6 +149,15 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _launchOnConnect = MutableStateFlow(prefs.getBoolean(Prefs.LAUNCH_ON_CONNECT, Prefs.DEF_LAUNCH_ON_CONNECT))
     val launchOnConnect: StateFlow<Boolean> = _launchOnConnect.asStateFlow()
 
+    /**
+     * "Return to previous app after casting": when a session summoned the activity
+     * (see MainActivity.summonedBySession) and then ends, send the task to the back
+     * so whatever was on screen before (HDMI input, another app) comes back. When
+     * off, the app stays in front on its main page (the old behaviour).
+     */
+    private val _returnToPreviousApp = MutableStateFlow(prefs.getBoolean(Prefs.RETURN_TO_PREVIOUS_APP, Prefs.DEF_RETURN_TO_PREVIOUS_APP))
+    val returnToPreviousApp: StateFlow<Boolean> = _returnToPreviousApp.asStateFlow()
+
     // debug
     private val _debugEnabled = MutableStateFlow(prefs.getBoolean(Prefs.DEBUG_ENABLED, Prefs.DEF_DEBUG_ENABLED))
     val debugEnabled: StateFlow<Boolean> = _debugEnabled.asStateFlow()
@@ -163,6 +178,40 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     // AirPlay Video (HLS) playback mode, distinct from screen mirroring / audio-only
     private val _videoPlaybackActive = MutableStateFlow(false)
     val videoPlaybackActive: StateFlow<Boolean> = _videoPlaybackActive.asStateFlow()
+
+    // overlay visibility: any transport action (tap-to-pause, remote key) increments
+    // this tick; the MainScreen LaunchedEffect shows the overlay and auto-hides it
+    private val _videoOverlayTick = MutableStateFlow(0L)
+    val videoOverlayTick: StateFlow<Long> = _videoOverlayTick.asStateFlow()
+
+    // optimistic play state for the overlay icon; updated immediately on local actions
+    // and re-synced from the ExoPlayer snapshot every 200ms (updateFromService)
+    private val _videoPlaying = MutableStateFlow(true)
+    val videoPlaying: StateFlow<Boolean> = _videoPlaying.asStateFlow()
+
+    // live ExoPlayer state (from AirPlayService.videoPlaybackInfo, refreshed each
+    // 250ms report tick); the overlay reads these for the seek bar and position text
+    private val _videoPositionMs = MutableStateFlow(0L)
+    val videoPositionMs: StateFlow<Long> = _videoPositionMs.asStateFlow()
+    private val _videoDurationMs = MutableStateFlow(0L)
+    val videoDurationMs: StateFlow<Long> = _videoDurationMs.asStateFlow()
+
+    // while the user is scrubbing (holding DPAD left/right) this holds the accumulated
+    // seek target; null when not scrubbing. The overlay shows this instead of the live
+    // position so the bar tracks the scrub progress, then converges after the seek.
+    private val _videoScrubPositionMs = MutableStateFlow<Long?>(null)
+    val videoScrubPositionMs: StateFlow<Long?> = _videoScrubPositionMs.asStateFlow()
+
+    // held-key scrub accumulation state
+    private var _scrubAccumulatedMs = 0L
+    private var _scrubDirection = 0
+    private var _scrubLastStepTime = 0L
+    private var _scrubTierIndex = 0
+    private var _scrubStepsInTier = 0
+    private var _scrubCommitJob: kotlinx.coroutines.Job? = null
+
+    // event-driven mirror of the service's videoPlaybackActive (see bindService)
+    private var _serviceVideoJob: kotlinx.coroutines.Job? = null
 
     // true only once real mirroring video size is known for the current session
     private val _mirroringActive = MutableStateFlow(false)
@@ -246,11 +295,43 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         }
     }
 
+    companion object {
+        // All scrub-feel knobs in one place.
+        // per-step jump sizes; the first entry is the single-tap jump, holding climbs
+        // the tiers in order
+        val SCRUB_STEP_TIERS_MS = longArrayOf(5000, 5000, 10000, 15000, 20000, 30000, 45000, 60000)
+        // accepted steps spent on each tier before accelerating
+        const val SCRUB_RAMP_DWELL_STEPS = 2
+        // held-key step cadence (lower = faster scrubbing)
+        const val SCRUB_REPEAT_THROTTLE_MS = 150L
+        // quiet time after the last step before the single seek is issued
+        const val SCRUB_COMMIT_DEBOUNCE_MS = 300L
+    }
+
     // settings setters
     fun setServerPort(port: Int) { _serverPort.value = port; prefs.edit().putInt(Prefs.SERVER_PORT, port).apply() }
-    fun setServerName(name: String) { _serverName.value = name; prefs.edit().putString(Prefs.SERVER_NAME, name).apply() }
+    fun setServerName(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) {
+            // clearing the field reverts to the default (the device name)
+            prefs.edit().remove(Prefs.SERVER_NAME).apply()
+        } else {
+            prefs.edit().putString(Prefs.SERVER_NAME, trimmed).apply()
+        }
+        val effective = Prefs.serverName(getApplication())
+        if (_serverName.value == effective) return
+        _serverName.value = effective
+        // the advertised mDNS/raop name is fixed at native init: restart to apply
+        service?.let {
+            if (it.serverState.value == ServerState.RUNNING) {
+                it.stopServer()
+                it.startServer(effective)
+            }
+        }
+    }
     fun setAutoStart(v: Boolean) { _autoStart.value = v; prefs.edit().putBoolean(Prefs.AUTO_START, v).apply() }
     fun setBootAutoStart(v: Boolean) { _bootAutoStart.value = v; prefs.edit().putBoolean(Prefs.BOOT_AUTO_START, v).apply() }
+    fun setRunInBackground(v: Boolean) { _runInBackground.value = v; prefs.edit().putBoolean(Prefs.RUN_IN_BACKGROUND, v).apply() }
     fun setH265Enabled(v: Boolean) { _h265Enabled.value = v; prefs.edit().putBoolean(Prefs.H265_ENABLED, v).apply() }
     fun setEnforceSdr(v: Boolean) { _enforceSdr.value = v; prefs.edit().putBoolean(Prefs.ENFORCE_SDR, v).apply() }
     fun setKeyAllowFrameDrop(v: Boolean) {
@@ -287,6 +368,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setKeepScreenOn(v: Boolean) { _keepScreenOn.value = v; prefs.edit().putBoolean(Prefs.KEEP_SCREEN_ON, v).apply() }
     fun setAutoAudioMode(v: Boolean) { _autoAudioMode.value = v; prefs.edit().putBoolean(Prefs.AUTO_AUDIO_MODE, v).apply() }
     fun setLaunchOnConnect(v: Boolean) { _launchOnConnect.value = v; prefs.edit().putBoolean(Prefs.LAUNCH_ON_CONNECT, v).apply() }
+    fun setReturnToPreviousApp(v: Boolean) { _returnToPreviousApp.value = v; prefs.edit().putBoolean(Prefs.RETURN_TO_PREVIOUS_APP, v).apply() }
     fun setDebugEnabled(v: Boolean) { _debugEnabled.value = v; prefs.edit().putBoolean(Prefs.DEBUG_ENABLED, v).apply() }
     fun setDeveloperOptions(v: Boolean) {
         _developerOptions.value = v
@@ -301,10 +383,29 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     // service binding
     fun bindService(svc: AirPlayService) {
         service = svc
+        // Mirror the AirPlay Video active flag event-driven rather than only via the
+        // 200ms lifecycle-gated UI poll: dismissing the video screen when the sender
+        // stops the session must not depend on the poll loop being scheduled at that
+        // moment, or the last decoded frame stays up (frozen) on the SurfaceView.
+        _serviceVideoJob?.cancel()
+        _serviceVideoJob = viewModelScope.launch {
+            svc.videoPlaybackActive.collect { active ->
+                val prev = _videoPlaybackActive.value
+                if (active && !prev) {
+                    // fresh session: reset overlay state
+                    _videoPlaying.value = true
+                    _videoOverlayTick.value = 0L
+                    _videoScrubPositionMs.value = null
+                }
+                _videoPlaybackActive.value = active
+            }
+        }
         updateFromService()
     }
 
     fun unbindService() {
+        _serviceVideoJob?.cancel()
+        _serviceVideoJob = null
         service = null
     }
 
@@ -333,8 +434,79 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     }
 
     fun toggleVideoPlayPause() {
+        _videoPlaying.value = !_videoPlaying.value
         service?.toggleVideoPlayback()
+        _videoOverlayTick.value = ++_videoOverlayTickValue
     }
+
+    fun setVideoPlaying(playing: Boolean) {
+        _videoPlaying.value = playing
+        service?.setVideoPlaying(playing)
+        _videoOverlayTick.value = ++_videoOverlayTickValue
+    }
+
+    fun seekVideoBy(deltaMs: Long) {
+        service?.seekVideoBy(deltaMs)
+        _videoOverlayTick.value = ++_videoOverlayTickValue
+    }
+
+    fun stopVideoPlayback() {
+        _videoScrubPositionMs.value = null
+        service?.stopVideoPlayback()
+    }
+
+    // tap: single step in direction (-1 = left, 1 = right); hold: ramp through tiers
+    // the accumulated target is committed as a single debounced seek
+    fun scrubVideoBy(direction: Int, repeatCount: Int) {
+        val now = System.currentTimeMillis()
+        if (repeatCount == 0) {
+            // first press: reset accumulator, start fresh
+            val currentPos = _videoPositionMs.value
+            _scrubAccumulatedMs = currentPos
+            _scrubDirection = direction
+            _scrubTierIndex = 0
+            _scrubStepsInTier = 0
+            _scrubLastStepTime = now
+            _scrubAccumulatedMs += SCRUB_STEP_TIERS_MS[0] * direction
+        } else {
+            // held repeat: throttle and ramp
+            if (now - _scrubLastStepTime < SCRUB_REPEAT_THROTTLE_MS) return
+            // only accumulate if still going the same direction
+            if (direction != _scrubDirection) {
+                _scrubDirection = direction
+                _scrubTierIndex = 0
+                _scrubStepsInTier = 0
+            }
+            _scrubStepsInTier++
+            if (_scrubStepsInTier >= SCRUB_RAMP_DWELL_STEPS &&
+                _scrubTierIndex < SCRUB_STEP_TIERS_MS.lastIndex) {
+                _scrubTierIndex++
+                _scrubStepsInTier = 0
+            }
+            _scrubAccumulatedMs += SCRUB_STEP_TIERS_MS[_scrubTierIndex] * direction
+            _scrubLastStepTime = now
+        }
+        // clamp to [0, duration]
+        val dur = _videoDurationMs.value
+        if (dur > 0L) _scrubAccumulatedMs = _scrubAccumulatedMs.coerceIn(0L, dur)
+        else _scrubAccumulatedMs = _scrubAccumulatedMs.coerceAtLeast(0L)
+        _videoScrubPositionMs.value = _scrubAccumulatedMs
+        _videoOverlayTick.value = ++_videoOverlayTickValue
+
+        // debounce: cancel previous commit, schedule new one
+        _scrubCommitJob?.cancel()
+        _scrubCommitJob = kotlinx.coroutines.MainScope().launch {
+            delay(SCRUB_COMMIT_DEBOUNCE_MS)
+            service?.seekVideoTo(_scrubAccumulatedMs)
+        }
+    }
+
+    // just show the transport overlay without any action (DPAD_UP/DOWN)
+    fun showVideoOverlay() {
+        _videoOverlayTick.value = ++_videoOverlayTickValue
+    }
+
+    private var _videoOverlayTickValue = 0L
 
     // dacp controls
     fun dacpPlayPause() { service?.togglePlayPause() }
@@ -356,7 +528,21 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             _videoAspect.value = it.videoAspect.value
             _videoResolution.value = it.videoResolution.value
             _audioOnly.value = it.audioOnly.value
-            _videoPlaybackActive.value = it.videoPlaybackActive.value
+            val videoActive = it.videoPlaybackActive.value
+            if (videoActive && !_videoPlaybackActive.value) {
+                // fresh AirPlay Video session: playback starts playing, no stale overlay
+                _videoPlaying.value = true
+                _videoOverlayTick.value = 0L
+                _videoScrubPositionMs.value = null
+            }
+            _videoPlaybackActive.value = videoActive
+            // sync video state from the snapshot for the seek bar overlay
+            if (videoActive) {
+                val info = it.videoPlaybackInfo.value
+                _videoPlaying.value = info.playing
+                _videoPositionMs.value = info.positionMs
+                _videoDurationMs.value = info.durationMs
+            }
             _mirroringActive.value = it.mirroringActive.value
             _trackInfo.value = it.trackInfo.value
             _positionMs.value = it.currentPositionMs()

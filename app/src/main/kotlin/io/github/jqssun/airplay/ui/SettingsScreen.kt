@@ -43,12 +43,14 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val keepScreenOn by viewModel.keepScreenOn.collectAsState()
     val autoAudioMode by viewModel.autoAudioMode.collectAsState()
     val launchOnConnect by viewModel.launchOnConnect.collectAsState()
+    val returnToPreviousApp by viewModel.returnToPreviousApp.collectAsState()
     val maxFps by viewModel.maxFps.collectAsState()
     val overscanned by viewModel.overscanned.collectAsState()
     val requirePin by viewModel.requirePin.collectAsState()
     val allowNewConn by viewModel.allowNewConn.collectAsState()
     val autoStart by viewModel.autoStart.collectAsState()
     val bootAutoStart by viewModel.bootAutoStart.collectAsState()
+    val runInBackground by viewModel.runInBackground.collectAsState()
     val serverPort by viewModel.serverPort.collectAsState()
     val audioLatencyMs by viewModel.audioLatencyMs.collectAsState()
     val swAlacEnabled by viewModel.swAlacEnabled.collectAsState()
@@ -129,6 +131,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onCheckedChange = { viewModel.setBootAutoStart(it) }
         )
 
+        SettingSwitch(
+            title = stringResource(R.string.setting_run_in_background),
+            description = stringResource(R.string.setting_run_in_background_desc),
+            checked = runInBackground,
+            onCheckedChange = { viewModel.setRunInBackground(it) }
+        )
+
         SectionHeader(stringResource(R.string.section_connection))
 
         SettingSwitch(
@@ -173,6 +182,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
             description = stringResource(R.string.setting_auto_audio_mode_desc),
             checked = autoAudioMode,
             onCheckedChange = { viewModel.setAutoAudioMode(it) }
+        )
+
+        SettingSwitch(
+            title = stringResource(R.string.setting_return_to_previous_app),
+            description = stringResource(R.string.setting_return_to_previous_app_desc),
+            checked = returnToPreviousApp,
+            onCheckedChange = { viewModel.setReturnToPreviousApp(it) }
         )
 
         val ctx = LocalContext.current

@@ -20,7 +20,19 @@ class AirPlayVideoPlayer(private val context: Context) {
     private var player: ExoPlayer? = null
     private var pendingSurface: Surface? = null
 
-    var onPlaybackInfo: ((position: Float, duration: Float, rate: Float, readyToPlay: Boolean) -> Unit)? = null
+    // playWhenReady is separate from rate: rate drops to 0 while buffering after a
+    // seek even though playback is still logically "playing" -- the UI overlay wants
+    // the logical state, the sender/native side wants the effective rate
+    var onPlaybackInfo: ((position: Float, duration: Float, rate: Float, readyToPlay: Boolean, playWhenReady: Boolean) -> Unit)? = null
+
+    // invoked (on the main thread) when playback ends on its own: natural
+    // end-of-stream, or a fatal player error. The error case matters for remote
+    // stops: the HLS source lives on the sender, so a sender that stops casting
+    // without a POST /stop just kills the source mid-stream and ExoPlayer halts on
+    // a fatal error, leaving the last decoded frame on the surface forever unless
+    // the owner tears the session down (mirrors uxplay's gstreamer EOS/error ->
+    // video_reset handling)
+    var onPlaybackEnded: (() -> Unit)? = null
 
     private val _reportTick = object : Runnable {
         override fun run() {
@@ -32,11 +44,20 @@ class AirPlayVideoPlayer(private val context: Context) {
     private val _listener = object : Player.Listener {
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
             Log.w(TAG, "playback error", error)
+            onPlaybackEnded?.invoke()
+        }
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) onPlaybackEnded?.invoke()
         }
     }
 
     fun play(location: String, startPositionSeconds: Float) = mainHandler.post {
-        stopInternal()
+        // don't report the "stopped" sentinel (duration=-1) while recycling any
+        // old player here: the sender polls GET /playback-info right after POST
+        // /play, and reading duration=-1 at that point makes the native side
+        // treat the brand-new session as already finished (video_reset
+        // HLS_SHUTDOWN) and tear it down ~100ms in. Only report on real stops.
+        stopInternal(reportStopped = false)
         val p = ExoPlayer.Builder(context).build().also {
             it.addListener(_listener)
             pendingSurface?.let { s -> it.setVideoSurface(s) }
@@ -65,9 +86,27 @@ class AirPlayVideoPlayer(private val context: Context) {
     // local-only control (tap-to-pause on the receiver's screen): the source device
     // isn't told about this, it's purely how the tablet plays back what it already
     // received -- matches how a TV's own remote can pause without the source knowing.
+    // The sender still self-syncs: its next GET /playback-info poll sees rate=0.
     fun togglePlayPause() = mainHandler.post {
         val p = player ?: return@post
         p.playWhenReady = !p.playWhenReady
+    }
+
+    // local-only control (TV remote play/pause keys), same contract as togglePlayPause
+    fun setPlaying(playing: Boolean) = mainHandler.post {
+        player?.playWhenReady = playing
+    }
+
+    // local-only relative seek (TV remote left/right/rewind/fast-forward),
+    // clamped to [0, duration] once the duration is known
+    fun seekBy(deltaMs: Long) = mainHandler.post {
+        val p = player ?: return@post
+        var target = (p.currentPosition + deltaMs).coerceAtLeast(0)
+        val duration = p.duration
+        if (duration != androidx.media3.common.C.TIME_UNSET) {
+            target = target.coerceAtMost(duration)
+        }
+        p.seekTo(target)
     }
 
     fun setSurface(surface: Surface) = mainHandler.post {
@@ -82,16 +121,21 @@ class AirPlayVideoPlayer(private val context: Context) {
         player?.setVideoSurface(null)
     }
 
-    fun stop() = mainHandler.post { stopInternal() }
+    fun stop() = mainHandler.post { stopInternal(reportStopped = true) }
 
-    private fun stopInternal() {
+    private fun stopInternal(reportStopped: Boolean) {
         mainHandler.removeCallbacks(_reportTick)
         player?.let {
             it.removeListener(_listener)
             it.release()
         }
         player = null
-        onPlaybackInfo?.invoke(0f, -1f, 0f, false)
+        // duration=-1 is the "video finished" sentinel: the native GET
+        // /playback-info handler answers the sender's next poll with a session
+        // shutdown
+        if (reportStopped) {
+            onPlaybackInfo?.invoke(0f, -1f, 0f, false, false)
+        }
     }
 
     private fun _reportPlaybackInfo() {
@@ -102,7 +146,7 @@ class AirPlayVideoPlayer(private val context: Context) {
         val duration = durationMs / 1000f
         val rate = if (p.playWhenReady && p.playbackState == Player.STATE_READY) p.playbackParameters.speed else 0f
         val ready = p.playbackState == Player.STATE_READY
-        onPlaybackInfo?.invoke(position, duration, rate, ready)
+        onPlaybackInfo?.invoke(position, duration, rate, ready, p.playWhenReady)
     }
 
     companion object {

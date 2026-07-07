@@ -331,6 +331,31 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeUpdatePlaybackInfo(
     android_callbacks_update_playback_info(&ctx->cb_ctx, position, duration, rate, readyToPlay ? 1 : 0);
 }
 
+/* Milliseconds since the sender last made a request touching the AirPlay Video
+   session (/play, /rate, /scrub, /stop, GET /playback-info polls, playlist
+   actions), or -1 if none yet. Polled by the Kotlin sender-liveness watchdog. */
+extern "C"
+JNIEXPORT jlong JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeMsSinceVideoRequest(
+    JNIEnv *env, jobject thiz, jlong handle) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx) return -1;
+    return (jlong)android_callbacks_ms_since_video_request(&ctx->cb_ctx);
+}
+
+/* Running count of video-session requests (dominated by GET /playback-info polls),
+   for throttled sender-poll-activity logging on the Kotlin side. */
+extern "C"
+JNIEXPORT jlong JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeVideoRequestCount(
+    JNIEnv *env, jobject thiz, jlong handle) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx) return 0;
+    return (jlong)android_callbacks_video_request_count(&ctx->cb_ctx);
+}
+
 /* ---------- Software ALAC decoder (Apple reference, Apache 2.0) ---------- */
 
 extern "C"

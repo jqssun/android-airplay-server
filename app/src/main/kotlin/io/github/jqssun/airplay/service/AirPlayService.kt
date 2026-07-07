@@ -30,6 +30,7 @@ import androidx.media.app.NotificationCompat as MediaNotificationCompat
 import io.github.jqssun.airplay.MainActivity
 import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.R
+import io.github.jqssun.airplay.WatchdogReceiver
 import io.github.jqssun.airplay.audio.DacpController
 import io.github.jqssun.airplay.audio.DmapParser
 import io.github.jqssun.airplay.audio.TrackInfo
@@ -44,12 +45,22 @@ import java.net.NetworkInterface
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+// snapshot of the local AirPlay Video (HLS) ExoPlayer state, refreshed by the same
+// 250ms tick that feeds the native /playback-info handler; the UI transport overlay
+// reads this instead of poking the player from off the main thread
+data class VideoPlaybackInfo(
+    val positionMs: Long = 0,
+    val durationMs: Long = 0,
+    val playing: Boolean = true,
+)
+
 class AirPlayService : Service(), RaopCallbackHandler {
 
     private var nativeHandle = 0L
     private var nsdManager: NsdServiceManager? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var foregroundStarted = false
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     val videoRenderer = VideoRenderer()
     val audioRenderer = AudioRenderer()
@@ -72,6 +83,9 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
     private val _videoPlaybackActive = MutableStateFlow(false)
     val videoPlaybackActive = _videoPlaybackActive.asStateFlow()
+
+    private val _videoPlaybackInfo = MutableStateFlow(VideoPlaybackInfo())
+    val videoPlaybackInfo = _videoPlaybackInfo.asStateFlow()
 
     // true only once onVideoSize (the mirroring-only video_report_size callback) has
     // actually reported a real size for the current connection cycle -- unlike
@@ -136,16 +150,42 @@ class AirPlayService : Service(), RaopCallbackHandler {
         dacpController = DacpController(this)
         mediaSession = MediaSessionCompat(this, "AirPlay").apply {
             setCallback(object : MediaSessionCompat.Callback() {
+                // during an AirPlay Video (HLS) session transport keys drive the local
+                // ExoPlayer; otherwise they keep controlling the audio sender via DACP
                 override fun onPlay() {
+                    if (_videoPlaybackActive.value) {
+                        airPlayVideoPlayer.setPlaying(true)
+                        return
+                    }
                     _setPlaying(true)
                     dacpController?.play()
                 }
                 override fun onPause() {
+                    if (_videoPlaybackActive.value) {
+                        airPlayVideoPlayer.setPlaying(false)
+                        return
+                    }
                     _setPlaying(false)
                     dacpController?.pause()
                 }
-                override fun onSkipToNext() { dacpController?.nextItem() }
-                override fun onSkipToPrevious() { dacpController?.prevItem() }
+                override fun onStop() {
+                    if (_videoPlaybackActive.value) stopVideoPlayback()
+                }
+                override fun onFastForward() {
+                    if (_videoPlaybackActive.value) airPlayVideoPlayer.seekBy(VIDEO_SEEK_FORWARD_MS)
+                }
+                override fun onRewind() {
+                    if (_videoPlaybackActive.value) airPlayVideoPlayer.seekBy(-VIDEO_SEEK_BACK_MS)
+                }
+                override fun onSeekTo(pos: Long) {
+                    if (_videoPlaybackActive.value) airPlayVideoPlayer.scrub(pos / 1000f)
+                }
+                override fun onSkipToNext() {
+                    if (!_videoPlaybackActive.value) dacpController?.nextItem()
+                }
+                override fun onSkipToPrevious() {
+                    if (!_videoPlaybackActive.value) dacpController?.prevItem()
+                }
             })
         }
         mediaReceiver = object : BroadcastReceiver() {
@@ -164,22 +204,50 @@ class AirPlayService : Service(), RaopCallbackHandler {
         }
         ContextCompat.registerReceiver(this, mediaReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
 
-        airPlayVideoPlayer.onPlaybackInfo = { position, duration, rate, ready ->
+        // natural end-of-stream, or the sender stopping without a POST /stop (its HLS
+        // source just dies and the player errors out): end the session either way so
+        // the UI isn't left frozen on the last decoded frame
+        airPlayVideoPlayer.onPlaybackEnded = { endVideoPlayback(" (playback ended)") }
+
+        airPlayVideoPlayer.onPlaybackInfo = { position, duration, rate, ready, playWhenReady ->
             if (nativeHandle != 0L) {
                 NativeBridge.nativeUpdatePlaybackInfo(nativeHandle, position, duration, rate, ready)
+            }
+            // keep the media session mirroring the real ExoPlayer state so system
+            // media-button routing (TV remotes, bluetooth) stays on the video session
+            if (_videoPlaybackActive.value) {
+                _updateVideoPlaybackState(position, rate)
+                _videoPlaybackInfo.value = VideoPlaybackInfo(
+                    positionMs = (position * 1000).toLong(),
+                    durationMs = if (duration > 0f) (duration * 1000).toLong() else 0L,
+                    playing = playWhenReady,
+                )
             }
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_START_SERVER) {
+        val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
+        // a null intent means the system recreated us after the process was killed
+        // (START_STICKY) -- only resume if we were actually running before, not
+        // after a deliberate stopServer()
+        val isStickyRestart = intent == null && prefs.getBoolean(Prefs.SERVER_SHOULD_RUN, false)
+        if (intent?.action == ACTION_START_SERVER || isStickyRestart) {
             promoteToForeground()
-            val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
-            val name = prefs.getString(Prefs.SERVER_NAME, Prefs.DEF_SERVER_NAME) ?: Prefs.DEF_SERVER_NAME
-            startServer(name, ensureServiceStarted = false)
+            startServer(Prefs.serverName(this), ensureServiceStarted = false)
             if (_serverState.value != ServerState.RUNNING) stopSelf(startId)
         }
-        return START_NOT_STICKY
+        return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        // some OEM battery managers kill the whole process shortly after the task
+        // card is swiped away, even for an active foreground service -- pull the
+        // watchdog check in close instead of waiting out the full interval
+        if (_serverState.value == ServerState.RUNNING) {
+            WatchdogReceiver.schedule(applicationContext, delayMs = 15_000L)
+        }
     }
 
     fun startServer(name: String) {
@@ -188,7 +256,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
 
     private fun startServer(name: String, ensureServiceStarted: Boolean) {
         if (_serverState.value == ServerState.RUNNING) return
-        val effectiveName = name.ifBlank { Prefs.DEF_SERVER_NAME }
+        val effectiveName = name.ifBlank { Prefs.defaultServerName(this) }
 
         val prefs = getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -268,6 +336,8 @@ class AirPlayService : Service(), RaopCallbackHandler {
         nsdManager?.registerAirplay(resolvedName, port, airplayTxt)
 
         _serverState.value = ServerState.RUNNING
+        prefs.edit().putBoolean(Prefs.SERVER_SHOULD_RUN, true).apply()
+        WatchdogReceiver.schedule(this)
         if (ensureServiceStarted) {
             ContextCompat.startForegroundService(this, Intent(this, AirPlayService::class.java))
         }
@@ -308,11 +378,14 @@ class AirPlayService : Service(), RaopCallbackHandler {
         mediaSession?.isActive = false
         _audioOnly.value = false
         _videoPlaybackActive.value = false
+        _mirroringActive.value = false
         _trackInfo.value = TrackInfo()
         _positionMs.value = 0
         _durationMs.value = 0
         _serverState.value = ServerState.STOPPED
         _connectionCount.value = 0
+        getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE).edit().putBoolean(Prefs.SERVER_SHOULD_RUN, false).apply()
+        WatchdogReceiver.cancel(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
         foregroundStarted = false
         stopSelf()
@@ -339,6 +412,124 @@ class AirPlayService : Service(), RaopCallbackHandler {
         airPlayVideoPlayer.togglePlayPause()
     }
 
+    fun setVideoPlaying(playing: Boolean) {
+        airPlayVideoPlayer.setPlaying(playing)
+    }
+
+    fun seekVideoBy(deltaMs: Long) {
+        airPlayVideoPlayer.seekBy(deltaMs)
+    }
+
+    // absolute local seek: the transport overlay accumulates held-key scrubbing in the
+    // viewmodel and commits the final target here once, instead of dozens of seekBy calls
+    fun seekVideoTo(positionMs: Long) {
+        airPlayVideoPlayer.scrub(positionMs / 1000f)
+    }
+
+    // local stop (TV remote stop/back): same teardown as the sender's POST /stop;
+    // the sender learns about it from ready=false on its next /playback-info poll
+    fun stopVideoPlayback() {
+        endVideoPlayback(" (local)")
+    }
+
+    // -- sender-liveness watchdog for AirPlay Video --
+    //
+    // Backstop for sender apps that abandon a video without a usable stop signal
+    // (the deterministic primary signal is the native play-connection-close rule,
+    // RESET_TYPE_HLS_CONN_CLOSED in raop.c). The native layer timestamps every
+    // video-session request (NativeBridge.nativeMsSinceVideoRequest); while a video
+    // session is active but NOT progressing, this watchdog treats a long request
+    // silence as sender-abandoned and ends the session. It never fires while the
+    // position is advancing, so a steady-state playing session can't be killed by
+    // it. Note it does NOT cover senders that keep polling /playback-info after
+    // abandoning (iFit does, from a connection that outlives the session): that
+    // case is exactly what the connection-close rule is for. The watchdog also
+    // logs sender poll activity so real-device traces show which case occurred.
+
+    // last position sampled by the watchdog, to detect "not progressing"
+    private var _livenessLastPositionMs = -1L
+    // poll-activity accounting for the throttled request logs
+    private var _livenessLastRequestCount = -1L
+    private var _livenessLogCountdown = 0
+    private var _senderPollingStopped = false
+
+    private val _senderLivenessTick = object : Runnable {
+        override fun run() {
+            if (!_videoPlaybackActive.value) return
+            _checkSenderLiveness()
+            if (_videoPlaybackActive.value) {
+                mainHandler.postDelayed(this, SENDER_LIVENESS_CHECK_MS)
+            }
+        }
+    }
+
+    private fun _checkSenderLiveness() {
+        val handle = nativeHandle
+        if (handle == 0L) return
+        val silentMs = NativeBridge.nativeMsSinceVideoRequest(handle)
+        // -1 (no request seen) can't normally happen while a session is active,
+        // since the session's own POST /play bumps the timestamp
+        if (silentMs < 0) return
+        val requestCount = NativeBridge.nativeVideoRequestCount(handle)
+
+        // throttled poll-activity trace (logcat debug): one line per 5s with the
+        // number of sender requests (mostly /playback-info polls) seen since the
+        // previous line -- the ground truth for whether a sender is still polling
+        if (_livenessLastRequestCount < 0) {
+            _livenessLastRequestCount = requestCount
+            _livenessLogCountdown = LIVENESS_LOG_EVERY_TICKS
+        } else if (--_livenessLogCountdown <= 0) {
+            Log.d(TAG, "AirPlay Video sender requests: " +
+                "+${requestCount - _livenessLastRequestCount} in last " +
+                "${LIVENESS_LOG_EVERY_TICKS}s (last ${silentMs}ms ago)")
+            _livenessLastRequestCount = requestCount
+            _livenessLogCountdown = LIVENESS_LOG_EVERY_TICKS
+        }
+
+        // polling stopped/resumed transitions (app log)
+        val pollingSilent = silentMs >= SENDER_POLL_STOPPED_MS
+        if (pollingSilent && !_senderPollingStopped) {
+            _senderPollingStopped = true
+            log("AirPlay Video sender polling stopped (last request ${silentMs / 1000}s ago)")
+        } else if (!pollingSilent && _senderPollingStopped) {
+            _senderPollingStopped = false
+            log("AirPlay Video sender polling resumed")
+        }
+
+        // positionMs comes from the 250ms ExoPlayer snapshot; between watchdog ticks
+        // (1s apart) it always moves while playback progresses. It stays frozen when
+        // paused, stalled, errored, or still stuck loading (no snapshot at all).
+        val positionMs = _videoPlaybackInfo.value.positionMs
+        val progressing = positionMs != _livenessLastPositionMs
+        _livenessLastPositionMs = positionMs
+        if (progressing) return
+        if (silentMs < SENDER_LIVENESS_CHECK_MS) return // requests still arriving
+        // true-silence countdown, visible in traces (at most ~10 lines per incident)
+        log("AirPlay Video sender silent ${silentMs / 1000}s/" +
+            "${SENDER_ABANDON_TIMEOUT_MS / 1000}s, position frozen")
+        if (silentMs < SENDER_ABANDON_TIMEOUT_MS) return
+        endVideoPlayback(" (sender silent for ${silentMs / 1000}s)")
+    }
+
+    /**
+     * Single teardown for the end of an AirPlay Video session, whatever ended it:
+     * the sender's POST /stop or TEARDOWN ([onVideoStop]), the sender dropping its
+     * connections ([onConnectionDestroy]), a local TV-remote BACK/STOP
+     * ([stopVideoPlayback]) or the local player finishing/erroring out
+     * ([AirPlayVideoPlayer.onPlaybackEnded]). Clearing [videoPlaybackActive] here is
+     * what dismisses the video screen in the UI (MainViewModel mirrors this flow
+     * event-driven) and what lets a session-summoned MainActivity return to the
+     * previously foregrounded app.
+     */
+    private fun endVideoPlayback(logSuffix: String = "") {
+        if (!_videoPlaybackActive.value) return
+        _videoPlaybackActive.value = false
+        mainHandler.removeCallbacks(_senderLivenessTick)
+        airPlayVideoPlayer.stop()
+        if (!_audioOnly.value) mediaSession?.isActive = false
+        log("AirPlay Video stopped$logSuffix")
+    }
+
     override fun onDestroy() {
         stopServer()
         mediaReceiver?.let {
@@ -363,23 +554,41 @@ class AirPlayService : Service(), RaopCallbackHandler {
     }
 
     override fun onVideoPlay(location: String, startPositionSeconds: Float) {
+        _videoPlaybackInfo.value = VideoPlaybackInfo(positionMs = (startPositionSeconds * 1000).toLong())
         _videoPlaybackActive.value = true
         airPlayVideoPlayer.play(location, startPositionSeconds)
+        // claim media-button routing so remote play/pause/stop keys reach the video
+        // player even when they arrive as media-session events rather than KeyEvents
+        mediaSession?.isActive = true
         log("AirPlay Video play: $location @ ${startPositionSeconds}s")
+        // (re)arm the sender-liveness watchdog for this session
+        mainHandler.removeCallbacks(_senderLivenessTick)
+        _livenessLastPositionMs = -1L
+        _livenessLastRequestCount = -1L
+        _senderPollingStopped = false
+        mainHandler.postDelayed(_senderLivenessTick, SENDER_LIVENESS_CHECK_MS)
+        // (re-)summon the UI for EVERY play, not only the first client connection:
+        // switching videos in the sender app stops one item and plays the next on
+        // the same connection -- possibly after a summoned activity has already
+        // stepped back to the previous app -- and without this the new video would
+        // play its audio into an invisible activity with no surface. Harmless when
+        // the activity is already frontmost (singleTop redelivery; the summon flag
+        // is only set when the start actually brings the activity forward).
+        if (shouldLaunchOnConnect()) launchMainActivity()
     }
 
     override fun onVideoScrub(positionSeconds: Float) {
+        log("AirPlay Video scrub: ${positionSeconds}s")
         airPlayVideoPlayer.scrub(positionSeconds)
     }
 
     override fun onVideoRate(rate: Float) {
+        log("AirPlay Video rate: $rate")
         airPlayVideoPlayer.setRate(rate)
     }
 
     override fun onVideoStop() {
-        _videoPlaybackActive.value = false
-        airPlayVideoPlayer.stop()
-        log("AirPlay Video stopped")
+        endVideoPlayback()
     }
 
     override fun onAudioFormat(ct: Int, spf: Int, usingScreen: Boolean) {
@@ -431,10 +640,7 @@ class AirPlayService : Service(), RaopCallbackHandler {
             // the client may drop the connection without ever sending POST /stop
             // (closing the app, leaving the video, losing the network), so don't
             // rely solely on onVideoStop to end AirPlay Video playback
-            if (_videoPlaybackActive.value) {
-                _videoPlaybackActive.value = false
-                airPlayVideoPlayer.stop()
-            }
+            endVideoPlayback(" (disconnected)")
         }
         log("Client disconnected (${_connectionCount.value})")
     }
@@ -551,6 +757,31 @@ class AirPlayService : Service(), RaopCallbackHandler {
         _updateMediaNotification()
     }
 
+    // AirPlay Video variant of _updatePlaybackState: state comes straight from the
+    // 250ms ExoPlayer snapshot instead of the audio progress extrapolation, and the
+    // (audio-only) media notification is left alone
+    private fun _updateVideoPlaybackState(positionSeconds: Float, rate: Float) {
+        val playing = rate > 0f
+        val state = PlaybackStateCompat.Builder()
+            .setActions(
+                PlaybackStateCompat.ACTION_PLAY or
+                PlaybackStateCompat.ACTION_PAUSE or
+                PlaybackStateCompat.ACTION_PLAY_PAUSE or
+                PlaybackStateCompat.ACTION_STOP or
+                PlaybackStateCompat.ACTION_FAST_FORWARD or
+                PlaybackStateCompat.ACTION_REWIND or
+                PlaybackStateCompat.ACTION_SEEK_TO
+            )
+            .setState(
+                if (playing) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED,
+                (positionSeconds * 1000).toLong(),
+                if (playing) rate else 0f,
+                SystemClock.elapsedRealtime()
+            )
+            .build()
+        mediaSession?.setPlaybackState(state)
+    }
+
     private fun clearPin() {
         _lastPin = null
         pinCallback?.invoke(null)
@@ -660,10 +891,15 @@ class AirPlayService : Service(), RaopCallbackHandler {
         return builder.build()
     }
 
+    // "Open this application on connect": summon the UI for an incoming session. The
+    // extra marks the start as session-driven so MainActivity can step back out of the
+    // way (return to the previously foregrounded app/input) once the session ends --
+    // unlike launcher/notification starts, which carry no extra.
     private fun launchMainActivity() {
         Handler(Looper.getMainLooper()).post {
             val launchIntent = Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                .putExtra(MainActivity.EXTRA_SESSION_SUMMON, true)
             try {
                 startActivity(launchIntent)
             } catch (e: Exception) {
@@ -702,5 +938,26 @@ class AirPlayService : Service(), RaopCallbackHandler {
         const val ACTION_NEXT = "io.github.jqssun.airplay.NEXT"
         const val ACTION_PREV = "io.github.jqssun.airplay.PREV"
         const val ACTION_START_SERVER = "io.github.jqssun.airplay.START_SERVER"
+        // TV-remote relative seek steps for AirPlay Video
+        const val VIDEO_SEEK_BACK_MS = 10_000L
+        const val VIDEO_SEEK_FORWARD_MS = 15_000L
+
+        // -- sender-liveness watchdog for AirPlay Video --
+        //
+        // Backstop for sender apps that abandon a video without a usable stop signal
+        // (the deterministic primary signal is the native play-connection-close rule,
+        // RESET_TYPE_HLS_CONN_CLOSED in raop.c). The native layer timestamps every
+        // video-session request (NativeBridge.nativeMsSinceVideoRequest); while a video
+        // session is active but NOT progressing, this watchdog treats a long request
+        // silence as sender-abandoned and ends the session. It never fires while the
+        // position is advancing, so a steady-state playing session can't be killed by
+        // it. Note it does NOT cover senders that keep polling /playback-info after
+        // abandoning (iFit does, from a connection that outlives the session): that
+        // case is exactly what the connection-close rule is for. The watchdog also
+        // logs sender poll activity so real-device traces show which case occurred.
+        const val SENDER_ABANDON_TIMEOUT_MS = 10_000L
+        private const val SENDER_LIVENESS_CHECK_MS = 1_000L
+        private const val LIVENESS_LOG_EVERY_TICKS = 5
+        private const val SENDER_POLL_STOPPED_MS = 3_000L
     }
 }

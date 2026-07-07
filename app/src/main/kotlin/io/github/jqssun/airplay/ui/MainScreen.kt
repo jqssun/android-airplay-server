@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -127,15 +128,28 @@ fun MainScreen(
     // AirPlay Video (HLS /play protocol): full-screen, independent of mirroring's
     // fullscreen/pip/tab state, since it's a wholly separate playback surface
     if (videoPlaybackActive) {
-        // local-only playback state for the tap-to-pause icon; not synced from the
-        // player (see AirPlayVideoPlayer.togglePlayPause), just mirrors what we just
-        // asked it to do so the icon shown always matches the tap that triggered it
-        var isPlaying by remember(videoPlaybackActive) { mutableStateOf(true) }
-        var showPlayPauseIcon by remember { mutableStateOf(false) }
-        LaunchedEffect(showPlayPauseIcon) {
-            if (showPlayPauseIcon) {
-                delay(700)
-                showPlayPauseIcon = false
+        // transport overlay (seek bar + play/pause state) for local transport actions
+        // (screen tap or TV remote via MainActivity.dispatchKeyEvent); shown on any
+        // action, auto-hidden after a few seconds of playback, kept up while paused
+        // or while a held-key scrub is still in flight
+        val overlayTick by viewModel.videoOverlayTick.collectAsState()
+        val playing by viewModel.videoPlaying.collectAsState()
+        val positionMs by viewModel.videoPositionMs.collectAsState()
+        val durationMs by viewModel.videoDurationMs.collectAsState()
+        val scrubPositionMs by viewModel.videoScrubPositionMs.collectAsState()
+        val scrubbing = scrubPositionMs != null
+        var overlayVisible by remember { mutableStateOf(false) }
+        LaunchedEffect(overlayTick, playing, scrubbing) {
+            // tick == 0 is the untouched fresh-session state; after any interaction
+            // an external pause/resume (sender /rate) also (re)shows the overlay
+            if (overlayTick == 0L) {
+                overlayVisible = false
+            } else {
+                overlayVisible = true
+                if (playing && !scrubbing) {
+                    delay(3000)
+                    overlayVisible = false
+                }
             }
         }
         Box(
@@ -145,30 +159,19 @@ fun MainScreen(
             AirPlayVideoView(
                 onSurfaceAvailable = { viewModel.onVideoPlaybackSurfaceAvailable(it) },
                 onSurfaceDestroyed = { viewModel.onVideoPlaybackSurfaceDestroyed(it) },
-                onTap = {
-                    isPlaying = !isPlaying
-                    showPlayPauseIcon = true
-                    viewModel.toggleVideoPlayPause()
-                }
+                onTap = { viewModel.toggleVideoPlayPause() }
             )
             androidx.compose.animation.AnimatedVisibility(
-                visible = showPlayPauseIcon,
+                visible = overlayVisible,
                 enter = androidx.compose.animation.fadeIn(),
-                exit = androidx.compose.animation.fadeOut()
+                exit = androidx.compose.animation.fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(88.dp)
-                        .background(Color.Black.copy(alpha = 0.5f), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = if (isPlaying) Icons.Default.PlayArrow else Icons.Default.Pause,
-                        contentDescription = stringResource(R.string.cd_play_pause),
-                        tint = Color.White,
-                        modifier = Modifier.size(48.dp)
-                    )
-                }
+                VideoTransportOverlay(
+                    playing = playing,
+                    positionMs = scrubPositionMs ?: positionMs,
+                    durationMs = durationMs
+                )
             }
         }
         return
@@ -530,12 +533,79 @@ private fun FullscreenVideo(
     }
 }
 
+// Android-TV-style transport overlay for AirPlay Video: play/pause state, seek bar
+// and position/duration text over a bottom scrim. While scrubbing, positionMs is the
+// pending scrub target rather than the live position (see MainViewModel.scrubVideoBy).
+@Composable
+private fun VideoTransportOverlay(
+    playing: Boolean,
+    positionMs: Long,
+    durationMs: Long,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f))
+                )
+            )
+            .padding(horizontal = 40.dp)
+            .padding(top = 48.dp, bottom = 28.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+            contentDescription = stringResource(R.string.cd_play_pause),
+            tint = Color.White,
+            modifier = Modifier.size(36.dp)
+        )
+        Spacer(Modifier.width(20.dp))
+        // duration 0 = not yet known (or live stream): no meaningful bar to draw
+        if (durationMs > 0) {
+            LinearProgressIndicator(
+                progress = { (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) },
+                color = Color.White,
+                trackColor = Color.White.copy(alpha = 0.3f),
+                drawStopIndicator = {},
+                modifier = Modifier
+                    .weight(1f)
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+            )
+            Spacer(Modifier.width(20.dp))
+            Text(
+                text = "${_formatTime(positionMs)} / ${_formatTime(durationMs)}",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.White
+            )
+        } else {
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = _formatTime(positionMs),
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.White
+            )
+        }
+    }
+}
+
 @Composable
 private fun NowPlayingContent(viewModel: MainViewModel) {
     val track by viewModel.trackInfo.collectAsState()
     val positionMs by viewModel.positionMs.collectAsState()
     val durationMs by viewModel.durationMs.collectAsState()
     val playing by viewModel.playing.collectAsState()
+
+    // TV remote: land focus on play/pause when the Now Playing screen appears
+    // (otherwise it stays on the server start/stop button, where DPAD CENTER
+    // would stop the server); LEFT/RIGHT on it skip tracks via DACP directly
+    val tv = isTv()
+    val playPauseFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (tv) playPauseFocus.requestFocus()
+    }
 
     Column(
         modifier = Modifier
@@ -631,7 +701,14 @@ private fun NowPlayingContent(viewModel: MainViewModel) {
             }
             FilledIconButton(
                 onClick = { viewModel.dacpPlayPause() },
-                modifier = Modifier.size(56.dp).dpadFocus(CircleShape)
+                modifier = Modifier
+                    .size(56.dp)
+                    .dpadFocus(CircleShape)
+                    .focusRequester(playPauseFocus)
+                    .dpadAdjust(
+                        onLeft = { viewModel.dacpPrev() },
+                        onRight = { viewModel.dacpNext() }
+                    )
             ) {
                 Icon(
                     if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -647,7 +724,8 @@ private fun NowPlayingContent(viewModel: MainViewModel) {
 
 private fun _formatTime(ms: Long): String {
     val s = (ms / 1000).toInt()
-    return "%d:%02d".format(s / 60, s % 60)
+    return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60)
+    else "%d:%02d".format(s / 60, s % 60)
 }
 
 @Composable
