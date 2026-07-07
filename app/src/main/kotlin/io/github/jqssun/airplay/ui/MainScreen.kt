@@ -441,6 +441,15 @@ private fun NowPlayingContent(viewModel: MainViewModel) {
     val durationMs by viewModel.durationMs.collectAsState()
     val playing by viewModel.playing.collectAsState()
 
+    // TV remote: land focus on play/pause when the Now Playing screen appears
+    // (otherwise it stays on the server start/stop button, where DPAD CENTER
+    // would stop the server); LEFT/RIGHT on it skip tracks via DACP directly
+    val tv = isTv()
+    val playPauseFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (tv) playPauseFocus.requestFocus()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -535,7 +544,14 @@ private fun NowPlayingContent(viewModel: MainViewModel) {
             }
             FilledIconButton(
                 onClick = { viewModel.dacpPlayPause() },
-                modifier = Modifier.size(56.dp).dpadFocus(CircleShape)
+                modifier = Modifier
+                    .size(56.dp)
+                    .dpadFocus(CircleShape)
+                    .focusRequester(playPauseFocus)
+                    .dpadAdjust(
+                        onLeft = { viewModel.dacpPrev() },
+                        onRight = { viewModel.dacpNext() }
+                    )
             ) {
                 Icon(
                     if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
