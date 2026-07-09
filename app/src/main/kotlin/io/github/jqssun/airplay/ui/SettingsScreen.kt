@@ -47,6 +47,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val advertiseVideo by viewModel.advertiseVideo.collectAsState()
     val advertiseAudio by viewModel.advertiseAudio.collectAsState()
     val launchOnConnect by viewModel.launchOnConnect.collectAsState()
+    val returnToPreviousApp by viewModel.returnToPreviousApp.collectAsState()
     val maxFps by viewModel.maxFps.collectAsState()
     val overscanned by viewModel.overscanned.collectAsState()
     val requirePin by viewModel.requirePin.collectAsState()
@@ -153,6 +154,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
             trailingContent = {
                 Switch(checked = launchOnConnect, onCheckedChange = null)
             }
+        )
+
+        SettingSwitch(
+            title = stringResource(R.string.setting_return_to_previous_app),
+            description = stringResource(R.string.setting_return_to_previous_app_desc),
+            checked = returnToPreviousApp,
+            onCheckedChange = { viewModel.setReturnToPreviousApp(it) }
         )
 
         SectionHeader(stringResource(R.string.section_display))
