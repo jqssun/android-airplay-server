@@ -1,0 +1,278 @@
+diff --git a/lib/airplay_video.c b/lib/airplay_video.c
+index ec478dd..1b8c61c 100644
+--- a/lib/airplay_video.c
++++ b/lib/airplay_video.c
+@@ -23,10 +23,13 @@
+ #include <stdbool.h>
+ #include <assert.h>
+ #include <pthread.h>
++#include <time.h>
+ 
+ #include "raop.h"
+ #include "airplay_video.h"
+ 
++#define MEDIA_PLAYLIST_REFRESH_SECS 5
++
+ typedef enum playlist_type_e {
+     NONE,
+     VOD,
+@@ -43,6 +46,8 @@ struct media_item_s {
+     playlist_type_t playlist_type;
+     int hls_version;
+     int media_sequence;
++    bool fetch_pending;
++    time_t last_fetched;
+ };
+ 
+ struct airplay_video_s {
+@@ -64,6 +69,7 @@ struct airplay_video_s {
+     media_item_t *media_data_store;
+     int num_uri;
+     pthread_mutex_t media_data_store_lock;
++    bool initial_fetch_complete;
+ };
+ 
+ static char *_raw_copy_playlist(const char *s) {
+@@ -593,9 +599,18 @@ void create_media_data_store(airplay_video_t * airplay_video, char ** uri_list,
+     }
+     airplay_video->media_data_store = media_data_store;
+     airplay_video->num_uri = num_uri;
++    airplay_video->initial_fetch_complete = false;
+     pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+ }
+ 
++void set_initial_fetch_complete(airplay_video_t *airplay_video) {
++    airplay_video->initial_fetch_complete = true;
++}
++
++bool get_initial_fetch_complete(airplay_video_t *airplay_video) {
++    return airplay_video->initial_fetch_complete;
++}
++
+ 
+ static int parse_media_playlist(media_item_t *media_item) {
+     const char *ptr = media_item->playlist;
+@@ -652,20 +667,28 @@ int store_media_playlist(airplay_video_t *airplay_video, char * media_playlist,
+     if ( num < 0 ||  num >= airplay_video->num_uri) {
+         pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+         return -1;
+-    } else if (media_data_store[num].playlist) {
++    } else if (media_data_store[num].playlist && !media_data_store[num].fetch_pending) {
+         pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+         return -2;
+     }
+-    /* dont store duplicate media paylists */
+-    for (int i = 0; i < num ; i++) {
+-        if (strcmp(media_data_store[i].uri, media_data_store[num].uri) == 0) {
+-            if (strcmp(media_data_store[i].playlist, media_playlist) == 0) {
+-                media_data_store[num].num = i;
+-                free (media_playlist);
+-                pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+-                return 1;
++    if (media_data_store[num].fetch_pending) {
++        media_data_store[num].fetch_pending = false;
++        if (media_data_store[num].playlist) {
++            free(media_data_store[num].playlist);
++            media_data_store[num].playlist = NULL;
++        }
++    } else {
++        /* dont store duplicate media paylists */
++        for (int i = 0; i < num ; i++) {
++            if (strcmp(media_data_store[i].uri, media_data_store[num].uri) == 0) {
++                if (strcmp(media_data_store[i].playlist, media_playlist) == 0) {
++                    media_data_store[num].num = i;
++                    free (media_playlist);
++                    pthread_mutex_unlock(&airplay_video->media_data_store_lock);
++                    return 1;
++                }
++                break;
+             }
+-            break;
+         }
+     }
+     media_item_t *media_item = &media_data_store[num];
+@@ -673,12 +696,14 @@ int store_media_playlist(airplay_video_t *airplay_video, char * media_playlist,
+     media_item->count = *count;
+     media_item->duration = *duration;
+     media_item->endlist = *endlist;
++    media_item->last_fetched = time(NULL);
+     parse_media_playlist(media_item);
+     pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+     return 0;
+ }
+ 
+-char * get_media_playlist(airplay_video_t *airplay_video, int *count, float *duration, const char *uri) {
++char * get_media_playlist(airplay_video_t *airplay_video, int *count, float *duration, const char *uri, bool *should_fetch, const char **remote_uri) {
++    *should_fetch = false;
+     pthread_mutex_lock(&airplay_video->media_data_store_lock);
+     media_item_t *media_data_store = airplay_video->media_data_store;
+     if (media_data_store == NULL) {
+@@ -687,12 +712,20 @@ char * get_media_playlist(airplay_video_t *airplay_video, int *count, float *dur
+     }
+     for (int i = 0; i < airplay_video->num_uri; i++) {
+         if (strstr(media_data_store[i].uri, uri)) {
+-            const char *playlist = media_data_store[media_data_store[i].num].playlist;
++            media_item_t *item = &media_data_store[media_data_store[i].num];
+             char *copy = NULL;
+-            if (playlist) {
+-                *count = media_data_store[media_data_store[i].num].count;
+-                *duration = media_data_store[media_data_store[i].num].duration;
+-                copy = _raw_copy_playlist(playlist);
++            bool stale = true;
++            if (item->playlist) {
++                *count = item->count;
++                *duration = item->duration;
++                copy = _raw_copy_playlist(item->playlist);
++                stale = !item->endlist &&
++                        time(NULL) - item->last_fetched >= MEDIA_PLAYLIST_REFRESH_SECS;
++            }
++            if (stale && !item->fetch_pending) {
++                item->fetch_pending = true;
++                *should_fetch = true;
++                *remote_uri = item->uri;
+             }
+             pthread_mutex_unlock(&airplay_video->media_data_store_lock);
+             return copy;
+@@ -710,6 +743,22 @@ char * get_media_uri_by_num(airplay_video_t *airplay_video, int num) {
+     return NULL;
+ }
+ 
++int get_media_uri_index_by_remote_url(airplay_video_t *airplay_video, const char *remote_url) {
++    pthread_mutex_lock(&airplay_video->media_data_store_lock);
++    media_item_t *media_data_store = airplay_video->media_data_store;
++    int found = -1;
++    if (media_data_store) {
++        for (int i = 0; i < airplay_video->num_uri; i++) {
++            if (media_data_store[i].uri && strcmp(media_data_store[i].uri, remote_url) == 0) {
++                found = i;
++                break;
++            }
++        }
++    }
++    pthread_mutex_unlock(&airplay_video->media_data_store_lock);
++    return found;
++}
++
+ int analyze_media_playlist(char *playlist, float *duration, bool *endlist) {
+     float next;
+     int count = 0;
+@@ -958,10 +1007,17 @@ char *adjust_yt_condensed_playlist(const char *media_playlist) {
+             if (i != last) {
+                 end = strchr(end, '/');
+             } else {
+-                /* the next line starts with either #EXTINF (usually) 
++                /* the next line starts with either #EXTINF (usually)
+                 or #EXT-X-ENDLIST (at last chunk)*/
+ 	            end = strstr(end, "#EXT");
+             }
++            if (!end) {
++                if (i == last) {
++                    end = old_pos + strlen(old_pos);
++                } else {
++                    goto stop_rewriting_chunks;
++                }
++            }
+             *new_pos = '/';
+             byte_count++;
+             new_pos++;
+@@ -972,7 +1028,9 @@ char *adjust_yt_condensed_playlist(const char *media_playlist) {
+             byte_count++;
+             new_pos++;
+ 
+-            if (!end) end = old_pos + strlen(old_pos);
++            if (end < old_pos) {
++                goto stop_rewriting_chunks;
++            }
+             len = end - old_pos;
+             end++;
+ 
+@@ -984,7 +1042,11 @@ char *adjust_yt_condensed_playlist(const char *media_playlist) {
+                 old_pos++; /* last entry is not followed by "/" separator */
+             }
+         }
++        if (ptr && old_pos != ptr) {
++            goto stop_rewriting_chunks;
++        }
+     }
++ stop_rewriting_chunks:
+     /* copy tail */
+      
+     len = media_playlist + strlen(media_playlist) - old_pos;
+diff --git a/lib/airplay_video.h b/lib/airplay_video.h
+index 95ad87c..77fdcb0 100644
+--- a/lib/airplay_video.h
++++ b/lib/airplay_video.h
+@@ -51,6 +51,9 @@ void set_next_media_uri_id(airplay_video_t *airplay_video, int id);
+ int get_next_media_uri_id(airplay_video_t *airplay_video);
+ int get_num_media_uri(airplay_video_t *airplay_video);
+ char *get_media_uri_by_num(airplay_video_t *airplay_video, int num);
++int get_media_uri_index_by_remote_url(airplay_video_t *airplay_video, const char *remote_url);
++void set_initial_fetch_complete(airplay_video_t *airplay_video);
++bool get_initial_fetch_complete(airplay_video_t *airplay_video);
+ 
+ int analyze_media_playlist(char *playlist, float *duration, bool *endlist);
+ int create_media_uri_table(const char *url_prefix, const char *master_playlist_data,
+@@ -59,7 +62,7 @@ void store_master_playlist(airplay_video_t *airplay_video, char *master_playlist
+ char *select_master_playlist_language(airplay_video_t *airplay_video, char *master_playlist);
+ int store_media_playlist(airplay_video_t *airplay_video, char *media_playlist, int *count, float *duration, bool*endlist, int num);
+ char *get_master_playlist(airplay_video_t *airplay_video);
+-char *get_media_playlist(airplay_video_t *airplay_video, int *count, float *duration, const char *uri);
++char *get_media_playlist(airplay_video_t *airplay_video, int *count, float *duration, const char *uri, bool *should_fetch, const char **remote_uri);
+ 
+ void destroy_media_data_store(airplay_video_t *airplay_video);
+ void create_media_data_store(airplay_video_t * airplay_video, char ** media_data_store, int num_uri);
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+index fbc7a7a..f49e62c 100644
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -676,6 +676,18 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t
+             float duration = 0.0f;
+             bool endlist = false;
+             int count = analyze_media_playlist(playlist, &duration, &endlist);
++            if (get_initial_fetch_complete(airplay_video)) {
++                int uri_num = get_media_uri_index_by_remote_url(airplay_video, fcup_response_url);
++                if (uri_num < 0) {
++                    free(playlist);
++                } else {
++                    store_media_playlist(airplay_video, playlist, &count, &duration, &endlist, uri_num);
++                }
++                plist_mem_free(fcup_response_url);
++                plist_mem_free(type);
++                plist_free(req_root_node);
++                return;
++            }
+             int uri_num = get_next_media_uri_id(airplay_video);
+             --uri_num;    // (next num is current num + 1)
+             int ret = store_media_playlist(airplay_video, playlist, &count, &duration, &endlist, uri_num);
+@@ -698,6 +710,7 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t
+                                                              get_next_FCUP_RequestID(airplay_video));
+             set_next_media_uri_id(airplay_video, ++uri_num);
+         } else {
++            set_initial_fetch_complete(airplay_video);
+             raop->callbacks.on_video_play(raop->callbacks.cls,
+                                                 get_playback_location(airplay_video),
+                                                 get_start_position_seconds(airplay_video));
+@@ -988,7 +1001,9 @@ http_handler_hls(raop_conn_t *conn,  http_request_t *request, http_response_t *r
+     } else {
+         int chunks = 0;
+         float duration = 0.0f;
+-        char *media_playlist = get_media_playlist(airplay_video, &chunks, &duration, url);
++        bool should_fetch = false;
++        const char *remote_uri = NULL;
++        char *media_playlist = get_media_playlist(airplay_video, &chunks, &duration, url, &should_fetch, &remote_uri);
+         if (media_playlist) {
+             char *data  = adjust_yt_condensed_playlist(media_playlist);
+             free(media_playlist);
+@@ -999,7 +1014,11 @@ http_handler_hls(raop_conn_t *conn,  http_request_t *request, http_response_t *r
+         } else {
+             logger_log(raop->logger, LOGGER_ERR,"requested media playlist %s not found", url); 
+         }
+-	    
++        if (should_fetch) {
++            fcup_request((void *) conn, remote_uri, get_apple_session_id(airplay_video),
++                         get_next_FCUP_RequestID(airplay_video));
++        }
++
+     }
+ 
+     http_response_add_header(response, "Access-Control-Allow-Headers", "Content-type");

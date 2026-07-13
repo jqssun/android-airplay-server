@@ -3,21 +3,25 @@ package io.github.jqssun.airplay.viewmodel
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import android.view.Surface
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.Player
 import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.service.AirPlayService
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.abs
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,6 +58,15 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val prefs = app.getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
     private val logFile = File(app.filesDir, "airplay_logs.txt")
     private var service: AirPlayService? = null
+    val dacpPlayer: Player? get() = service?.dacpPlayer
+
+    fun audioVolumeUp() { service?.dacpController?.volumeUp() }
+    fun audioVolumeDown() { service?.dacpController?.volumeDown() }
+    fun audioScanBegin(forward: Boolean) {
+        service?.dacpController?.let { if (forward) it.beginFastForward() else it.beginRewind() }
+    }
+    fun audioScanEnd() { service?.dacpController?.playResume() }
+    fun audioMuteToggle() { service?.dacpController?.muteToggle() }
 
     private val _serverState = MutableStateFlow(ServerState.STOPPED)
     val serverState: StateFlow<ServerState> = _serverState.asStateFlow()
@@ -143,8 +156,11 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _keepScreenOn = MutableStateFlow(prefs.getBoolean(Prefs.KEEP_SCREEN_ON, Prefs.DEF_KEEP_SCREEN_ON))
     val keepScreenOn: StateFlow<Boolean> = _keepScreenOn.asStateFlow()
 
-    private val _autoAudioMode = MutableStateFlow(prefs.getBoolean(Prefs.AUTO_AUDIO_MODE, Prefs.DEF_AUTO_AUDIO_MODE))
-    val autoAudioMode: StateFlow<Boolean> = _autoAudioMode.asStateFlow()
+    private val _advertiseVideo = MutableStateFlow(prefs.getBoolean(Prefs.ADVERTISE_VIDEO, Prefs.DEF_ADVERTISE_VIDEO))
+    val advertiseVideo: StateFlow<Boolean> = _advertiseVideo.asStateFlow()
+
+    private val _advertiseAudio = MutableStateFlow(prefs.getBoolean(Prefs.ADVERTISE_AUDIO, Prefs.DEF_ADVERTISE_AUDIO))
+    val advertiseAudio: StateFlow<Boolean> = _advertiseAudio.asStateFlow()
 
     private val _launchOnConnect = MutableStateFlow(prefs.getBoolean(Prefs.LAUNCH_ON_CONNECT, Prefs.DEF_LAUNCH_ON_CONNECT))
     val launchOnConnect: StateFlow<Boolean> = _launchOnConnect.asStateFlow()
@@ -175,59 +191,72 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _audioOnly = MutableStateFlow(false)
     val audioOnly: StateFlow<Boolean> = _audioOnly.asStateFlow()
 
-    // AirPlay Video (HLS) playback mode, distinct from screen mirroring / audio-only
+    // skip the "switched to audio mode" dialog prompt when on
+    private val _autoAudioMode = MutableStateFlow(prefs.getBoolean(Prefs.AUTO_AUDIO_MODE, Prefs.DEF_AUTO_AUDIO_MODE))
+    val autoAudioMode: StateFlow<Boolean> = _autoAudioMode.asStateFlow()
+
     private val _videoPlaybackActive = MutableStateFlow(false)
     val videoPlaybackActive: StateFlow<Boolean> = _videoPlaybackActive.asStateFlow()
 
-    // overlay visibility: any transport action (tap-to-pause, remote key) increments
-    // this tick; the MainScreen LaunchedEffect shows the overlay and auto-hides it
+    // video channel polling but /play not received yet
+    private val _videoSessionPending = MutableStateFlow(false)
+    val videoSessionPending: StateFlow<Boolean> = _videoSessionPending.asStateFlow()
+
+    // airplay video transport overlay state
+
+    // bumping the tick shows the overlay and restarts its auto-hide timer
     private val _videoOverlayTick = MutableStateFlow(0L)
     val videoOverlayTick: StateFlow<Long> = _videoOverlayTick.asStateFlow()
 
-    // optimistic play state for the overlay icon; updated immediately on local actions
-    // and re-synced from the ExoPlayer snapshot every 200ms (updateFromService)
-    private val _videoPlaying = MutableStateFlow(true)
-    val videoPlaying: StateFlow<Boolean> = _videoPlaying.asStateFlow()
-
-    // live ExoPlayer state (from AirPlayService.videoPlaybackInfo, refreshed each
-    // 250ms report tick); the overlay reads these for the seek bar and position text
     private val _videoPositionMs = MutableStateFlow(0L)
     val videoPositionMs: StateFlow<Long> = _videoPositionMs.asStateFlow()
+
     private val _videoDurationMs = MutableStateFlow(0L)
     val videoDurationMs: StateFlow<Long> = _videoDurationMs.asStateFlow()
 
-    // while the user is scrubbing (holding DPAD left/right) this holds the accumulated
-    // seek target; null when not scrubbing. The overlay shows this instead of the live
-    // position so the bar tracks the scrub progress, then converges after the seek.
+    private val _videoPlaybackAspect = MutableStateFlow(16f / 9f)
+    val videoPlaybackAspect: StateFlow<Float> = _videoPlaybackAspect.asStateFlow()
+
+    private val _videoPlaybackSize = MutableStateFlow<Pair<Int, Int>?>(null)
+    val videoPlaybackSize: StateFlow<Pair<Int, Int>?> = _videoPlaybackSize.asStateFlow()
+
+    private val _videoBuffering = MutableStateFlow(false)
+    val videoBuffering: StateFlow<Boolean> = _videoBuffering.asStateFlow()
+
+    private val _videoTitle = MutableStateFlow("")
+    val videoTitle: StateFlow<String> = _videoTitle.asStateFlow()
+
+    private val _videoLocation = MutableStateFlow<String?>(null)
+    val videoLocation: StateFlow<String?> = _videoLocation.asStateFlow()
+
+    // optimistic for instant icon feedback, re-synced from the delayed snapshot
+    private val _videoPlaying = MutableStateFlow(true)
+    val videoPlaying: StateFlow<Boolean> = _videoPlaying.asStateFlow()
+    private var _videoActionAt = 0L
+
+    // null = idle, -1 = unknown, else 0..100
+    private val _videoDownloadProgress = MutableStateFlow<Int?>(null)
+    val videoDownloadProgress: StateFlow<Int?> = _videoDownloadProgress.asStateFlow()
+
+    // mirror the player's playback parameters; sender /rate commands reset speed to 1
+    private val _videoSpeed = MutableStateFlow(1f)
+    val videoSpeed: StateFlow<Float> = _videoSpeed.asStateFlow()
+    private val _videoSkipSilence = MutableStateFlow(false)
+    val videoSkipSilence: StateFlow<Boolean> = _videoSkipSilence.asStateFlow()
+    private var _videoParamsActionAt = 0L
+
+    // non-null while a scrub is in flight; committed once after a debounce
     private val _videoScrubPositionMs = MutableStateFlow<Long?>(null)
     val videoScrubPositionMs: StateFlow<Long?> = _videoScrubPositionMs.asStateFlow()
+    private var _scrubJob: Job? = null
+    private var _lastVideoPlaySeq = 0L
 
-    // held-key scrub accumulation state
-    private var _scrubAccumulatedMs = 0L
-    private var _scrubDirection = 0
-    private var _scrubLastStepTime = 0L
-    private var _scrubTierIndex = 0
-    private var _scrubStepsInTier = 0
-    private var _scrubCommitJob: kotlinx.coroutines.Job? = null
-
-    // event-driven mirror of the service's videoPlaybackActive (see bindService)
-    private var _serviceVideoJob: kotlinx.coroutines.Job? = null
-
-    // true only once real mirroring video size is known for the current session
     private val _mirroringActive = MutableStateFlow(false)
     val mirroringActive: StateFlow<Boolean> = _mirroringActive.asStateFlow()
 
     private val _trackInfo = MutableStateFlow(TrackInfo())
     val trackInfo: StateFlow<TrackInfo> = _trackInfo.asStateFlow()
 
-    private val _positionMs = MutableStateFlow(0L)
-    val positionMs: StateFlow<Long> = _positionMs.asStateFlow()
-
-    private val _durationMs = MutableStateFlow(0L)
-    val durationMs: StateFlow<Long> = _durationMs.asStateFlow()
-
-    private val _playing = MutableStateFlow(true)
-    val playing: StateFlow<Boolean> = _playing.asStateFlow()
 
     // logs
     private val _logs = MutableStateFlow<List<String>>(emptyList())
@@ -295,81 +324,71 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         }
     }
 
-    companion object {
-        // All scrub-feel knobs in one place.
-        // per-step jump sizes; the first entry is the single-tap jump, holding climbs
-        // the tiers in order
-        val SCRUB_STEP_TIERS_MS = longArrayOf(5000, 5000, 10000, 15000, 20000, 30000, 45000, 60000)
-        // accepted steps spent on each tier before accelerating
-        const val SCRUB_RAMP_DWELL_STEPS = 2
-        // held-key step cadence (lower = faster scrubbing)
-        const val SCRUB_REPEAT_THROTTLE_MS = 150L
-        // quiet time after the last step before the single seek is issued
-        const val SCRUB_COMMIT_DEBOUNCE_MS = 300L
-    }
-
     // settings setters
-    fun setServerPort(port: Int) { _serverPort.value = port; prefs.edit().putInt(Prefs.SERVER_PORT, port).apply() }
-    fun setServerName(name: String) {
-        val trimmed = name.trim()
-        if (trimmed.isEmpty()) {
-            // clearing the field reverts to the default (the device name)
-            prefs.edit().remove(Prefs.SERVER_NAME).apply()
-        } else {
-            prefs.edit().putString(Prefs.SERVER_NAME, trimmed).apply()
-        }
-        val effective = Prefs.serverName(getApplication())
-        if (_serverName.value == effective) return
-        _serverName.value = effective
-        // the advertised mDNS/raop name is fixed at native init: restart to apply
-        service?.let {
-            if (it.serverState.value == ServerState.RUNNING) {
-                it.stopServer()
-                it.startServer(effective)
+    private var _restartJob: Job? = null
+
+    private fun _applyByServerRestart() {
+        _restartJob?.cancel()
+        _restartJob = viewModelScope.launch {
+            delay(SERVER_RESTART_DEBOUNCE_MS)
+            val svc = service ?: return@launch
+            if (svc.serverState.value == ServerState.RUNNING) {
+                svc.stopServer()
+                svc.startServer(_serverName.value)
             }
         }
     }
+
+    fun setServerPort(port: Int) { _serverPort.value = port; prefs.edit().putInt(Prefs.SERVER_PORT, port).apply(); _applyByServerRestart() }
+    fun setServerName(name: String) { _serverName.value = name; prefs.edit().putString(Prefs.SERVER_NAME, name).apply(); _applyByServerRestart() }
     fun setAutoStart(v: Boolean) { _autoStart.value = v; prefs.edit().putBoolean(Prefs.AUTO_START, v).apply() }
     fun setBootAutoStart(v: Boolean) { _bootAutoStart.value = v; prefs.edit().putBoolean(Prefs.BOOT_AUTO_START, v).apply() }
     fun setRunInBackground(v: Boolean) { _runInBackground.value = v; prefs.edit().putBoolean(Prefs.RUN_IN_BACKGROUND, v).apply() }
-    fun setH265Enabled(v: Boolean) { _h265Enabled.value = v; prefs.edit().putBoolean(Prefs.H265_ENABLED, v).apply() }
-    fun setEnforceSdr(v: Boolean) { _enforceSdr.value = v; prefs.edit().putBoolean(Prefs.ENFORCE_SDR, v).apply() }
+    fun setH265Enabled(v: Boolean) { _h265Enabled.value = v; prefs.edit().putBoolean(Prefs.H265_ENABLED, v).apply(); _applyByServerRestart() }
+    fun setEnforceSdr(v: Boolean) { _enforceSdr.value = v; prefs.edit().putBoolean(Prefs.ENFORCE_SDR, v).apply(); _applyByServerRestart() }
     fun setKeyAllowFrameDrop(v: Boolean) {
         _keyAllowFrameDrop.value = v
         prefs.edit().putBoolean(Prefs.KEY_ALLOW_FRAME_DROP, v).apply()
+        _applyByServerRestart()
     }
     fun setRealtimeDecoderPriority(v: Boolean) {
         _realtimeDecoderPriority.value = v
         prefs.edit().putBoolean(Prefs.KEY_PRIORITY, v).apply()
+        _applyByServerRestart()
     }
     fun setOperatingRateHint(v: Boolean) {
         _operatingRateHint.value = v
         prefs.edit().putBoolean(Prefs.KEY_OPERATING_RATE, v).apply()
+        _applyByServerRestart()
     }
     fun setScheduledOutputBufferRelease(v: Boolean) {
         _scheduledOutputBufferRelease.value = v
         prefs.edit().putBoolean(Prefs.SCHEDULED_OUTPUT_BUFFER_RELEASE, v).apply()
+        _applyByServerRestart()
     }
     fun setBenchmarkLog(v: Boolean) {
         _benchmarkLog.value = v
         prefs.edit().putBoolean(Prefs.BENCHMARK_LOG, v).apply()
+        _applyByServerRestart()
     }
-    fun setSwAlacEnabled(v: Boolean) { _swAlacEnabled.value = v; prefs.edit().putBoolean(Prefs.SW_ALAC_ENABLED, v).apply() }
-    fun setAlacEnabled(v: Boolean) { _alacEnabled.value = v; prefs.edit().putBoolean(Prefs.ALAC_ENABLED, v).apply() }
-    fun setAacEnabled(v: Boolean) { _aacEnabled.value = v; prefs.edit().putBoolean(Prefs.AAC_ENABLED, v).apply() }
-    fun setResolution(v: String) { _resolution.value = v; prefs.edit().putString(Prefs.RESOLUTION, v).apply() }
-    fun setMaxFps(v: Int) { _maxFps.value = v; prefs.edit().putInt(Prefs.MAX_FPS, v).apply() }
-    fun setOverscanned(v: Boolean) { _overscanned.value = v; prefs.edit().putBoolean(Prefs.OVERSCANNED, v).apply() }
-    fun setRequirePin(v: Boolean) { _requirePin.value = v; prefs.edit().putBoolean(Prefs.REQUIRE_PIN, v).apply() }
-    fun setAllowNewConn(v: Boolean) { _allowNewConn.value = v; prefs.edit().putBoolean(Prefs.ALLOW_NEW_CONN, v).apply() }
-    fun setAudioLatencyMs(v: Int) { _audioLatencyMs.value = v; prefs.edit().putInt(Prefs.AUDIO_LATENCY_MS, v).apply() }
+    fun setSwAlacEnabled(v: Boolean) { _swAlacEnabled.value = v; prefs.edit().putBoolean(Prefs.SW_ALAC_ENABLED, v).apply(); _applyByServerRestart() }
+    fun setAlacEnabled(v: Boolean) { _alacEnabled.value = v; prefs.edit().putBoolean(Prefs.ALAC_ENABLED, v).apply(); _applyByServerRestart() }
+    fun setAacEnabled(v: Boolean) { _aacEnabled.value = v; prefs.edit().putBoolean(Prefs.AAC_ENABLED, v).apply(); _applyByServerRestart() }
+    fun setResolution(v: String) { _resolution.value = v; prefs.edit().putString(Prefs.RESOLUTION, v).apply(); _applyByServerRestart() }
+    fun setMaxFps(v: Int) { _maxFps.value = v; prefs.edit().putInt(Prefs.MAX_FPS, v).apply(); _applyByServerRestart() }
+    fun setOverscanned(v: Boolean) { _overscanned.value = v; prefs.edit().putBoolean(Prefs.OVERSCANNED, v).apply(); _applyByServerRestart() }
+    fun setRequirePin(v: Boolean) { _requirePin.value = v; prefs.edit().putBoolean(Prefs.REQUIRE_PIN, v).apply(); _applyByServerRestart() }
+    fun setAllowNewConn(v: Boolean) { _allowNewConn.value = v; prefs.edit().putBoolean(Prefs.ALLOW_NEW_CONN, v).apply(); _applyByServerRestart() }
+    fun setAudioLatencyMs(v: Int) { _audioLatencyMs.value = v; prefs.edit().putInt(Prefs.AUDIO_LATENCY_MS, v).apply(); _applyByServerRestart() }
     fun setIdlePreview(v: Boolean) { _idlePreview.value = v; prefs.edit().putBoolean(Prefs.IDLE_PREVIEW, v).apply() }
     fun setAutoFullscreen(v: Boolean) { _autoFullscreen.value = v; prefs.edit().putBoolean(Prefs.AUTO_FULLSCREEN, v).apply() }
     fun setKeepScreenOn(v: Boolean) { _keepScreenOn.value = v; prefs.edit().putBoolean(Prefs.KEEP_SCREEN_ON, v).apply() }
-    fun setAutoAudioMode(v: Boolean) { _autoAudioMode.value = v; prefs.edit().putBoolean(Prefs.AUTO_AUDIO_MODE, v).apply() }
+    fun setAdvertiseVideo(v: Boolean) { _advertiseVideo.value = v; prefs.edit().putBoolean(Prefs.ADVERTISE_VIDEO, v).apply(); _applyByServerRestart() }
+    fun setAdvertiseAudio(v: Boolean) { _advertiseAudio.value = v; prefs.edit().putBoolean(Prefs.ADVERTISE_AUDIO, v).apply(); _applyByServerRestart() }
     fun setLaunchOnConnect(v: Boolean) { _launchOnConnect.value = v; prefs.edit().putBoolean(Prefs.LAUNCH_ON_CONNECT, v).apply() }
     fun setReturnToPreviousApp(v: Boolean) { _returnToPreviousApp.value = v; prefs.edit().putBoolean(Prefs.RETURN_TO_PREVIOUS_APP, v).apply() }
     fun setDebugEnabled(v: Boolean) { _debugEnabled.value = v; prefs.edit().putBoolean(Prefs.DEBUG_ENABLED, v).apply() }
+    fun setAutoAudioMode(v: Boolean) { _autoAudioMode.value = v; prefs.edit().putBoolean(Prefs.AUTO_AUDIO_MODE, v).apply() }
     fun setDeveloperOptions(v: Boolean) {
         _developerOptions.value = v
         prefs.edit().putBoolean(Prefs.DEVELOPER_OPTIONS, v).apply()
@@ -378,6 +397,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         val value = v.coerceIn(4, 8)
         _audioBufferMultiplier.value = value
         prefs.edit().putInt(Prefs.AUDIO_BUFFER_MULTIPLIER, value).apply()
+        _applyByServerRestart()
     }
 
     // service binding
@@ -402,6 +422,8 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         }
         updateFromService()
     }
+
+    private var _serviceVideoJob: Job? = null
 
     fun unbindService() {
         _serviceVideoJob?.cancel()
@@ -433,85 +455,79 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         service?.clearVideoPlaybackSurface(surface)
     }
 
-    fun toggleVideoPlayPause() {
-        _videoPlaying.value = !_videoPlaying.value
-        service?.toggleVideoPlayback()
-        _videoOverlayTick.value = ++_videoOverlayTickValue
+    fun toggleVideoPlayPause(showOverlay: Boolean = true) = setVideoPlaying(!_videoPlaying.value, showOverlay)
+
+    fun setVideoPlaying(playing: Boolean, showOverlay: Boolean = true) {
+        // pending session: there is no local media yet, nothing to toggle
+        if (!_videoPlaybackActive.value) return
+        _videoPlaying.value = playing
+        _videoActionAt = SystemClock.elapsedRealtime()
+        service?.setVideoPlaying(playing)
+        if (showOverlay) showVideoOverlay()
     }
 
-    fun setVideoPlaying(playing: Boolean) {
-        _videoPlaying.value = playing
-        service?.setVideoPlaying(playing)
-        _videoOverlayTick.value = ++_videoOverlayTickValue
+    // hold the target until the reported position catches up (hls rebuffer)
+    private suspend fun _holdScrubUntilSettled(target: Long) {
+        val deadline = SystemClock.elapsedRealtime() + SCRUB_SETTLE_TIMEOUT_MS
+        while (SystemClock.elapsedRealtime() < deadline) {
+            delay(SCRUB_SETTLE_POLL_MS)
+            if (abs(_videoPositionMs.value - target) <= SCRUB_SETTLE_EPSILON_MS) break
+        }
+        _videoScrubPositionMs.value = null
+    }
+
+    // drag-seek: live seeks under scrubbing mode, settle-hold on release
+    fun startVideoScrub() {
+        _scrubJob?.cancel()
+        service?.setVideoScrubbing(true)
+    }
+
+    fun scrubVideoTo(positionMs: Long) {
+        val duration = _videoDurationMs.value
+        if (duration <= 0) return
+        val target = positionMs.coerceIn(0L, duration)
+        _videoScrubPositionMs.value = target
+        service?.seekVideoTo(target)
+    }
+
+    fun endVideoScrub() {
+        service?.setVideoScrubbing(false)
+        _scrubJob?.cancel()
+        _scrubJob = viewModelScope.launch {
+            _holdScrubUntilSettled(_videoScrubPositionMs.value ?: return@launch)
+        }
+    }
+
+    fun showVideoOverlay() {
+        _videoOverlayTick.value++
+    }
+
+    fun stopVideoPlayback() {
+        service?.stopVideoPlayback()
+    }
+
+    fun setVideoSpeed(speed: Float) {
+        val value = speed.coerceIn(0.2f, 4f)
+        _videoSpeed.value = value
+        _videoParamsActionAt = SystemClock.elapsedRealtime()
+        service?.setVideoSpeed(value)
+    }
+
+    fun setVideoSkipSilence(enabled: Boolean) {
+        _videoSkipSilence.value = enabled
+        _videoParamsActionAt = SystemClock.elapsedRealtime()
+        service?.setVideoSkipSilence(enabled)
     }
 
     fun seekVideoBy(deltaMs: Long) {
         service?.seekVideoBy(deltaMs)
-        _videoOverlayTick.value = ++_videoOverlayTickValue
     }
 
-    fun stopVideoPlayback() {
-        _videoScrubPositionMs.value = null
-        service?.stopVideoPlayback()
+    fun toggleVideoDownload() {
+        val svc = service ?: return
+        if (_videoDownloadProgress.value != null) svc.videoDownloader.cancel() else svc.downloadVideo()
+        showVideoOverlay()
     }
-
-    // tap: single step in direction (-1 = left, 1 = right); hold: ramp through tiers
-    // the accumulated target is committed as a single debounced seek
-    fun scrubVideoBy(direction: Int, repeatCount: Int) {
-        val now = System.currentTimeMillis()
-        if (repeatCount == 0) {
-            // first press: reset accumulator, start fresh
-            val currentPos = _videoPositionMs.value
-            _scrubAccumulatedMs = currentPos
-            _scrubDirection = direction
-            _scrubTierIndex = 0
-            _scrubStepsInTier = 0
-            _scrubLastStepTime = now
-            _scrubAccumulatedMs += SCRUB_STEP_TIERS_MS[0] * direction
-        } else {
-            // held repeat: throttle and ramp
-            if (now - _scrubLastStepTime < SCRUB_REPEAT_THROTTLE_MS) return
-            // only accumulate if still going the same direction
-            if (direction != _scrubDirection) {
-                _scrubDirection = direction
-                _scrubTierIndex = 0
-                _scrubStepsInTier = 0
-            }
-            _scrubStepsInTier++
-            if (_scrubStepsInTier >= SCRUB_RAMP_DWELL_STEPS &&
-                _scrubTierIndex < SCRUB_STEP_TIERS_MS.lastIndex) {
-                _scrubTierIndex++
-                _scrubStepsInTier = 0
-            }
-            _scrubAccumulatedMs += SCRUB_STEP_TIERS_MS[_scrubTierIndex] * direction
-            _scrubLastStepTime = now
-        }
-        // clamp to [0, duration]
-        val dur = _videoDurationMs.value
-        if (dur > 0L) _scrubAccumulatedMs = _scrubAccumulatedMs.coerceIn(0L, dur)
-        else _scrubAccumulatedMs = _scrubAccumulatedMs.coerceAtLeast(0L)
-        _videoScrubPositionMs.value = _scrubAccumulatedMs
-        _videoOverlayTick.value = ++_videoOverlayTickValue
-
-        // debounce: cancel previous commit, schedule new one
-        _scrubCommitJob?.cancel()
-        _scrubCommitJob = kotlinx.coroutines.MainScope().launch {
-            delay(SCRUB_COMMIT_DEBOUNCE_MS)
-            service?.seekVideoTo(_scrubAccumulatedMs)
-        }
-    }
-
-    // just show the transport overlay without any action (DPAD_UP/DOWN)
-    fun showVideoOverlay() {
-        _videoOverlayTick.value = ++_videoOverlayTickValue
-    }
-
-    private var _videoOverlayTickValue = 0L
-
-    // dacp controls
-    fun dacpPlayPause() { service?.togglePlayPause() }
-    fun dacpNext() { service?.dacpController?.nextItem() }
-    fun dacpPrev() { service?.dacpController?.prevItem() }
 
     fun dismissPin() {
         _pinCode.value = null
@@ -529,28 +545,59 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             _videoResolution.value = it.videoResolution.value
             _audioOnly.value = it.audioOnly.value
             val videoActive = it.videoPlaybackActive.value
-            if (videoActive && !_videoPlaybackActive.value) {
-                // fresh AirPlay Video session: playback starts playing, no stale overlay
+            val playSeq = it.videoPlaySeq.value
+            if (playSeq != _lastVideoPlaySeq) {
+                // fresh /play (incl. back-to-back): drop stale overlay and scrub state
+                _lastVideoPlaySeq = playSeq
                 _videoPlaying.value = true
-                _videoOverlayTick.value = 0L
+                _videoActionAt = 0
+                _videoOverlayTick.value = 0
+                _videoSpeed.value = 1f
+                _videoSkipSilence.value = false
+                _scrubJob?.cancel()
                 _videoScrubPositionMs.value = null
             }
             _videoPlaybackActive.value = videoActive
-            // sync video state from the snapshot for the seek bar overlay
+            _videoSessionPending.value = it.videoSessionPending()
+            _videoDownloadProgress.value = it.videoDownloader.progress.value
             if (videoActive) {
                 val info = it.videoPlaybackInfo.value
-                _videoPlaying.value = info.playing
                 _videoPositionMs.value = info.positionMs
                 _videoDurationMs.value = info.durationMs
+                if (SystemClock.elapsedRealtime() - _videoParamsActionAt > VIDEO_ACTION_SYNC_HOLD_MS) {
+                    _videoSpeed.value = info.speed
+                    _videoSkipSilence.value = info.skipSilence
+                }
+                _videoBuffering.value = info.buffering
+                _videoPlaybackAspect.value = it.videoPlaybackAspect.value
+                _videoPlaybackSize.value = it.videoPlaybackSize.value
+                // stream metadata first, dmap second; senders rarely provide either for video
+                _videoTitle.value = it.videoTitle.value.ifEmpty { it.trackInfo.value.title }
+                _videoLocation.value = it.videoLocation.value
+                // stale snapshots must not overwrite a just-made optimistic action
+                if (SystemClock.elapsedRealtime() - _videoActionAt > VIDEO_ACTION_SYNC_HOLD_MS) {
+                    _videoPlaying.value = info.playing
+                }
+            } else {
+                _videoPositionMs.value = 0
+                _videoDurationMs.value = 0
+                _videoBuffering.value = false
             }
             _mirroringActive.value = it.mirroringActive.value
             _trackInfo.value = it.trackInfo.value
-            _positionMs.value = it.currentPositionMs()
-            _durationMs.value = it.durationMs.value
-            _playing.value = it.playing.value
             if (_debugEnabled.value) {
                 _debugInfo.value = it.collectDebugInfo()
             }
         }
+    }
+
+    private companion object {
+        // post-commit: show the target until within epsilon, give up after the timeout
+        const val SCRUB_SETTLE_POLL_MS = 100L
+        const val SCRUB_SETTLE_EPSILON_MS = 2_000L
+        const val SCRUB_SETTLE_TIMEOUT_MS = 3_000L
+        // raise if the play/pause icon flickers back right after a local toggle
+        const val VIDEO_ACTION_SYNC_HOLD_MS = 700L
+        const val SERVER_RESTART_DEBOUNCE_MS = 500L
     }
 }

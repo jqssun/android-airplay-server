@@ -4,6 +4,9 @@ import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.util.Log
+import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.SettableFuture
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
@@ -30,9 +33,14 @@ class DacpController(ctx: Context) {
 
     fun play() = _send("/ctrl-int/1/play")
     fun pause() = _send("/ctrl-int/1/pause")
-    fun playPause() = _send("/ctrl-int/1/playpause")
     fun nextItem() = _send("/ctrl-int/1/nextitem")
     fun prevItem() = _send("/ctrl-int/1/previtem")
+    fun volumeUp() = _send("/ctrl-int/1/volumeup")
+    fun volumeDown() = _send("/ctrl-int/1/volumedown")
+    fun muteToggle() = _send("/ctrl-int/1/mutetoggle")
+    fun beginFastForward() = _send("/ctrl-int/1/beginff")
+    fun beginRewind() = _send("/ctrl-int/1/beginrew")
+    fun playResume() = _send("/ctrl-int/1/playresume")
 
     fun release() {
         exec.shutdownNow()
@@ -61,27 +69,40 @@ class DacpController(ctx: Context) {
         }
     }
 
-    private fun _send(path: String) {
-        if (host.isEmpty() || activeRemote.isEmpty()) return
-        exec.execute {
-            try {
-                val url = "http://$host:$port$path"
-                val conn = URL(url).openConnection() as HttpURLConnection
-                conn.requestMethod = "GET"
-                conn.setRequestProperty("Active-Remote", activeRemote)
-                conn.setRequestProperty("Host", "$host:$port")
-                conn.connectTimeout = 2000
-                conn.readTimeout = 2000
-                val code = conn.responseCode
-                try { conn.inputStream.readBytes() } catch (_: Exception) {}
-                conn.disconnect()
-                if (code !in 200..299) {
-                    Log.w(TAG, "DACP $path -> HTTP $code")
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "DACP send failed: $path", e)
-            }
+    private fun _send(path: String): ListenableFuture<Unit> {
+        val result = SettableFuture.create<Unit>()
+        if (host.isEmpty() || activeRemote.isEmpty()) {
+            result.setException(IOException("dacp endpoint not resolved"))
+            return result
         }
+        try {
+            exec.execute {
+                try {
+                    val url = "http://$host:$port$path"
+                    val conn = URL(url).openConnection() as HttpURLConnection
+                    conn.requestMethod = "GET"
+                    conn.setRequestProperty("Active-Remote", activeRemote)
+                    conn.setRequestProperty("Host", "$host:$port")
+                    conn.connectTimeout = 2000
+                    conn.readTimeout = 2000
+                    val code = conn.responseCode
+                    try { conn.inputStream.readBytes() } catch (_: Exception) {}
+                    conn.disconnect()
+                    if (code in 200..299) {
+                        result.set(Unit)
+                    } else {
+                        Log.w(TAG, "DACP $path -> HTTP $code")
+                        result.setException(IOException("HTTP $code"))
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "DACP send failed: $path", e)
+                    result.setException(e)
+                }
+            }
+        } catch (e: Exception) {
+            result.setException(e)
+        }
+        return result
     }
 
     companion object {

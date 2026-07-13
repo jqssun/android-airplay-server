@@ -33,6 +33,7 @@ typedef struct {
     jmethodID on_video_scrub;
     jmethodID on_video_rate;
     jmethodID on_video_stop;
+    jmethodID on_video_session_poll;
     int h265_enabled;
     int require_pin;
     char *registered_keys[16];
@@ -57,6 +58,10 @@ typedef struct {
     /* running count of those requests (dominated by /playback-info polls), for
        throttled poll-activity logging on the Kotlin side. Same lock. */
     uint64_t video_request_count;
+    /* holds the /play response until the player is ready, so self-driven senders (macOS)
+       establish their timeline after the real duration is known, not at duration 0 */
+    pthread_cond_t play_ready_cond;
+    int play_ready;
 } android_callback_ctx_t;
 
 void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject callback_obj);

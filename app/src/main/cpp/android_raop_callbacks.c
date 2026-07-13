@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 #include <android/log.h>
 #include "android_raop_callbacks.h"
 
@@ -38,6 +39,8 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     pthread_mutex_init(&ctx->playback_info_lock, NULL);
     ctx->last_video_request_ns = 0;
     ctx->video_request_count = 0;
+    pthread_cond_init(&ctx->play_ready_cond, NULL);
+    ctx->play_ready = 0;
     ctx->playback_position = 0.0;
     /* NOT -1.0: raop.c's GET /playback-info handler treats duration==-1.0 as "video
        finished, reset the session" -- and the client polls this speculatively before
@@ -66,6 +69,7 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->on_video_scrub = (*env)->GetMethodID(env, cls, "onVideoScrub", "(F)V");
     ctx->on_video_rate = (*env)->GetMethodID(env, cls, "onVideoRate", "(F)V");
     ctx->on_video_stop = (*env)->GetMethodID(env, cls, "onVideoStop", "()V");
+    ctx->on_video_session_poll = (*env)->GetMethodID(env, cls, "onVideoSessionPoll", "()V");
     (*env)->DeleteLocalRef(env, cls);
 }
 
@@ -79,6 +83,7 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env) {
         ctx->registered_keys[i] = NULL;
     }
     ctx->registered_count = 0;
+    pthread_cond_destroy(&ctx->play_ready_cond);
     pthread_mutex_destroy(&ctx->playback_info_lock);
 }
 
@@ -120,6 +125,10 @@ void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double 
     ctx->playback_duration = duration;
     ctx->playback_rate = rate;
     ctx->playback_ready = ready;
+    if (ready && !ctx->play_ready) {
+        ctx->play_ready = 1;
+        pthread_cond_signal(&ctx->play_ready_cond);
+    }
     pthread_mutex_unlock(&ctx->playback_info_lock);
 }
 
@@ -151,10 +160,19 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
 
 static void _conn_init(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    /* clear any stale "finished" (-1.0) state left by a previous AirPlay Video
-       session, so a new connection's speculative /playback-info poll (which can
-       arrive before its own /play) doesn't get misread as "already finished". */
-    android_callbacks_update_playback_info(ctx, 0.0, 0.0, 0.0f, 0);
+    /* fires for every connection including the player's own hls fetches: clear only a
+       stale "finished" (-1.0) sentinel left by a previous AirPlay Video session, so a
+       new connection's speculative /playback-info poll (which can arrive before its
+       own /play) doesn't get misread as "already finished". Must not unconditionally
+       reset here, or an incidental reconnect mid-session would clobber live state. */
+    pthread_mutex_lock(&ctx->playback_info_lock);
+    if (ctx->playback_duration == -1.0) {
+        ctx->playback_position = 0.0;
+        ctx->playback_duration = 0.0;
+        ctx->playback_rate = 0.0f;
+        ctx->playback_ready = 0;
+    }
+    pthread_mutex_unlock(&ctx->playback_info_lock);
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_conn_init);
@@ -200,6 +218,10 @@ static void _video_report_size(void *cls, float *w_src, float *h_src, float *w, 
 
 static void _display_pin(void *cls, char *pin) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    
+    /* certain senders trigger pair-pin-start even when we advertise no auth */
+    if (!ctx->require_pin) return;
+
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
     jstring jpin = (*env)->NewStringUTF(env, pin);
@@ -227,14 +249,17 @@ static void _video_reset(void *cls, reset_type_t t) {
            connections ~60s later while the route's other connections stay open and
            keep polling /playback-info). Only end the session if playback isn't
            actively running: a sender vanishing mid-play (app killed) leaves a
-           direct-URL video that can and should keep playing to its natural end. */
+           direct-URL video that can and should keep playing to its natural end.
+           Checking ready as well as rate<=0 avoids misreading "still buffering"
+           (also rate 0) as abandonment. */
         pthread_mutex_lock(&ctx->playback_info_lock);
+        int paused = ctx->playback_ready && ctx->playback_rate <= 0.0f;
         float rate = ctx->playback_rate;
         pthread_mutex_unlock(&ctx->playback_info_lock);
-        if (rate <= 0.0f) {
+        if (paused) {
             _video_stop(cls);
         } else {
-            LOGI("play connection closed while playing (rate %.2f): leaving video running", rate);
+            LOGI("play connection closed while playing/buffering (rate %.2f): leaving video running", rate);
         }
     }
     if (t == RESET_TYPE_HLS_SHUTDOWN && ctx->raop) {
@@ -320,12 +345,25 @@ static void _video_play(void *cls, const char *location, const float start_posit
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     LOGI("video_play: %s @ %.2fs", location ? location : "(null)", start_position);
     _touch_video_request(ctx);
+    pthread_mutex_lock(&ctx->playback_info_lock);
+    ctx->play_ready = 0;
+    pthread_mutex_unlock(&ctx->playback_info_lock);
     android_callbacks_update_playback_info(ctx, start_position, 0.0, 0.0f, 0);
     JNIEnv *env = _get_env(ctx);
     if (!env || !location) return;
     jstring jloc = (*env)->NewStringUTF(env, location);
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_play, jloc, (jfloat)start_position);
     (*env)->DeleteLocalRef(env, jloc);
+    /* self-driven senders (macOS) latch their scrubber timeline at /play; hold the response
+       until the player reports ready so that read must carry the real duration */
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += 10; // hold for max 10s
+    pthread_mutex_lock(&ctx->playback_info_lock);
+    while (!ctx->play_ready) {
+        if (pthread_cond_timedwait(&ctx->play_ready_cond, &ctx->playback_info_lock, &ts) == ETIMEDOUT) break;
+    }
+    pthread_mutex_unlock(&ctx->playback_info_lock);
 }
 
 static void _video_scrub(void *cls, const float position) {
@@ -372,6 +410,11 @@ static void _video_acquire_playback_info(void *cls, playback_info_t *info) {
     info->seek_start = 0.0;
     info->seek_duration = ctx->playback_duration > 0.0 ? ctx->playback_duration : 0.0;
     pthread_mutex_unlock(&ctx->playback_info_lock);
+    /* polls are the earliest video-channel signal, starting ~1s before /play */
+    JNIEnv *env = _get_env(ctx);
+    if (env) {
+        (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_session_poll);
+    }
 }
 
 static float _video_playlist_remove(void *cls) {

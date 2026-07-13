@@ -1,6 +1,8 @@
 - Screen mirroring with H.264 and H.265 (HEVC) video decoding
 - Audio streaming with AAC-ELD, AAC-LC and ALAC audio decoding
-- Music streaming with track information, cover art, and playback controls
+- Video playback with support for HLS, downloads, and remote controls
+- Music playback with track information, cover art, and remote controls
+- Support for Android TV with directional pad navigation and seeking controls
 - Support for Picture-in-Picture, automatic resolution and mode switching
 - Optional PIN authentication
 - Video resolution, overscan, and frame rate control

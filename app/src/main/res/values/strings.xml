@@ -32,14 +32,43 @@
     <string name="cd_fullscreen">Fullscreen</string>
     <string name="cd_exit_fullscreen">Exit fullscreen</string>
     <string name="cd_cover_art">Cover art</string>
-    <string name="cd_previous">Previous</string>
     <string name="cd_play_pause">Play/Pause</string>
-    <string name="cd_next">Next</string>
+    <string name="cd_rewind">Rewind</string>
+    <string name="cd_fast_forward">Fast forward</string>
+    <string name="cd_volume_down">Volume down</string>
+    <string name="cd_volume_up">Volume up</string>
+    <string name="cd_mute">Mute</string>
+    <string name="cd_download">Download video</string>
+    <string name="cd_cancel_download">Cancel download</string>
+
+    <!-- Dialogs: audio mode -->
+    <string name="dialog_audio_mode_title">Audio Mode</string>
+    <string name="dialog_audio_mode_text">Switching to Audio mode for track information and playback controls.</string>
+
+    <!-- Video download -->
+    <string name="download_saved">Saved to %1$s</string>
+    <string name="download_failed">Download failed</string>
+
+    <!-- Player gestures -->
+    <string name="gesture_seek_seconds">%1$d seconds</string>
+    <string name="seconds_short">%1$ds</string>
+    <string name="select_playback_speed">Playback speed</string>
+    <string name="cd_reset_speed">Reset speed</string>
+    <string name="skip_silence">Skip silence</string>
+
+    <!-- Player controls -->
+    <string name="cd_back">Back</string>
+    <string name="cd_copy_url">Copy video URL</string>
+    <string name="cd_rotate">Rotate screen</string>
+    <string name="cd_lock_controls">Lock controls</string>
+    <string name="cd_unlock_controls">Unlock controls</string>
+    <string name="scale_best_fit">Best fit</string>
+    <string name="scale_stretch">Stretch</string>
+    <string name="scale_crop">Crop</string>
+    <string name="scale_hundred_percent">100%</string>
 
     <!-- Dialogs -->
     <string name="dialog_pin_title">AirPlay PIN</string>
-    <string name="dialog_audio_mode_title">Audio Mode</string>
-    <string name="dialog_audio_mode_text">Switching to Audio mode for track information and playback controls.</string>
     <string name="btn_ok">OK</string>
 
     <!-- Logs screen -->
@@ -79,9 +108,13 @@
     <string name="setting_auto_fullscreen">Enter fullscreen automatically</string>
     <string name="setting_auto_fullscreen_desc">Enter fullscreen when a client connects</string>
     <string name="setting_keep_screen_on">Keep screen on</string>
-    <string name="setting_keep_screen_on_desc">Prevent screen from sleeping while a client is connected</string>
+    <string name="setting_keep_screen_on_desc">Prevent sleeping while a client is connected</string>
     <string name="setting_auto_audio_mode">Enter audio mode automatically</string>
     <string name="setting_auto_audio_mode_desc">Skip the prompt when switching to audio mode</string>
+    <string name="setting_advertise_video">Advertise AirPlay video support</string>
+    <string name="setting_advertise_video_desc">When off, videos are cast as audio only streams</string>
+    <string name="setting_advertise_audio">Advertise AirPlay audio support</string>
+    <string name="setting_advertise_audio_desc">When off, the device can only be used for mirroring and will be hidden from media players</string>
     <string name="setting_launch_on_connect">Open this application on connect</string>
     <string name="setting_launch_on_connect_desc">Show the screen when a client connects</string>
     <string name="setting_return_to_previous_app">Return to previous app after casting</string>

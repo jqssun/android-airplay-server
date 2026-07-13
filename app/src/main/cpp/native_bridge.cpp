@@ -50,17 +50,14 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
     server_ctx_t *ctx = (server_ctx_t *)calloc(1, sizeof(server_ctx_t));
     if (!ctx) return 0;
 
-    /* Copy hw address */
     jsize hw_len = env->GetArrayLength(hwAddr);
     if (hw_len > 6) hw_len = 6;
     env->GetByteArrayRegion(hwAddr, 0, hw_len, (jbyte *)ctx->hw_addr);
 
-    /* Init JNI callbacks */
     android_callbacks_init(&ctx->cb_ctx, env, callback);
     ctx->cb_ctx.require_pin = requirePin ? 1 : 0;
     android_callbacks_fill(&ctx->callbacks, &ctx->cb_ctx);
 
-    /* Init RAOP */
     ctx->raop = raop_init(&ctx->callbacks);
     if (!ctx->raop) {
         LOGE("raop_init failed");
@@ -70,14 +67,12 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
     }
     ctx->cb_ctx.raop = ctx->raop;
 
-    raop_set_log_level(ctx->raop, 3); /* INFO */
+    raop_set_log_level(ctx->raop, LOGGER_ERR);
     raop_set_log_callback(ctx->raop, _log_callback, NULL);
 
-    /* Init2 with device_id and keyfile */
     const char *keyfile_c = env->GetStringUTFChars(keyFile, NULL);
     const char *name_c = env->GetStringUTFChars(name, NULL);
 
-    /* Build device_id from hw_addr */
     char device_id[18];
     snprintf(device_id, sizeof(device_id), "%02X:%02X:%02X:%02X:%02X:%02X",
              (unsigned char)ctx->hw_addr[0], (unsigned char)ctx->hw_addr[1],
@@ -99,7 +94,7 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
         raop_set_plist(ctx->raop, "pin", pin + 10000);
     }
 
-    /* Init dnssd shim */
+    /* shim dnssd_init only builds txt records; kotlin does the actual nsd registration */
     int dns_err = 0;
     unsigned char pin_pw = requirePin ? 1 : 0;
     ctx->dnssd = dnssd_init(name_c, (int)strlen(name_c), ctx->hw_addr, 6, &dns_err, pin_pw);
@@ -307,6 +302,18 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetHlsEnabled(
         dnssd_set_airplay_features(ctx->dnssd, 4, enabled ? 1 : 0);
     }
 }
+
+/* feature bit 9 advertises audio support over dns-sd */
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetAudioEnabled(
+        JNIEnv *env, jobject thiz, jlong handle, jboolean enabled) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx || !ctx->dnssd) return;
+    dnssd_set_airplay_features(ctx->dnssd, 9, enabled ? 1 : 0);
+}
+
 
 extern "C"
 JNIEXPORT void JNICALL

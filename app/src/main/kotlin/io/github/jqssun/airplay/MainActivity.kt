@@ -13,7 +13,6 @@ import android.os.IBinder
 import android.os.SystemClock
 import android.util.Log
 import android.util.Rational
-import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -76,13 +75,6 @@ class MainActivity : ComponentActivity() {
     // when the last video/mirroring session ended (elapsedRealtime), for the
     // interaction-clearing holdoff described on summonedBySession
     private var lastSessionEndedAt = 0L
-
-    // keycodes whose ACTION_DOWN was consumed as a video transport key: the rest of
-    // the gesture (repeats, UP) must be swallowed even if the session ended
-    // mid-gesture (BACK/STOP end it on the DOWN), so the dangling UP can't leak
-    // into the UI underneath, trigger back navigation, or count as post-session
-    // user interaction
-    private val consumedVideoKeys = mutableSetOf<Int>()
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -268,89 +260,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // TV-remote transport controls for AirPlay Video: the video surface lives inside
-    // this activity's Compose tree, so on Android TV every D-pad/media KeyEvent lands
-    // in the focused window here first -- dispatchKeyEvent sees it before any view
-    // (nothing inside the video screen takes focus, so onPreviewKeyEvent wouldn't).
-    // Media keys the activity doesn't consume fall back to the MediaSession, which
-    // AirPlayService also routes to the video player while a session is active.
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (service?.videoPlaybackActive?.value == true && handleVideoKeyEvent(event)) {
-            when (event.action) {
-                KeyEvent.ACTION_DOWN -> consumedVideoKeys.add(event.keyCode)
-                KeyEvent.ACTION_UP -> consumedVideoKeys.remove(event.keyCode)
-            }
-            return true
-        }
-        // finish swallowing a gesture whose DOWN was consumed above but whose
-        // session ended before the UP (BACK/STOP stop the video on the DOWN)
-        if (event.keyCode in consumedVideoKeys) {
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                // fresh press of a key whose previous gesture never delivered its
-                // UP to us (rare focus loss): stop swallowing, act normally
-                consumedVideoKeys.remove(event.keyCode)
-            } else {
-                if (event.action == KeyEvent.ACTION_UP) consumedVideoKeys.remove(event.keyCode)
-                return true
-            }
-        }
-        return super.dispatchKeyEvent(event)
-    }
-
-    private fun handleVideoKeyEvent(event: KeyEvent): Boolean {
-        val handled = when (event.keyCode) {
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-            KeyEvent.KEYCODE_MEDIA_PLAY,
-            KeyEvent.KEYCODE_MEDIA_PAUSE,
-            KeyEvent.KEYCODE_DPAD_CENTER,
-            KeyEvent.KEYCODE_ENTER,
-            KeyEvent.KEYCODE_NUMPAD_ENTER,
-            KeyEvent.KEYCODE_DPAD_LEFT,
-            KeyEvent.KEYCODE_DPAD_RIGHT,
-            KeyEvent.KEYCODE_DPAD_UP,
-            KeyEvent.KEYCODE_DPAD_DOWN,
-            KeyEvent.KEYCODE_MEDIA_REWIND,
-            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
-            KeyEvent.KEYCODE_MEDIA_STOP,
-            KeyEvent.KEYCODE_BACK -> true
-            else -> false
-        }
-        if (!handled) return false
-        // consume matching UP (and repeat, except for held seeks) events too, so
-        // they can't leak into the UI underneath or trigger back navigation
-        if (event.action != KeyEvent.ACTION_DOWN) return true
-        when (event.keyCode) {
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-            KeyEvent.KEYCODE_DPAD_CENTER,
-            KeyEvent.KEYCODE_ENTER,
-            KeyEvent.KEYCODE_NUMPAD_ENTER ->
-                if (event.repeatCount == 0) viewModel.toggleVideoPlayPause()
-            KeyEvent.KEYCODE_MEDIA_PLAY ->
-                if (event.repeatCount == 0) viewModel.setVideoPlaying(true)
-            KeyEvent.KEYCODE_MEDIA_PAUSE ->
-                if (event.repeatCount == 0) viewModel.setVideoPlaying(false)
-            // taps jump by the fixed step, holds accelerate; the viewmodel accumulates
-            // the target on the overlay's seek bar and commits one debounced seek
-            KeyEvent.KEYCODE_DPAD_LEFT,
-            KeyEvent.KEYCODE_MEDIA_REWIND ->
-                viewModel.scrubVideoBy(-1, event.repeatCount)
-            KeyEvent.KEYCODE_DPAD_RIGHT,
-            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD ->
-                viewModel.scrubVideoBy(1, event.repeatCount)
-            // up/down just summon the transport overlay
-            KeyEvent.KEYCODE_DPAD_UP,
-            KeyEvent.KEYCODE_DPAD_DOWN ->
-                if (event.repeatCount == 0) viewModel.showVideoOverlay()
-            KeyEvent.KEYCODE_MEDIA_STOP,
-            KeyEvent.KEYCODE_BACK ->
-                if (event.repeatCount == 0) viewModel.stopVideoPlayback()
-        }
-        return true
-    }
-
     fun enterPip() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val aspect = viewModel.videoAspect.value
+        val aspect = if (viewModel.videoPlaybackActive.value) viewModel.videoPlaybackAspect.value
+            else viewModel.videoAspect.value
         val rational = Rational(
             (aspect * 1000).toInt().coerceIn(1, 2390),
             1000.coerceIn(1, 2390)

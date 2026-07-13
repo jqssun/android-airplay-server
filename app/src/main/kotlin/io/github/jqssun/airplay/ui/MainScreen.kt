@@ -1,25 +1,37 @@
 package io.github.jqssun.airplay.ui
 
 import android.app.Activity
+import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
+import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
+import androidx.annotation.OptIn as AndroidxOptIn
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.rounded.VolumeDown
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.rounded.BrightnessHigh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -35,10 +47,32 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
+import io.github.jqssun.airplay.ui.gestures.BrightnessState
+import io.github.jqssun.airplay.ui.gestures.DoubleTapIndicator
+import io.github.jqssun.airplay.ui.gestures.GestureInfoText
+import io.github.jqssun.airplay.ui.gestures.SeekGestureState
+import io.github.jqssun.airplay.ui.gestures.TapGestureState
+import io.github.jqssun.airplay.ui.gestures.VerticalGesture
+import io.github.jqssun.airplay.ui.gestures.VideoContentScale
+import io.github.jqssun.airplay.ui.gestures.VerticalProgressIndicator
+import io.github.jqssun.airplay.ui.gestures.VideoPlayerGestures
+import io.github.jqssun.airplay.ui.gestures.VolumeAndBrightnessGestureState
+import io.github.jqssun.airplay.ui.gestures.VolumeState
+import io.github.jqssun.airplay.ui.gestures.ZoomState
 import io.github.jqssun.airplay.viewmodel.DebugInfo
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSourceBitmapLoader
+import androidx.media3.ui.compose.material3.MiniController
+import androidx.media3.ui.compose.material3.buttons.NextButton
+import androidx.media3.ui.compose.material3.buttons.PlayPauseButton
+import androidx.media3.ui.compose.material3.buttons.PreviousButton
+import androidx.media3.ui.compose.material3.indicator.DurationText
+import androidx.media3.ui.compose.material3.indicator.PositionText
+import androidx.media3.ui.compose.material3.indicator.ProgressSlider
+import kotlin.math.abs
 import kotlinx.coroutines.delay
 
 private enum class Tab(val labelRes: Int, val icon: ImageVector) {
@@ -60,16 +94,17 @@ fun MainScreen(
     val pin by viewModel.pinCode.collectAsState()
     val connections by viewModel.connectionCount.collectAsState()
     val audioOnly by viewModel.audioOnly.collectAsState()
-    val videoPlaybackActive by viewModel.videoPlaybackActive.collectAsState()
-    val mirroringActive by viewModel.mirroringActive.collectAsState()
-    val autoFullscreen by viewModel.autoFullscreen.collectAsState()
     val autoAudioMode by viewModel.autoAudioMode.collectAsState()
     var showModePrompt by remember { mutableStateOf(false) }
+    val videoPlaybackActive by viewModel.videoPlaybackActive.collectAsState()
+    val videoSessionPending by viewModel.videoSessionPending.collectAsState()
+    val mirroringActive by viewModel.mirroringActive.collectAsState()
+    val autoFullscreen by viewModel.autoFullscreen.collectAsState()
 
     // don't use movableContentOf: moving AndroidView across subcomposition boundaries makes it crash on reparent
     val video: @Composable () -> Unit = {
         val aspect by viewModel.videoAspect.collectAsState()
-        MirroringView(
+        VideoSurfaceView(
             onSurfaceAvailable = onSurfaceAvailable,
             onSurfaceDestroyed = onSurfaceDestroyed,
             aspectRatio = aspect
@@ -114,10 +149,11 @@ fun MainScreen(
     }
 
     val activity = LocalContext.current as? Activity
-    LaunchedEffect(fullscreen) {
+    val videoScreen = videoPlaybackActive || videoSessionPending
+    LaunchedEffect(fullscreen, videoScreen) {
         val window = activity?.window ?: return@LaunchedEffect
         val controller = WindowInsetsControllerCompat(window, window.decorView)
-        if (fullscreen) {
+        if (fullscreen || videoScreen) {
             controller.hide(WindowInsetsCompat.Type.systemBars())
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         } else {
@@ -127,52 +163,336 @@ fun MainScreen(
 
     // AirPlay Video (HLS /play protocol): full-screen, independent of mirroring's
     // fullscreen/pip/tab state, since it's a wholly separate playback surface
-    if (videoPlaybackActive) {
-        // transport overlay (seek bar + play/pause state) for local transport actions
-        // (screen tap or TV remote via MainActivity.dispatchKeyEvent); shown on any
-        // action, auto-hidden after a few seconds of playback, kept up while paused
-        // or while a held-key scrub is still in flight
+    if (videoScreen) {
+        val videoPlaybackAspect by viewModel.videoPlaybackAspect.collectAsState()
+        val playback: @Composable () -> Unit = {
+            VideoSurfaceView(
+                onSurfaceAvailable = { viewModel.onVideoPlaybackSurfaceAvailable(it) },
+                onSurfaceDestroyed = { viewModel.onVideoPlaybackSurfaceDestroyed(it) },
+                aspectRatio = videoPlaybackAspect
+            )
+        }
+        if (isInPip) {
+            Box(
+                modifier = Modifier.fillMaxSize().background(Color.Black),
+                contentAlignment = Alignment.Center
+            ) {
+                playback()
+            }
+            return
+        }
         val overlayTick by viewModel.videoOverlayTick.collectAsState()
         val playing by viewModel.videoPlaying.collectAsState()
         val positionMs by viewModel.videoPositionMs.collectAsState()
         val durationMs by viewModel.videoDurationMs.collectAsState()
         val scrubPositionMs by viewModel.videoScrubPositionMs.collectAsState()
+        val downloadProgress by viewModel.videoDownloadProgress.collectAsState()
         val scrubbing = scrubPositionMs != null
+        val downloading = downloadProgress != null
         var overlayVisible by remember { mutableStateOf(false) }
-        LaunchedEffect(overlayTick, playing, scrubbing) {
-            // tick == 0 is the untouched fresh-session state; after any interaction
-            // an external pause/resume (sender /rate) also (re)shows the overlay
-            if (overlayTick == 0L) {
+        LaunchedEffect(overlayTick, playing, scrubbing, downloading, videoPlaybackActive) {
+            // tick 0 = fresh session; a pending session or a running download pins the overlay
+            if (!videoPlaybackActive) {
+                overlayVisible = true
+            } else if (overlayTick == 0L) {
                 overlayVisible = false
             } else {
                 overlayVisible = true
-                if (playing && !scrubbing) {
-                    delay(3000)
+                if (playing && !scrubbing && !downloading) {
+                    delay(VIDEO_OVERLAY_HIDE_MS)
                     overlayVisible = false
                 }
             }
         }
+        val gestureScope = rememberCoroutineScope()
+        val tapGestureState = remember(viewModel) { TapGestureState(viewModel, gestureScope) }
+        val seekGestureState = remember(viewModel) { SeekGestureState(viewModel) }
+        val context = LocalContext.current
+        val volumeState = remember { VolumeState(context) }
+        val brightnessState = remember(activity) { activity?.window?.let { BrightnessState(it) } }
+        val volumeAndBrightnessGestureState = remember(volumeState, brightnessState) {
+            VolumeAndBrightnessGestureState(volumeState, brightnessState, gestureScope)
+        }
+        val zoomState = remember(viewModel) { ZoomState(viewModel, gestureScope) }
+        var controlsLocked by remember { mutableStateOf(false) }
+        DisposableEffect(volumeState) { volumeState.handleLifecycle(this) }
+        LaunchedEffect(overlayTick) {
+            if (overlayTick == 0L) {
+                zoomState.reset()
+                controlsLocked = false
+            }
+        }
+        DisposableEffect(brightnessState) {
+            onDispose { brightnessState?.clearOverride() }
+        }
+        // orientation follows the video aspect; manual rotate holds until the next video
+        LaunchedEffect(videoPlaybackAspect) {
+            activity?.requestedOrientation = if (videoPlaybackAspect < 1f) {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            }
+        }
+        DisposableEffect(activity) {
+            onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+        }
+        val videoPlaybackSize by viewModel.videoPlaybackSize.collectAsState()
+        val buffering by viewModel.videoBuffering.collectAsState()
+        val videoTitle by viewModel.videoTitle.collectAsState()
+        val videoLocation by viewModel.videoLocation.collectAsState()
+        val speed by viewModel.videoSpeed.collectAsState()
+        val isPipSupported = remember {
+            context.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+        }
+        var showSpeedSelector by remember { mutableStateOf(false) }
+        BackHandler { viewModel.stopVideoPlayback() }
+
+        val rootFocusRequester = remember { FocusRequester() }
+        val playPauseFocusRequester = remember { FocusRequester() }
+        val unlockFocusRequester = remember { FocusRequester() }
+        var isPlayPauseFocused by remember { mutableStateOf(false) }
+        var isUnlockFocused by remember { mutableStateOf(false) }
+        LaunchedEffect(overlayVisible, controlsLocked, showSpeedSelector) {
+            if (showSpeedSelector) return@LaunchedEffect
+            if (!overlayVisible) {
+                runCatching { rootFocusRequester.requestFocus() }
+                return@LaunchedEffect
+            }
+            val locked = controlsLocked
+            val target = if (locked) unlockFocusRequester else playPauseFocusRequester
+            target.requestFocusUntilLanded(attempts = 20) { if (locked) isUnlockFocused else isPlayPauseFocused }
+        }
+
+        // dpad seeking (controls hidden): accumulate the skipped amount and briefly show it
+        var dpadSeekOffsetMs by remember { mutableLongStateOf(0L) }
+        var dpadSeekTargetMs by remember { mutableLongStateOf(0L) }
+        var dpadSeekActive by remember { mutableStateOf(false) }
+        var dpadSeekTick by remember { mutableIntStateOf(0) }
+        LaunchedEffect(dpadSeekTick) {
+            if (!dpadSeekActive) return@LaunchedEffect
+            delay(1000)
+            dpadSeekActive = false
+        }
+        val showDpadSeekFeedback: (Long) -> Unit = { deltaMs ->
+            if (!dpadSeekActive) dpadSeekOffsetMs = 0L
+            dpadSeekOffsetMs += deltaMs
+            dpadSeekTargetMs = (dpadSeekTargetMs.takeIf { dpadSeekActive } ?: positionMs).plus(deltaMs)
+                .coerceIn(0L, if (durationMs > 0) durationMs else Long.MAX_VALUE)
+            dpadSeekActive = true
+            dpadSeekTick++
+        }
+
         Box(
-            modifier = Modifier.fillMaxSize().background(Color.Black),
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .focusRequester(rootFocusRequester)
+                .focusable()
+                .onPreviewKeyEvent { keyEvent ->
+                    if (showSpeedSelector) {
+                        false
+                    } else {
+                        handlePlayerKeyEvent(
+                            keyEvent = keyEvent,
+                            controlsVisible = overlayVisible,
+                            controlsLocked = controlsLocked,
+                            isPlayPauseFocused = isPlayPauseFocused,
+                            seekIncrementMs = TapGestureState.SEEK_INCREMENT_MS,
+                            viewModel = viewModel,
+                            showControls = { viewModel.showVideoOverlay() },
+                            unlockControls = {
+                                controlsLocked = false
+                                viewModel.showVideoOverlay()
+                            },
+                            onDpadSeek = showDpadSeekFeedback,
+                        )
+                    }
+                },
             contentAlignment = Alignment.Center
         ) {
-            AirPlayVideoView(
-                onSurfaceAvailable = { viewModel.onVideoPlaybackSurfaceAvailable(it) },
-                onSurfaceDestroyed = { viewModel.onVideoPlaybackSurfaceDestroyed(it) },
-                onTap = { viewModel.toggleVideoPlayPause() }
-            )
-            androidx.compose.animation.AnimatedVisibility(
-                visible = overlayVisible,
-                enter = androidx.compose.animation.fadeIn(),
-                exit = androidx.compose.animation.fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter)
-            ) {
-                VideoTransportOverlay(
-                    playing = playing,
-                    positionMs = scrubPositionMs ?: positionMs,
-                    durationMs = durationMs
+            VideoContentFrame(
+                aspect = videoPlaybackAspect,
+                videoSizePx = videoPlaybackSize,
+                contentScale = zoomState.contentScale,
+                zoom = zoomState.zoom
+            ) { sizeModifier ->
+                VideoSurfaceView(
+                    onSurfaceAvailable = { viewModel.onVideoPlaybackSurfaceAvailable(it) },
+                    onSurfaceDestroyed = { viewModel.onVideoPlaybackSurfaceDestroyed(it) },
+                    applyAspectRatio = false,
+                    modifier = sizeModifier
                 )
             }
+            VideoPlayerGestures(
+                enabled = videoPlaybackActive,
+                locked = controlsLocked,
+                onTap = {
+                    // a pending session pins the overlay; taps must not unpin it
+                    if (!videoPlaybackActive) return@VideoPlayerGestures
+                    if (overlayVisible) overlayVisible = false else viewModel.showVideoOverlay()
+                },
+                tapGestureState = tapGestureState,
+                seekGestureState = seekGestureState,
+                volumeAndBrightnessGestureState = volumeAndBrightnessGestureState,
+                zoomState = zoomState
+            )
+            androidx.compose.animation.AnimatedVisibility(
+                visible = overlayVisible && videoPlaybackActive && !controlsLocked,
+                enter = androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.fadeOut()
+            ) {
+                Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)))
+            }
+            if (buffering) {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center).size(72.dp))
+            }
+            DoubleTapIndicator(tapGestureState = tapGestureState)
+            val seekAmountMs = seekGestureState.seekAmountMs
+            when {
+                seekAmountMs != null -> GestureInfoText(
+                    info = "${if (seekAmountMs < 0) "-" else "+"}${formatVideoTime(abs(seekAmountMs))}\n" +
+                        "[${formatVideoTime(seekGestureState.targetPositionMs ?: 0)}]",
+                    modifier = Modifier.align(Alignment.Center)
+                )
+                zoomState.isZooming -> GestureInfoText(
+                    info = "${(zoomState.zoom * 100).toInt()}%",
+                    modifier = Modifier.align(Alignment.Center)
+                )
+                zoomState.showContentScaleIndicator -> GestureInfoText(
+                    info = stringResource(zoomState.contentScale.nameRes()),
+                    modifier = Modifier.align(Alignment.Center)
+                )
+                else -> androidx.compose.animation.AnimatedVisibility(
+                    visible = overlayVisible && videoPlaybackActive && !controlsLocked,
+                    enter = androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.fadeOut(),
+                    modifier = Modifier.align(Alignment.Center)
+                ) {
+                    PlayPauseButton(
+                        playing = playing,
+                        onClick = { viewModel.toggleVideoPlayPause() },
+                        modifier = Modifier
+                            .focusRequester(playPauseFocusRequester)
+                            .onFocusChanged { isPlayPauseFocused = it.hasFocus }
+                    )
+                }
+            }
+            DpadSeekIndicator(
+                visible = dpadSeekActive && dpadSeekOffsetMs != 0L,
+                offsetMs = dpadSeekOffsetMs,
+                positionMs = dpadSeekTargetMs
+            )
+            androidx.compose.animation.AnimatedVisibility(
+                visible = volumeAndBrightnessGestureState.activeGesture == VerticalGesture.VOLUME,
+                enter = androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.fadeOut(),
+                modifier = Modifier.align(Alignment.CenterStart).padding(24.dp)
+            ) {
+                VerticalProgressIndicator(value = volumeState.percentage, icon = Icons.AutoMirrored.Rounded.VolumeUp)
+            }
+            androidx.compose.animation.AnimatedVisibility(
+                visible = volumeAndBrightnessGestureState.activeGesture == VerticalGesture.BRIGHTNESS,
+                enter = androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.fadeOut(),
+                modifier = Modifier.align(Alignment.CenterEnd).padding(24.dp)
+            ) {
+                VerticalProgressIndicator(value = brightnessState?.percentage ?: 0, icon = Icons.Rounded.BrightnessHigh)
+            }
+            if (controlsLocked) {
+                if (overlayVisible) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .safeDrawingPadding()
+                            .padding(top = 24.dp)
+                    ) {
+                        UnlockButton(
+                            onClick = {
+                                controlsLocked = false
+                                viewModel.showVideoOverlay()
+                            },
+                            modifier = Modifier
+                                .focusRequester(unlockFocusRequester)
+                                .onFocusChanged { isUnlockFocused = it.hasFocus }
+                        )
+                    }
+                }
+            } else {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = overlayVisible,
+                    enter = androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.fadeOut(),
+                    modifier = Modifier.align(Alignment.TopCenter)
+                ) {
+                    VideoControlsTop(
+                        title = videoTitle,
+                        videoUrl = videoLocation,
+                        downloadProgress = downloadProgress,
+                        showDownload = durationMs > 0,
+                        onBackClick = { viewModel.stopVideoPlayback() },
+                        onSpeedClick = {
+                            overlayVisible = false
+                            showSpeedSelector = true
+                        },
+                        onDownloadClick = { viewModel.toggleVideoDownload() }
+                    )
+                }
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = overlayVisible,
+                    enter = androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                ) {
+                    VideoControlsBottom(
+                        positionMs = scrubPositionMs ?: positionMs,
+                        durationMs = durationMs,
+                        contentScale = zoomState.contentScale,
+                        isPipSupported = isPipSupported,
+                        onRotateClick = {
+                            activity?.let {
+                                it.requestedOrientation =
+                                    if (it.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                                        ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                                    } else {
+                                        ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                    }
+                            }
+                        },
+                        onLockClick = {
+                            viewModel.showVideoOverlay()
+                            controlsLocked = true
+                        },
+                        onContentScaleClick = {
+                            viewModel.showVideoOverlay()
+                            zoomState.switchToNextContentScale()
+                        },
+                        onPipClick = onPip,
+                        onSeek = { seekGestureState.onSeek(it) },
+                        onSeekEnd = { seekGestureState.onSeekEnd() },
+                        seekBarModifier = Modifier
+                            .focusProperties { up = playPauseFocusRequester }
+                            .dpadAdjust(
+                                onLeft = {
+                                    viewModel.seekVideoBy(-TapGestureState.SEEK_INCREMENT_MS)
+                                    viewModel.showVideoOverlay()
+                                },
+                                onRight = {
+                                    viewModel.seekVideoBy(TapGestureState.SEEK_INCREMENT_MS)
+                                    viewModel.showVideoOverlay()
+                                }
+                            )
+                    )
+                }
+            }
+            val skipSilence by viewModel.videoSkipSilence.collectAsState()
+            PlaybackSpeedSelector(
+                show = showSpeedSelector,
+                speed = speed,
+                skipSilence = skipSilence,
+                onSpeedChange = { viewModel.setVideoSpeed(it) },
+                onSkipSilenceChange = { viewModel.setVideoSkipSilence(it) },
+                onDismiss = { showSpeedSelector = false }
+            )
         }
         return
     }
@@ -212,15 +532,22 @@ fun MainScreen(
     } else {
         Scaffold(
             bottomBar = {
-                NavigationBar {
-                    Tab.entries.forEach { t ->
-                        NavigationBarItem(
-                            selected = tab == t,
-                            onClick = { tab = t },
-                            icon = { Icon(t.icon, null) },
-                            label = { Text(stringResource(t.labelRes)) },
-                            modifier = Modifier.dpadFocus()
-                        )
+                Column {
+                    AudioMiniController(
+                        viewModel,
+                        visible = audioOnly && connections > 0 && tab != Tab.OVERVIEW,
+                        onClick = { tab = Tab.OVERVIEW }
+                    )
+                    NavigationBar {
+                        Tab.entries.forEach { t ->
+                            NavigationBarItem(
+                                selected = tab == t,
+                                onClick = { tab = t },
+                                icon = { Icon(t.icon, null) },
+                                label = { Text(stringResource(t.labelRes)) },
+                                modifier = Modifier.dpadFocus()
+                            )
+                        }
                     }
                 }
             }
@@ -533,70 +860,52 @@ private fun FullscreenVideo(
     }
 }
 
-// Android-TV-style transport overlay for AirPlay Video: play/pause state, seek bar
-// and position/duration text over a bottom scrim. While scrubbing, positionMs is the
-// pending scrub target rather than the live position (see MainViewModel.scrubVideoBy).
+// dacp scanning is press-and-hold: beginff/beginrew while held, playresume on release
 @Composable
-private fun VideoTransportOverlay(
-    playing: Boolean,
-    positionMs: Long,
-    durationMs: Long,
+private fun HoldScanButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onBegin: () -> Unit,
+    onEnd: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(
+    Box(
         modifier = modifier
-            .fillMaxWidth()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f))
-                )
-            )
-            .padding(horizontal = 40.dp)
-            .padding(top = 48.dp, bottom = 28.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .size(48.dp)
+            .clip(CircleShape)
+            .pointerInput(Unit) {
+                detectTapGestures(onPress = {
+                    onBegin()
+                    try {
+                        awaitRelease()
+                    } finally {
+                        onEnd()
+                    }
+                })
+            },
+        contentAlignment = Alignment.Center
     ) {
-        Icon(
-            imageVector = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-            contentDescription = stringResource(R.string.cd_play_pause),
-            tint = Color.White,
-            modifier = Modifier.size(36.dp)
-        )
-        Spacer(Modifier.width(20.dp))
-        // duration 0 = not yet known (or live stream): no meaningful bar to draw
-        if (durationMs > 0) {
-            LinearProgressIndicator(
-                progress = { (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) },
-                color = Color.White,
-                trackColor = Color.White.copy(alpha = 0.3f),
-                drawStopIndicator = {},
-                modifier = Modifier
-                    .weight(1f)
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp))
-            )
-            Spacer(Modifier.width(20.dp))
-            Text(
-                text = "${_formatTime(positionMs)} / ${_formatTime(durationMs)}",
-                style = MaterialTheme.typography.titleMedium,
-                color = Color.White
-            )
-        } else {
-            Spacer(Modifier.weight(1f))
-            Text(
-                text = _formatTime(positionMs),
-                style = MaterialTheme.typography.titleMedium,
-                color = Color.White
-            )
-        }
+        Icon(icon, contentDescription)
     }
 }
 
 @Composable
+@AndroidxOptIn(UnstableApi::class)
+private fun AudioMiniController(viewModel: MainViewModel, visible: Boolean, onClick: () -> Unit) {
+    if (!visible) return
+    val player = viewModel.dacpPlayer ?: return
+    val context = LocalContext.current
+    MiniController(
+        player,
+        bitmapLoader = remember { DataSourceBitmapLoader(context) },
+        onClick = onClick
+    )
+}
+
+@Composable
+@AndroidxOptIn(UnstableApi::class)
 private fun NowPlayingContent(viewModel: MainViewModel) {
     val track by viewModel.trackInfo.collectAsState()
-    val positionMs by viewModel.positionMs.collectAsState()
-    val durationMs by viewModel.durationMs.collectAsState()
-    val playing by viewModel.playing.collectAsState()
 
     // TV remote: land focus on play/pause when the Now Playing screen appears
     // (otherwise it stays on the server start/stop button, where DPAD CENTER
@@ -672,61 +981,63 @@ private fun NowPlayingContent(viewModel: MainViewModel) {
 
         Spacer(Modifier.height(16.dp))
 
-        // progress bar (read-only, seeking not supported by AirPlay receiver)
-        if (durationMs > 0) {
-            LinearProgressIndicator(
-                progress = { (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(2.dp))
-            )
-            Spacer(Modifier.height(4.dp))
+        val player = viewModel.dacpPlayer
+        if (player != null) {
+            // BottomControls' default row, minus its video-overlay gradient
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                PositionText(player, Modifier.padding(end = 8.dp))
+                Box(modifier = Modifier.weight(1f)) { ProgressSlider(player) }
+                DurationText(player, Modifier.padding(start = 8.dp))
+            }
+
+            Spacer(Modifier.height(8.dp))
+
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Text(_formatTime(positionMs), style = MaterialTheme.typography.labelSmall)
-                Text(_formatTime(durationMs), style = MaterialTheme.typography.labelSmall)
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        // playback controls
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            IconButton(onClick = { viewModel.dacpPrev() }, modifier = Modifier.dpadFocus()) {
-                Icon(Icons.Default.SkipPrevious, stringResource(R.string.cd_previous), modifier = Modifier.size(36.dp))
-            }
-            FilledIconButton(
-                onClick = { viewModel.dacpPlayPause() },
-                modifier = Modifier
-                    .size(56.dp)
-                    .dpadFocus(CircleShape)
-                    .focusRequester(playPauseFocus)
-                    .dpadAdjust(
-                        onLeft = { viewModel.dacpPrev() },
-                        onRight = { viewModel.dacpNext() }
-                    )
-            ) {
-                Icon(
-                    if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    stringResource(R.string.cd_play_pause), modifier = Modifier.size(32.dp)
+                HoldScanButton(
+                    icon = Icons.Default.FastRewind,
+                    contentDescription = stringResource(R.string.cd_rewind),
+                    onBegin = { viewModel.audioScanBegin(false) },
+                    onEnd = { viewModel.audioScanEnd() }
+                )
+                PreviousButton(player, modifier = Modifier.dpadFocus())
+                PlayPauseButton(
+                    player,
+                    modifier = Modifier.size(63.dp).dpadFocus(CircleShape),
+                    iconSize = 40.dp
+                )
+                NextButton(player, modifier = Modifier.dpadFocus())
+                HoldScanButton(
+                    icon = Icons.Default.FastForward,
+                    contentDescription = stringResource(R.string.cd_fast_forward),
+                    onBegin = { viewModel.audioScanBegin(true) },
+                    onEnd = { viewModel.audioScanEnd() }
                 )
             }
-            IconButton(onClick = { viewModel.dacpNext() }, modifier = Modifier.dpadFocus()) {
-                Icon(Icons.Default.SkipNext, stringResource(R.string.cd_next), modifier = Modifier.size(36.dp))
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                IconButton(onClick = { viewModel.audioVolumeDown() }, modifier = Modifier.dpadFocus()) {
+                    Icon(Icons.AutoMirrored.Rounded.VolumeDown, stringResource(R.string.cd_volume_down))
+                }
+                IconButton(onClick = { viewModel.audioMuteToggle() }, modifier = Modifier.dpadFocus()) {
+                    Icon(Icons.AutoMirrored.Rounded.VolumeOff, stringResource(R.string.cd_mute))
+                }
+                IconButton(onClick = { viewModel.audioVolumeUp() }, modifier = Modifier.dpadFocus()) {
+                    Icon(Icons.AutoMirrored.Rounded.VolumeUp, stringResource(R.string.cd_volume_up))
+                }
             }
         }
     }
 }
 
-private fun _formatTime(ms: Long): String {
-    val s = (ms / 1000).toInt()
-    return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, (s % 3600) / 60, s % 60)
-    else "%d:%02d".format(s / 60, s % 60)
-}
+private const val VIDEO_OVERLAY_HIDE_MS = 4000L
 
 @Composable
 private fun DebugOverlay(info: DebugInfo, modifier: Modifier = Modifier) {
