@@ -125,7 +125,12 @@ void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double 
     ctx->playback_duration = duration;
     ctx->playback_rate = rate;
     ctx->playback_ready = ready;
-    if (ready && !ctx->play_ready) {
+    /* wake a play() hold-until-ready wait (see _video_play) as soon as the outcome
+       is known, not just on success: duration == -1.0 is the "stopped/finished"
+       sentinel, sent on a real stop, player error, or disconnect. Without this,
+       a session that fails before ever reporting ready would block the httpd
+       thread for the full timeout below instead of returning immediately. */
+    if (!ctx->play_ready && (ready || duration == -1.0)) {
         ctx->play_ready = 1;
         pthread_cond_signal(&ctx->play_ready_cond);
     }
