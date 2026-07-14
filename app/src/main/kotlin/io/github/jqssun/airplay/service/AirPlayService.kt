@@ -510,85 +510,6 @@ class AirPlayService : Service(), RaopCallbackHandler {
         _videoLocation.value?.let { videoDownloader.start(it) }
     }
 
-    // -- sender-liveness watchdog for AirPlay Video --
-    //
-    // Backstop for sender apps that abandon a video without a usable stop signal
-    // (the deterministic primary signal is the native play-connection-close rule,
-    // RESET_TYPE_HLS_CONN_CLOSED in raop.c). The native layer timestamps every
-    // video-session request (NativeBridge.nativeMsSinceVideoRequest); while a video
-    // session is active but NOT progressing, this watchdog treats a long request
-    // silence as sender-abandoned and ends the session. It never fires while the
-    // position is advancing, so a steady-state playing session can't be killed by
-    // it. Note it does NOT cover senders that keep polling /playback-info after
-    // abandoning (iFit does, from a connection that outlives the session): that
-    // case is exactly what the connection-close rule is for. The watchdog also
-    // logs sender poll activity so real-device traces show which case occurred.
-
-    // last position sampled by the watchdog, to detect "not progressing"
-    private var _livenessLastPositionMs = -1L
-    // poll-activity accounting for the throttled request logs
-    private var _livenessLastRequestCount = -1L
-    private var _livenessLogCountdown = 0
-    private var _senderPollingStopped = false
-
-    private val _senderLivenessTick = object : Runnable {
-        override fun run() {
-            if (!_videoPlaybackActive.value) return
-            _checkSenderLiveness()
-            if (_videoPlaybackActive.value) {
-                mainHandler.postDelayed(this, SENDER_LIVENESS_CHECK_MS)
-            }
-        }
-    }
-
-    private fun _checkSenderLiveness() {
-        val handle = nativeHandle
-        if (handle == 0L) return
-        val silentMs = NativeBridge.nativeMsSinceVideoRequest(handle)
-        // -1 (no request seen) can't normally happen while a session is active,
-        // since the session's own POST /play bumps the timestamp
-        if (silentMs < 0) return
-        val requestCount = NativeBridge.nativeVideoRequestCount(handle)
-
-        // throttled poll-activity trace (logcat debug): one line per 5s with the
-        // number of sender requests (mostly /playback-info polls) seen since the
-        // previous line -- the ground truth for whether a sender is still polling
-        if (_livenessLastRequestCount < 0) {
-            _livenessLastRequestCount = requestCount
-            _livenessLogCountdown = LIVENESS_LOG_EVERY_TICKS
-        } else if (--_livenessLogCountdown <= 0) {
-            Log.d(TAG, "AirPlay Video sender requests: " +
-                "+${requestCount - _livenessLastRequestCount} in last " +
-                "${LIVENESS_LOG_EVERY_TICKS}s (last ${silentMs}ms ago)")
-            _livenessLastRequestCount = requestCount
-            _livenessLogCountdown = LIVENESS_LOG_EVERY_TICKS
-        }
-
-        // polling stopped/resumed transitions (app log)
-        val pollingSilent = silentMs >= SENDER_POLL_STOPPED_MS
-        if (pollingSilent && !_senderPollingStopped) {
-            _senderPollingStopped = true
-            log("AirPlay Video sender polling stopped (last request ${silentMs / 1000}s ago)")
-        } else if (!pollingSilent && _senderPollingStopped) {
-            _senderPollingStopped = false
-            log("AirPlay Video sender polling resumed")
-        }
-
-        // positionMs comes from the 250ms ExoPlayer snapshot; between watchdog ticks
-        // (1s apart) it always moves while playback progresses. It stays frozen when
-        // paused, stalled, errored, or still stuck loading (no snapshot at all).
-        val positionMs = _videoPlaybackInfo.value.positionMs
-        val progressing = positionMs != _livenessLastPositionMs
-        _livenessLastPositionMs = positionMs
-        if (progressing) return
-        if (silentMs < SENDER_LIVENESS_CHECK_MS) return // requests still arriving
-        // true-silence countdown, visible in traces (at most ~10 lines per incident)
-        log("AirPlay Video sender silent ${silentMs / 1000}s/" +
-            "${SENDER_ABANDON_TIMEOUT_MS / 1000}s, position frozen")
-        if (silentMs < SENDER_ABANDON_TIMEOUT_MS) return
-        _endVideoPlayback("AirPlay Video stopped (sender silent for ${silentMs / 1000}s)")
-    }
-
     /**
      * Single teardown for the end of an AirPlay Video session, whatever ended it:
      * the sender's POST /stop or TEARDOWN ([onVideoStop]), the sender dropping its
@@ -604,7 +525,6 @@ class AirPlayService : Service(), RaopCallbackHandler {
         // lingering polls after a stop must not bounce the UI back to a pending session
         _videoPollSuppressed = true
         _videoPlaybackActive.value = false
-        mainHandler.removeCallbacks(_senderLivenessTick)
         airPlayVideoPlayer.stop()
         if (!_audioOnly.value) mediaSession?.isActive = false
         log(message)
@@ -652,12 +572,6 @@ class AirPlayService : Service(), RaopCallbackHandler {
         // player even when they arrive as media-session events rather than KeyEvents
         mediaSession?.isActive = true
         log("AirPlay Video play: $location @ ${startPositionSeconds}s")
-        // (re)arm the sender-liveness watchdog for this session
-        mainHandler.removeCallbacks(_senderLivenessTick)
-        _livenessLastPositionMs = -1L
-        _livenessLastRequestCount = -1L
-        _senderPollingStopped = false
-        mainHandler.postDelayed(_senderLivenessTick, SENDER_LIVENESS_CHECK_MS)
         // (re-)summon the UI for EVERY play, not only the first client connection:
         // switching videos in the sender app stops one item and plays the next on
         // the same connection -- possibly after a summoned activity has already
@@ -1055,23 +969,5 @@ class AirPlayService : Service(), RaopCallbackHandler {
         // shared with dpad/double-tap seeks
         const val VIDEO_SEEK_STEP_MS = 10_000L
         const val VIDEO_POLL_PENDING_TIMEOUT_MS = 3_000L
-
-        // -- sender-liveness watchdog for AirPlay Video --
-        //
-        // Backstop for sender apps that abandon a video without a usable stop signal
-        // (the deterministic primary signal is the native play-connection-close rule,
-        // RESET_TYPE_HLS_CONN_CLOSED in raop.c). The native layer timestamps every
-        // video-session request (NativeBridge.nativeMsSinceVideoRequest); while a video
-        // session is active but NOT progressing, this watchdog treats a long request
-        // silence as sender-abandoned and ends the session. It never fires while the
-        // position is advancing, so a steady-state playing session can't be killed by
-        // it. Note it does NOT cover senders that keep polling /playback-info after
-        // abandoning (iFit does, from a connection that outlives the session): that
-        // case is exactly what the connection-close rule is for. The watchdog also
-        // logs sender poll activity so real-device traces show which case occurred.
-        const val SENDER_ABANDON_TIMEOUT_MS = 10_000L
-        private const val SENDER_LIVENESS_CHECK_MS = 1_000L
-        private const val LIVENESS_LOG_EVERY_TICKS = 5
-        private const val SENDER_POLL_STOPPED_MS = 3_000L
     }
 }
