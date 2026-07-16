@@ -186,9 +186,12 @@ class VideoRenderer {
             _startDecoder(MediaCodec.createDecoderByType(mime), format, s, h265)
         } catch (e: Exception) {
             // strict hw decoders reject configs beyond their real limits
+            val sw = _softwareDecoder(mime)?.takeIf {
+                it.getCapabilitiesForType(mime).videoCapabilities
+                    ?.isSizeSupported(videoWidth, videoHeight) == true
+            } ?: throw e
             Log.w(TAG, "Hardware decoder failed, trying software fallback", e)
-            val name = _softwareDecoderName(mime) ?: throw e
-            _startDecoder(MediaCodec.createByCodecName(name), format, s, h265)
+            _startDecoder(MediaCodec.createByCodecName(sw.name), format, s, h265)
         }
         Log.i(TAG, "Video codec started: $mime ${videoWidth}x${videoHeight} ($codecName)")
     }
@@ -292,22 +295,32 @@ class VideoRenderer {
             }
         }
 
-        // limits of the decoder createDecoderByType would pick
+        // smallest limits across codecs the sender may pick; unknown limits assume 1080p, which any device decodes
         fun maxSupportedResolution(h265: Boolean): Pair<Int, Int> {
-            val mime = if (h265) MediaFormat.MIMETYPE_VIDEO_HEVC else MediaFormat.MIMETYPE_VIDEO_AVC
-            try {
-                val caps = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
-                    .firstOrNull { info ->
-                        !info.isEncoder && info.supportedTypes.any { it.equals(mime, ignoreCase = true) }
-                    }?.getCapabilitiesForType(mime)?.videoCapabilities
-                if (caps != null) return caps.supportedWidths.upper to caps.supportedHeights.upper
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to get decoder capabilities", e)
-            }
-            return 1920 to 1080
+            val mimes = listOfNotNull(
+                MediaFormat.MIMETYPE_VIDEO_AVC,
+                MediaFormat.MIMETYPE_VIDEO_HEVC.takeIf { h265 },
+            )
+            return mimes
+                .map { mime ->
+                    _decoderCaps(mime)?.let { it.supportedWidths.upper to it.supportedHeights.upper }
+                        ?: (1920 to 1080)
+                }
+                .reduce { (w1, h1), (w2, h2) -> minOf(w1, w2) to minOf(h1, h2) }
         }
 
-        private fun _softwareDecoderName(mime: String): String? =
+        // caps of the decoder createDecoderByType would pick
+        private fun _decoderCaps(mime: String) = try {
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+                .firstOrNull { info ->
+                    !info.isEncoder && info.supportedTypes.any { it.equals(mime, ignoreCase = true) }
+                }?.getCapabilitiesForType(mime)?.videoCapabilities
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to get decoder capabilities", e)
+            null
+        }
+
+        private fun _softwareDecoder(mime: String) =
             MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.firstOrNull { info ->
                 !info.isEncoder && info.supportedTypes.any { it.equals(mime, ignoreCase = true) } &&
                     (if (android.os.Build.VERSION.SDK_INT >= 29) info.isSoftwareOnly
@@ -315,6 +328,6 @@ class VideoRenderer {
                         it.startsWith("omx.google.") || it.startsWith("c2.android.") ||
                             (!it.startsWith("omx.") && !it.startsWith("c2."))
                     })
-            }?.name
+            }
     }
 }
