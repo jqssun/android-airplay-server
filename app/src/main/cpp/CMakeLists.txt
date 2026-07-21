@@ -20,6 +20,20 @@ set(FORWARD_ANDROID_NDK_ROOT "${ANDROID_NDK}" CACHE STRING "" FORCE) # CI
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 add_subdirectory(third_party/openssl-cmake)
 
+# ---------- Sanitizers (opt-in via -DSANITIZE=ON) ----------
+# OpenSSL uninstrumented; HWASan is arm64-only
+option(SANITIZE "Enable UBSan (and HWASan on arm64) for the native code" OFF)
+if(SANITIZE)
+    set(SANITIZE_CFLAGS -fno-omit-frame-pointer -fsanitize=undefined -fno-sanitize=vptr)
+    set(SANITIZE_LDFLAGS -fsanitize=undefined)
+    if(ANDROID_ABI STREQUAL "arm64-v8a")
+        list(APPEND SANITIZE_CFLAGS -fsanitize=hwaddress)
+        list(APPEND SANITIZE_LDFLAGS -fsanitize=hwaddress)
+    endif()
+    add_compile_options(${SANITIZE_CFLAGS})
+    add_link_options(${SANITIZE_LDFLAGS})
+endif()
+
 # ---------- Oboe (low-latency audio output, via prefab AAR) ----------
 find_package(oboe REQUIRED CONFIG)
 

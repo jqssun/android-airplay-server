@@ -30,6 +30,14 @@ endif()
 
 set(FFMPEG_INSTALL ${CMAKE_BINARY_DIR}/ffmpeg)
 
+# instrument ffmpeg with the same sanitizers; built with --disable-asm
+set(_ffmpeg_sanitize "")
+if(SANITIZE)
+    string(REPLACE ";" " " _ff_scflags "${SANITIZE_CFLAGS}")
+    string(REPLACE ";" " " _ff_sldflags "${SANITIZE_LDFLAGS}")
+    set(_ffmpeg_sanitize "--extra-cflags=${_ff_scflags}" "--extra-ldflags=${_ff_sldflags}")
+endif()
+
 ExternalProject_Add(ffmpeg_ep
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ffmpeg
     DOWNLOAD_COMMAND ""
@@ -46,6 +54,7 @@ ExternalProject_Add(ffmpeg_ep
         --enable-pic --disable-asm --disable-x86asm
         --disable-all --disable-debug --disable-network --disable-autodetect
         --enable-avcodec --enable-decoder=alac --enable-static --disable-shared
+        ${_ffmpeg_sanitize}
     BUILD_COMMAND make -j${_ffmpeg_jobs}
     INSTALL_COMMAND make install
     BUILD_BYPRODUCTS ${FFMPEG_INSTALL}/lib/libavcodec.a ${FFMPEG_INSTALL}/lib/libavutil.a

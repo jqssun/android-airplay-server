@@ -12,6 +12,8 @@ val localProps = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
 }
 
+val allAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+
 android {
     namespace = "io.github.jqssun.airplay"
     compileSdk = 36
@@ -32,12 +34,8 @@ android {
         applicationId = "io.github.jqssun.airplay"
         minSdk = 24
         targetSdk = 35
-        versionCode = 27
-        versionName = "0.0.27"
-
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
-        }
+        versionCode = 28
+        versionName = "0.0.28"
 
         externalNativeBuild {
             cmake {
@@ -54,10 +52,26 @@ android {
     }
 
     buildTypes {
+        debug {
+            ndk { abiFilters += allAbis }
+        }
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfigs.findByName("release")?.let { signingConfig = it }
+            ndk { abiFilters += allAbis }
+        }
+        // debuggable build with HWASan (arm64) + UBSan in native code
+        create("sanitize") {
+            initWith(getByName("debug"))
+            matchingFallbacks += "debug"
+            ndk {
+                abiFilters.clear()
+                abiFilters += "arm64-v8a"
+            }
+            externalNativeBuild {
+                cmake { arguments += "-DSANITIZE=ON" }
+            }
         }
     }
 
