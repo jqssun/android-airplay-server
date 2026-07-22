@@ -11,11 +11,13 @@ core-ktx = "1.15.0"
 datastore = "1.1.1"
 coroutines = "1.9.0"
 media3 = "1.11.0-beta01"
+oboe = "1.9.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity-compose" }
 androidx-lifecycle-runtime = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-service = { group = "androidx.lifecycle", name = "lifecycle-service", version.ref = "lifecycle" }
 androidx-lifecycle-viewmodel = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 androidx-datastore-prefs = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 
@@ -38,6 +40,8 @@ media3-transformer = { group = "androidx.media3", name = "media3-transformer", v
 media3-ui-compose-material3 = { group = "androidx.media3", name = "media3-ui-compose-material3", version.ref = "media3" }
 
 kotlinx-coroutines = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+
+oboe = { group = "com.google.oboe", name = "oboe", version.ref = "oboe" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

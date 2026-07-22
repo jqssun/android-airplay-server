@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <android/log.h>
 #include "android_raop_callbacks.h"
+#include "audio_engine.h"
 
 #define TAG "AirPlayNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -23,6 +24,7 @@ static JNIEnv *_get_env(android_callback_ctx_t *ctx) {
     /* Clear any pending exception from a previous callback on this thread,
        otherwise JNI calls like NewByteArray will fatally abort. */
     if (env && (*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
         (*env)->ExceptionClear(env);
     }
     return env;
@@ -34,11 +36,10 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->h265_enabled = 1;
     ctx->require_pin = 0;
     ctx->registered_count = 0;
+    ctx->audio_engine = NULL;
     memset(ctx->registered_keys, 0, sizeof(ctx->registered_keys));
 
     pthread_mutex_init(&ctx->playback_info_lock, NULL);
-    ctx->last_video_request_ns = 0;
-    ctx->video_request_count = 0;
     pthread_cond_init(&ctx->play_ready_cond, NULL);
     ctx->play_ready = 0;
     ctx->playback_position = 0.0;
@@ -52,7 +53,6 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
 
     jclass cls = (*env)->GetObjectClass(env, callback_obj);
     ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZ)V");
-    ctx->on_audio_data = (*env)->GetMethodID(env, cls, "onAudioData", "([BIJI)V");
     ctx->on_audio_format = (*env)->GetMethodID(env, cls, "onAudioFormat", "(IIZ)V");
     ctx->on_video_size = (*env)->GetMethodID(env, cls, "onVideoSize", "(FFFF)V");
     ctx->on_volume_change = (*env)->GetMethodID(env, cls, "onVolumeChange", "(F)V");
@@ -87,37 +87,6 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env) {
     pthread_mutex_destroy(&ctx->playback_info_lock);
 }
 
-static uint64_t _monotonic_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-}
-
-/* Records that the sender just made a request touching the AirPlay Video session
-   (see last_video_request_ns in the header). Called from httpd threads. */
-static void _touch_video_request(android_callback_ctx_t *ctx) {
-    uint64_t now = _monotonic_ns();
-    pthread_mutex_lock(&ctx->playback_info_lock);
-    ctx->last_video_request_ns = now;
-    ctx->video_request_count++;
-    pthread_mutex_unlock(&ctx->playback_info_lock);
-}
-
-uint64_t android_callbacks_video_request_count(android_callback_ctx_t *ctx) {
-    pthread_mutex_lock(&ctx->playback_info_lock);
-    uint64_t count = ctx->video_request_count;
-    pthread_mutex_unlock(&ctx->playback_info_lock);
-    return count;
-}
-
-int64_t android_callbacks_ms_since_video_request(android_callback_ctx_t *ctx) {
-    pthread_mutex_lock(&ctx->playback_info_lock);
-    uint64_t last = ctx->last_video_request_ns;
-    pthread_mutex_unlock(&ctx->playback_info_lock);
-    if (last == 0) return -1;
-    return (int64_t)((_monotonic_ns() - last) / 1000000ull);
-}
-
 void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double position,
                                              double duration, float rate, int ready) {
     pthread_mutex_lock(&ctx->playback_info_lock);
@@ -141,14 +110,9 @@ void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double 
 
 static void _audio_process(void *cls, raop_ntp_t *ntp, audio_decode_struct *data) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    JNIEnv *env = _get_env(ctx);
-    if (!env || !data->data || data->data_len <= 0) return;
-
-    jbyteArray arr = (*env)->NewByteArray(env, data->data_len);
-    (*env)->SetByteArrayRegion(env, arr, 0, data->data_len, (jbyte *)data->data);
-    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_audio_data,
-                           arr, (jint)data->ct, (jlong)data->ntp_time_local, (jint)data->seqnum);
-    (*env)->DeleteLocalRef(env, arr);
+    if (!ctx->audio_engine || !data->data || data->data_len <= 0) return;
+    audio_engine_decode(ctx->audio_engine, data->data, data->data_len,
+                        (int)data->ct, (int64_t)data->ntp_time_local);
 }
 
 static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data) {
@@ -349,7 +313,6 @@ static bool _check_register(void *cls, const char *pk_str) {
 static void _video_play(void *cls, const char *location, const float start_position) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     LOGI("video_play: %s @ %.2fs", location ? location : "(null)", start_position);
-    _touch_video_request(ctx);
     pthread_mutex_lock(&ctx->playback_info_lock);
     ctx->play_ready = 0;
     pthread_mutex_unlock(&ctx->playback_info_lock);
@@ -373,7 +336,6 @@ static void _video_play(void *cls, const char *location, const float start_posit
 
 static void _video_scrub(void *cls, const float position) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    _touch_video_request(ctx);
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_scrub, (jfloat)position);
@@ -381,7 +343,6 @@ static void _video_scrub(void *cls, const float position) {
 
 static void _video_rate(void *cls, const float rate) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    _touch_video_request(ctx);
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_rate, (jfloat)rate);
@@ -389,7 +350,6 @@ static void _video_rate(void *cls, const float rate) {
 
 static void _video_stop(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    _touch_video_request(ctx);
     android_callbacks_update_playback_info(ctx, 0.0, -1.0, 0.0f, 0);
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
@@ -402,9 +362,6 @@ static void _video_stop(void *cls) {
 static void _video_acquire_playback_info(void *cls, playback_info_t *info) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     pthread_mutex_lock(&ctx->playback_info_lock);
-    /* the sender's periodic GET /playback-info poll is its liveness heartbeat */
-    ctx->last_video_request_ns = _monotonic_ns();
-    ctx->video_request_count++;
     info->position = ctx->playback_position;
     info->duration = ctx->playback_duration;
     info->rate = ctx->playback_rate;
@@ -425,8 +382,6 @@ static void _video_acquire_playback_info(void *cls, playback_info_t *info) {
 static float _video_playlist_remove(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     pthread_mutex_lock(&ctx->playback_info_lock);
-    ctx->last_video_request_ns = _monotonic_ns();
-    ctx->video_request_count++;
     double position = ctx->playback_position;
     pthread_mutex_unlock(&ctx->playback_info_lock);
     return (float) position;

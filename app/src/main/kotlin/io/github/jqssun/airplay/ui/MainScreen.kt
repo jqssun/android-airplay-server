@@ -38,6 +38,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import android.content.Context
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -706,7 +707,7 @@ private fun OverviewContent(
                     }
                 }
             }
-            if (debugEnabled && connections > 0 && !showAudioMode) {
+            if (debugEnabled && connections > 0) {
                 DebugOverlay(debugInfo, Modifier.align(Alignment.TopStart).padding(8.dp))
             }
             var showRes by remember { mutableStateOf(false) }
@@ -1048,17 +1049,43 @@ private fun DebugOverlay(info: DebugInfo, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         val style = MaterialTheme.typography.labelSmall
+        val headingStyle = style.copy(fontWeight = FontWeight.Bold)
         val color = Color.White.copy(alpha = 0.9f)
-
-        if (info.videoCodec.isNotEmpty()) {
-            Text(stringResource(R.string.debug_video, info.videoCodec, info.videoRes), style = style, color = color)
-            Text(stringResource(R.string.debug_fps_bitrate, info.videoFps, info.bitrateStr), style = style, color = color)
-            Text(stringResource(R.string.debug_frames_drops, info.videoFrames, info.droppedFrames), style = style, color = color)
-            Text(stringResource(R.string.debug_jitter, info.jitterStr), style = style, color = color)
+        val headingColor = Color(0xFF80D8FF) // cyan
+        val context = LocalContext.current
+        debugOverlaySections(context, info).forEachIndexed { i, section ->
+            if (i > 0) Spacer(Modifier.height(6.dp))
+            Text(section.title.uppercase(), style = headingStyle, color = headingColor)
+            section.lines.forEach { Text(it, style = style, color = color) }
         }
-        if (info.audioCodec.isNotEmpty()) {
-            Text(stringResource(R.string.debug_audio, info.audioCodec, info.audioVolume), style = style, color = color)
-        }
-        Text(stringResource(R.string.debug_clients, info.connections), style = style, color = color)
     }
 }
+
+private data class DebugSection(val title: String, val lines: List<String>)
+
+private fun debugOverlaySections(context: Context, info: DebugInfo): List<DebugSection> = buildList {
+    buildList {
+        if (info.videoCodec.isNotEmpty()) {
+            add(context.getString(R.string.debug_video, info.videoCodec, info.videoRes))
+            add(context.getString(R.string.debug_fps_bitrate, info.videoFps, info.bitrateStr))
+            add(context.getString(R.string.debug_frames_drops, info.videoFrames, info.droppedFrames))
+            add(context.getString(R.string.debug_jitter, info.jitterStr))
+        }
+    }.takeIf { it.isNotEmpty() }?.let { add(DebugSection(context.getString(R.string.debug_section_video), it)) }
+
+    buildList {
+        if (info.audioCodec.isNotEmpty()) add(context.getString(R.string.debug_audio, info.audioCodec, info.audioVolume))
+        info.audio?.let { a ->
+            add(context.getString(R.string.debug_audio_buffer, a.backlogMs, a.tunedCushionMs))
+            add(context.getString(R.string.debug_audio_glitch, a.trims, a.drops, a.silences, a.underruns, a.xrun))
+            add(context.getString(R.string.debug_audio_decode, formatDecode(a.decodeMeanUs, a.decodeMaxUs, a.decodeHeld, a.decodeErrors)))
+        }
+    }.takeIf { it.isNotEmpty() }?.let { add(DebugSection(context.getString(R.string.debug_section_audio), it)) }
+
+    add(DebugSection(context.getString(R.string.debug_section_network), listOf(context.getString(R.string.debug_clients, info.connections))))
+}
+
+// "mean/max ms held=N", or "held=N" before first latency window lands
+private fun formatDecode(meanUs: Int, maxUs: Int, held: Int, errors: Int): String =
+    (if (meanUs == 0) "held=$held"
+    else "%.1f/%.1f ms held=%d".format(meanUs / 1000.0, maxUs / 1000.0, held)) + " errs=$errors"

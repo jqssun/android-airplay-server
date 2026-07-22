@@ -42,7 +42,15 @@ class DacpController(ctx: Context) {
     fun beginRewind() = _send("/ctrl-int/1/beginrew")
     fun playResume() = _send("/ctrl-int/1/playresume")
 
+    fun reset() {
+        dacpId = ""
+        activeRemote = ""
+        host = ""
+        port = 0
+    }
+
     fun release() {
+        reset()
         exec.shutdownNow()
     }
 

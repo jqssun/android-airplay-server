@@ -15,6 +15,7 @@ class VideoRenderer {
     private var currentH265 = false
     private var videoWidth = 0
     private var videoHeight = 0
+    private var firstFrameQueued = false
 
     // stats
     @Volatile var fps = 0; private set
@@ -27,6 +28,7 @@ class VideoRenderer {
     var enforceSdr = true
     var keyAllowFrameDrop = true
     var realtimeDecoderPriority = true
+    var lowLatency = true
     var operatingRateHint = false
     var scheduledOutputBufferRelease = true
     var benchmarkLog = false
@@ -114,13 +116,15 @@ class VideoRenderer {
     private fun _feedToCodec(data: ByteArray, ntpTimeNs: Long) {
         val c = codec ?: return
         // dropping a frame desyncs decoder until the next keyframe, but source would only send one on (re)connect
-        repeat(FEED_RETRIES) {
+        val retries = if (firstFrameQueued) FEED_RETRIES else FIRST_FEED_RETRIES
+        repeat(retries) {
             val idx = c.dequeueInputBuffer(FEED_WAIT_US)
             if (idx >= 0) {
                 val buf = c.getInputBuffer(idx) ?: return
                 buf.clear()
                 buf.put(data)
                 c.queueInputBuffer(idx, 0, data.size, ntpTimeNs / 1000, 0)
+                firstFrameQueued = true
                 return
             }
             drainOutput()
@@ -173,13 +177,35 @@ class VideoRenderer {
         if (android.os.Build.VERSION.SDK_INT >= 29) {
             format.setInteger(MediaFormat.KEY_ALLOW_FRAME_DROP, if (keyAllowFrameDrop) 1 else 0)
         }
-
-        codec = MediaCodec.createDecoderByType(mime).also {
-            it.configure(format, s, null, 0)
-            it.start()
+        if (lowLatency && android.os.Build.VERSION.SDK_INT >= 30) {
+            format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
         }
-        codecName = if (h265) "H.265" else "H.264"
-        Log.i(TAG, "Video codec started: $mime ${videoWidth}x${videoHeight}")
+
+        firstFrameQueued = false
+        try {
+            _startDecoder(MediaCodec.createDecoderByType(mime), format, s, h265)
+        } catch (e: Exception) {
+            // strict hw decoders reject configs beyond their real limits
+            val sw = _softwareDecoder(mime)?.takeIf {
+                it.getCapabilitiesForType(mime).videoCapabilities
+                    ?.isSizeSupported(videoWidth, videoHeight) == true
+            } ?: throw e
+            Log.w(TAG, "Hardware decoder failed, trying software fallback", e)
+            _startDecoder(MediaCodec.createByCodecName(sw.name), format, s, h265)
+        }
+        Log.i(TAG, "Video codec started: $mime ${videoWidth}x${videoHeight} ($codecName)")
+    }
+
+    private fun _startDecoder(c: MediaCodec, format: MediaFormat, surface: Surface, h265: Boolean) {
+        try {
+            c.configure(format, surface, null, 0)
+            c.start()
+        } catch (e: Exception) {
+            try { c.release() } catch (_: Exception) {}
+            throw e
+        }
+        codec = c
+        codecName = (if (h265) "H.265" else "H.264") + " (${c.name})"
     }
 
     private fun stopCodec() {
@@ -258,6 +284,7 @@ class VideoRenderer {
         private const val BENCH_TAG = "BENCHMARK"
         private const val FEED_WAIT_US = 20_000L
         private const val FEED_RETRIES = 10
+        private const val FIRST_FEED_RETRIES = 50
 
         fun supportsH265(): Boolean {
             val list = MediaCodecList(MediaCodecList.ALL_CODECS)
@@ -267,5 +294,40 @@ class VideoRenderer {
                 }
             }
         }
+
+        // smallest limits across codecs the sender may pick; unknown limits assume 1080p, which any device decodes
+        fun maxSupportedResolution(h265: Boolean): Pair<Int, Int> {
+            val mimes = listOfNotNull(
+                MediaFormat.MIMETYPE_VIDEO_AVC,
+                MediaFormat.MIMETYPE_VIDEO_HEVC.takeIf { h265 },
+            )
+            return mimes
+                .map { mime ->
+                    _decoderCaps(mime)?.let { it.supportedWidths.upper to it.supportedHeights.upper }
+                        ?: (1920 to 1080)
+                }
+                .reduce { (w1, h1), (w2, h2) -> minOf(w1, w2) to minOf(h1, h2) }
+        }
+
+        // caps of the decoder createDecoderByType would pick
+        private fun _decoderCaps(mime: String) = try {
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+                .firstOrNull { info ->
+                    !info.isEncoder && info.supportedTypes.any { it.equals(mime, ignoreCase = true) }
+                }?.getCapabilitiesForType(mime)?.videoCapabilities
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to get decoder capabilities", e)
+            null
+        }
+
+        private fun _softwareDecoder(mime: String) =
+            MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.firstOrNull { info ->
+                !info.isEncoder && info.supportedTypes.any { it.equals(mime, ignoreCase = true) } &&
+                    (if (android.os.Build.VERSION.SDK_INT >= 29) info.isSoftwareOnly
+                    else info.name.lowercase().let {
+                        it.startsWith("omx.google.") || it.startsWith("c2.android.") ||
+                            (!it.startsWith("omx.") && !it.startsWith("c2."))
+                    })
+            }
     }
 }

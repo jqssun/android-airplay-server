@@ -27,6 +27,20 @@ import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
 
+data class AudioDebug(
+    val backlogMs: Int,
+    val tunedCushionMs: Int,
+    val trims: Int,
+    val drops: Int,
+    val silences: Int,
+    val underruns: Int,
+    val xrun: Int,
+    val decodeMeanUs: Int,
+    val decodeMaxUs: Int,
+    val decodeHeld: Int,
+    val decodeErrors: Int,
+)
+
 data class DebugInfo(
     val videoCodec: String = "",
     val videoRes: String = "",
@@ -37,6 +51,7 @@ data class DebugInfo(
     val framePacingJitterUs: Long = 0,
     val audioCodec: String = "",
     val audioVolume: Int = 100,
+    val audio: AudioDebug? = null,
     val connections: Int = 0,
 ) {
     val bitrateStr: String get() {
@@ -111,6 +126,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _realtimeDecoderPriority = MutableStateFlow(prefs.getBoolean(Prefs.KEY_PRIORITY, Prefs.DEF_KEY_PRIORITY))
     val realtimeDecoderPriority: StateFlow<Boolean> = _realtimeDecoderPriority.asStateFlow()
 
+    private val _lowLatency = MutableStateFlow(prefs.getBoolean(Prefs.LOW_LATENCY, Prefs.DEF_LOW_LATENCY))
+    val lowLatency: StateFlow<Boolean> = _lowLatency.asStateFlow()
+
     private val _operatingRateHint = MutableStateFlow(prefs.getBoolean(Prefs.KEY_OPERATING_RATE, Prefs.DEF_KEY_OPERATING_RATE))
     val operatingRateHint: StateFlow<Boolean> = _operatingRateHint.asStateFlow()
 
@@ -123,14 +141,17 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _alacEnabled = MutableStateFlow(prefs.getBoolean(Prefs.ALAC_ENABLED, Prefs.DEF_ALAC_ENABLED))
     val alacEnabled: StateFlow<Boolean> = _alacEnabled.asStateFlow()
 
-    private val _swAlacEnabled = MutableStateFlow(prefs.getBoolean(Prefs.SW_ALAC_ENABLED, Prefs.DEF_SW_ALAC_ENABLED))
-    val swAlacEnabled: StateFlow<Boolean> = _swAlacEnabled.asStateFlow()
+    private val _forceSwAlac = MutableStateFlow(prefs.getBoolean(Prefs.FORCE_SW_ALAC, Prefs.DEF_FORCE_SW_ALAC))
+    val forceSwAlac: StateFlow<Boolean> = _forceSwAlac.asStateFlow()
 
     private val _aacEnabled = MutableStateFlow(prefs.getBoolean(Prefs.AAC_ENABLED, Prefs.DEF_AAC_ENABLED))
     val aacEnabled: StateFlow<Boolean> = _aacEnabled.asStateFlow()
 
     private val _resolution = MutableStateFlow(prefs.getString(Prefs.RESOLUTION, Prefs.DEF_RESOLUTION)!!)
     val resolution: StateFlow<String> = _resolution.asStateFlow()
+
+    private val _autoRes = MutableStateFlow(prefs.getBoolean(Prefs.AUTO_RES, Prefs.DEF_AUTO_RES))
+    val autoRes: StateFlow<Boolean> = _autoRes.asStateFlow()
 
     private val _maxFps = MutableStateFlow(prefs.getInt(Prefs.MAX_FPS, Prefs.DEF_MAX_FPS))
     val maxFps: StateFlow<Int> = _maxFps.asStateFlow()
@@ -181,8 +202,17 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _developerOptions = MutableStateFlow(prefs.getBoolean(Prefs.DEVELOPER_OPTIONS, Prefs.DEF_DEVELOPER_OPTIONS))
     val developerOptions: StateFlow<Boolean> = _developerOptions.asStateFlow()
 
-    private val _audioBufferMultiplier = MutableStateFlow(prefs.getInt(Prefs.AUDIO_BUFFER_MULTIPLIER, Prefs.DEF_AUDIO_BUFFER_MULTIPLIER))
-    val audioBufferMultiplier: StateFlow<Int> = _audioBufferMultiplier.asStateFlow()
+    private val _audioAutoBuffer = MutableStateFlow(prefs.getBoolean(Prefs.AUDIO_AUTO_BUFFER, Prefs.DEF_AUDIO_AUTO_BUFFER))
+    val audioAutoBuffer: StateFlow<Boolean> = _audioAutoBuffer.asStateFlow()
+
+    private val _audioCushionMs = MutableStateFlow(prefs.getInt(Prefs.AUDIO_CUSHION_MS, Prefs.DEF_AUDIO_CUSHION_MS))
+    val audioCushionMs: StateFlow<Int> = _audioCushionMs.asStateFlow()
+
+    private val _audioAdaptiveStep = MutableStateFlow(prefs.getInt(Prefs.AUDIO_ADAPTIVE_STEP, Prefs.DEF_AUDIO_ADAPTIVE_STEP))
+    val audioAdaptiveStep: StateFlow<Int> = _audioAdaptiveStep.asStateFlow()
+
+    private val _oboeBufferFrames = MutableStateFlow(prefs.getInt(Prefs.OBOE_BUFFER_FRAMES, Prefs.DEF_OBOE_BUFFER_FRAMES))
+    val oboeBufferFrames: StateFlow<Int> = _oboeBufferFrames.asStateFlow()
 
     private val _debugInfo = MutableStateFlow(DebugInfo())
     val debugInfo: StateFlow<DebugInfo> = _debugInfo.asStateFlow()
@@ -356,6 +386,10 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         prefs.edit().putBoolean(Prefs.KEY_PRIORITY, v).apply()
         _applyByServerRestart()
     }
+    fun setLowLatency(v: Boolean) {
+        _lowLatency.value = v
+        prefs.edit().putBoolean(Prefs.LOW_LATENCY, v).apply()
+    }
     fun setOperatingRateHint(v: Boolean) {
         _operatingRateHint.value = v
         prefs.edit().putBoolean(Prefs.KEY_OPERATING_RATE, v).apply()
@@ -371,10 +405,11 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         prefs.edit().putBoolean(Prefs.BENCHMARK_LOG, v).apply()
         _applyByServerRestart()
     }
-    fun setSwAlacEnabled(v: Boolean) { _swAlacEnabled.value = v; prefs.edit().putBoolean(Prefs.SW_ALAC_ENABLED, v).apply(); _applyByServerRestart() }
+    fun setForceSwAlac(v: Boolean) { _forceSwAlac.value = v; prefs.edit().putBoolean(Prefs.FORCE_SW_ALAC, v).apply() }
     fun setAlacEnabled(v: Boolean) { _alacEnabled.value = v; prefs.edit().putBoolean(Prefs.ALAC_ENABLED, v).apply(); _applyByServerRestart() }
     fun setAacEnabled(v: Boolean) { _aacEnabled.value = v; prefs.edit().putBoolean(Prefs.AAC_ENABLED, v).apply(); _applyByServerRestart() }
     fun setResolution(v: String) { _resolution.value = v; prefs.edit().putString(Prefs.RESOLUTION, v).apply(); _applyByServerRestart() }
+    fun setAutoRes(v: Boolean) { _autoRes.value = v; prefs.edit().putBoolean(Prefs.AUTO_RES, v).apply(); _applyByServerRestart() }
     fun setMaxFps(v: Int) { _maxFps.value = v; prefs.edit().putInt(Prefs.MAX_FPS, v).apply(); _applyByServerRestart() }
     fun setOverscanned(v: Boolean) { _overscanned.value = v; prefs.edit().putBoolean(Prefs.OVERSCANNED, v).apply(); _applyByServerRestart() }
     fun setRequirePin(v: Boolean) { _requirePin.value = v; prefs.edit().putBoolean(Prefs.REQUIRE_PIN, v).apply(); _applyByServerRestart() }
@@ -393,11 +428,24 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         _developerOptions.value = v
         prefs.edit().putBoolean(Prefs.DEVELOPER_OPTIONS, v).apply()
     }
-    fun setAudioBufferMultiplier(v: Int) {
-        val value = v.coerceIn(4, 8)
-        _audioBufferMultiplier.value = value
-        prefs.edit().putInt(Prefs.AUDIO_BUFFER_MULTIPLIER, value).apply()
-        _applyByServerRestart()
+    fun setAudioAutoBuffer(v: Boolean) {
+        _audioAutoBuffer.value = v
+        prefs.edit().putBoolean(Prefs.AUDIO_AUTO_BUFFER, v).apply()
+    }
+    fun setAudioCushionMs(v: Int) {
+        val value = v.coerceIn(1, 1000)
+        _audioCushionMs.value = value
+        prefs.edit().putInt(Prefs.AUDIO_CUSHION_MS, value).apply()
+    }
+    fun setAudioAdaptiveStep(v: Int) {
+        val value = v.coerceIn(0, Prefs.ADAPTIVE_PERCENTILES.size - 1)
+        _audioAdaptiveStep.value = value
+        prefs.edit().putInt(Prefs.AUDIO_ADAPTIVE_STEP, value).apply()
+    }
+    fun setOboeBufferFrames(v: Int) {
+        val value = v.coerceIn(0, 8192)
+        _oboeBufferFrames.value = value
+        prefs.edit().putInt(Prefs.OBOE_BUFFER_FRAMES, value).apply()
     }
 
     // service binding

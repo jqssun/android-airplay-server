@@ -25,8 +25,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.R
+import io.github.jqssun.airplay.realDisplaySize
 import io.github.jqssun.airplay.viewmodel.MainViewModel
+import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import kotlin.math.roundToInt
 
@@ -38,6 +41,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val alacEnabled by viewModel.alacEnabled.collectAsState()
     val aacEnabled by viewModel.aacEnabled.collectAsState()
     val resolution by viewModel.resolution.collectAsState()
+    val autoRes by viewModel.autoRes.collectAsState()
     val idlePreview by viewModel.idlePreview.collectAsState()
     val autoFullscreen by viewModel.autoFullscreen.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState()
@@ -55,15 +59,19 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val runInBackground by viewModel.runInBackground.collectAsState()
     val serverPort by viewModel.serverPort.collectAsState()
     val audioLatencyMs by viewModel.audioLatencyMs.collectAsState()
-    val swAlacEnabled by viewModel.swAlacEnabled.collectAsState()
+    val forceSwAlac by viewModel.forceSwAlac.collectAsState()
     val debugEnabled by viewModel.debugEnabled.collectAsState()
     val developerOptions by viewModel.developerOptions.collectAsState()
     val keyAllowFrameDrop by viewModel.keyAllowFrameDrop.collectAsState()
     val realtimeDecoderPriority by viewModel.realtimeDecoderPriority.collectAsState()
+    val lowLatency by viewModel.lowLatency.collectAsState()
     val operatingRateHint by viewModel.operatingRateHint.collectAsState()
     val scheduledOutputBufferRelease by viewModel.scheduledOutputBufferRelease.collectAsState()
     val benchmarkLog by viewModel.benchmarkLog.collectAsState()
-    val audioBufferMultiplier by viewModel.audioBufferMultiplier.collectAsState()
+    val audioAutoBuffer by viewModel.audioAutoBuffer.collectAsState()
+    val audioCushionMs by viewModel.audioCushionMs.collectAsState()
+    val audioAdaptiveStep by viewModel.audioAdaptiveStep.collectAsState()
+    val oboeBufferFrames by viewModel.oboeBufferFrames.collectAsState()
 
     Column(
         modifier = Modifier
@@ -213,10 +221,20 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onCheckedChange = { viewModel.setAutoFullscreen(it) }
         )
 
-        SettingResolution(
-            value = resolution,
-            onValueChange = { viewModel.setResolution(it) }
+        val (displayW, displayH) = remember(ctx) { ctx.realDisplaySize() }
+        SettingSwitch(
+            title = stringResource(R.string.setting_auto_res),
+            description = stringResource(R.string.setting_auto_res_desc, "${displayW}x${displayH}"),
+            checked = autoRes,
+            onCheckedChange = { viewModel.setAutoRes(it) }
         )
+
+        if (!autoRes) {
+            SettingResolution(
+                value = resolution,
+                onValueChange = { viewModel.setResolution(it) }
+            )
+        }
 
         SettingChipField(
             title = stringResource(R.string.setting_max_fps),
@@ -245,24 +263,10 @@ fun SettingsScreen(viewModel: MainViewModel) {
         )
 
         SettingSwitch(
-            title = stringResource(R.string.setting_alac),
-            description = stringResource(R.string.setting_alac_desc),
-            checked = alacEnabled,
-            onCheckedChange = { viewModel.setAlacEnabled(it) }
-        )
-
-        SettingSwitch(
             title = stringResource(R.string.setting_sw_alac),
             description = stringResource(R.string.setting_sw_alac_desc),
-            checked = swAlacEnabled,
-            onCheckedChange = { viewModel.setSwAlacEnabled(it) }
-        )
-
-        SettingSwitch(
-            title = stringResource(R.string.setting_aac),
-            description = stringResource(R.string.setting_aac_desc),
-            checked = aacEnabled,
-            onCheckedChange = { viewModel.setAacEnabled(it) }
+            checked = forceSwAlac,
+            onCheckedChange = { viewModel.setForceSwAlac(it) }
         )
 
         SectionHeader(stringResource(R.string.section_developer))
@@ -304,6 +308,20 @@ fun SettingsScreen(viewModel: MainViewModel) {
             )
 
             SettingSwitch(
+                title = stringResource(R.string.setting_alac),
+                description = stringResource(R.string.setting_alac_desc),
+                checked = alacEnabled,
+                onCheckedChange = { viewModel.setAlacEnabled(it) }
+            )
+
+            SettingSwitch(
+                title = stringResource(R.string.setting_aac),
+                description = stringResource(R.string.setting_aac_desc),
+                checked = aacEnabled,
+                onCheckedChange = { viewModel.setAacEnabled(it) }
+            )
+
+            SettingSwitch(
                 title = stringResource(R.string.setting_key_allow_frame_drop),
                 description = stringResource(R.string.setting_key_allow_frame_drop_desc),
                 checked = keyAllowFrameDrop,
@@ -329,6 +347,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 description = stringResource(R.string.setting_operating_rate_hint_desc),
                 checked = operatingRateHint,
                 onCheckedChange = { viewModel.setOperatingRateHint(it) }
+            )
+
+            SettingSwitch(
+                title = stringResource(R.string.setting_low_latency),
+                description = stringResource(R.string.setting_low_latency_desc),
+                checked = lowLatency,
+                onCheckedChange = { viewModel.setLowLatency(it) }
             )
 
             SettingSwitch(
@@ -365,29 +390,55 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 )
             }
 
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.setting_audio_buffer_multiplier)) },
-                supportingContent = { Text(stringResource(R.string.setting_audio_buffer_multiplier_desc)) }
+            SettingSwitch(
+                title = stringResource(R.string.setting_audio_auto_buffer),
+                description = stringResource(R.string.setting_audio_auto_buffer_desc),
+                checked = audioAutoBuffer,
+                onCheckedChange = { viewModel.setAudioAutoBuffer(it) }
             )
-            var audioBufferSliderVal by remember(audioBufferMultiplier) {
-                mutableFloatStateOf(audioBufferMultiplier.toFloat())
-            }
-            ListItem(
-                headlineContent = {
-                    Slider(
-                        value = audioBufferSliderVal,
-                        onValueChange = { audioBufferSliderVal = it },
-                        onValueChangeFinished = { viewModel.setAudioBufferMultiplier(audioBufferSliderVal.roundToInt()) },
-                        valueRange = 4f..8f,
-                        steps = 3,
-                        modifier = Modifier.dpadFocus().dpadAdjust(
-                            onLeft = { viewModel.setAudioBufferMultiplier((audioBufferMultiplier - 1).coerceIn(4, 8)) },
-                            onRight = { viewModel.setAudioBufferMultiplier((audioBufferMultiplier + 1).coerceIn(4, 8)) }
+
+            if (audioAutoBuffer) {
+                val maxStep = Prefs.ADAPTIVE_PERCENTILES.size - 1
+                var stepVal by remember(audioAdaptiveStep) { mutableFloatStateOf(audioAdaptiveStep.toFloat()) }
+                ListItem(
+                    headlineContent = {
+                        Slider(
+                            value = stepVal,
+                            onValueChange = { stepVal = it },
+                            onValueChangeFinished = { viewModel.setAudioAdaptiveStep(stepVal.roundToInt()) },
+                            valueRange = 0f..maxStep.toFloat(),
+                            steps = maxStep - 1,
+                            modifier = Modifier.dpadFocus().dpadAdjust(
+                                onLeft = { viewModel.setAudioAdaptiveStep((audioAdaptiveStep - 1).coerceIn(0, maxStep)) },
+                                onRight = { viewModel.setAudioAdaptiveStep((audioAdaptiveStep + 1).coerceIn(0, maxStep)) }
+                            )
                         )
-                    )
-                },
-                trailingContent = { Text(stringResource(R.string.setting_audio_buffer_multiplier_value, audioBufferSliderVal.roundToInt())) }
+                    },
+                    trailingContent = {
+                        val step = stepVal.roundToInt().coerceIn(0, maxStep)
+                        Text(stringResource(R.string.audio_adaptive_value,
+                            Prefs.ADAPTIVE_PERCENTILES[step],
+                            stringArrayResource(R.array.audio_adaptive_step_names)[step]))
+                    }
+                )
+            } else {
+                SettingNumberField(
+                    title = stringResource(R.string.setting_audio_cushion_ms),
+                    description = stringResource(R.string.setting_audio_cushion_ms_desc),
+                    value = audioCushionMs,
+                    range = 1..1000,
+                    onValueChange = { viewModel.setAudioCushionMs(it) }
+                )
+            }
+
+            SettingNumberField(
+                title = stringResource(R.string.setting_oboe_buffer_frames),
+                description = stringResource(R.string.setting_oboe_buffer_frames_desc),
+                value = oboeBufferFrames,
+                range = 0..8192,
+                onValueChange = { viewModel.setOboeBufferFrames(it) }
             )
+
 
             SettingSwitch(
                 title = stringResource(R.string.setting_debug_overlay),
@@ -504,6 +555,42 @@ private fun SettingResolution(
                         )
                     }
                 }
+            }
+        }
+    )
+}
+
+@Composable
+private fun SettingNumberField(
+    title: String,
+    description: String,
+    value: Int,
+    range: IntRange,
+    onValueChange: (Int) -> Unit
+) {
+    var text by remember(value) { mutableStateOf(value.toString()) }
+    val focus = LocalFocusManager.current
+    val parsed = text.toIntOrNull()
+    val valid = parsed != null && parsed in range
+    OutlinedTextField(
+        value = text,
+        onValueChange = { text = it.filter { c -> c.isDigit() }.take(6) },
+        label = { Text(title) },
+        supportingText = { Text(description) },
+        singleLine = true,
+        isError = !valid,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Number,
+            imeAction = ImeAction.Done
+        ),
+        keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(bottom = 8.dp),
+        trailingIcon = {
+            if (valid && parsed != value) {
+                TextButton(onClick = { onValueChange(parsed!!) }) { Text(stringResource(R.string.btn_save)) }
             }
         }
     )

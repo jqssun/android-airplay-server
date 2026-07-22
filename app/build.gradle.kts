@@ -12,6 +12,8 @@ val localProps = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
 }
 
+val allAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+
 android {
     namespace = "io.github.jqssun.airplay"
     compileSdk = 36
@@ -31,13 +33,9 @@ android {
     defaultConfig {
         applicationId = "io.github.jqssun.airplay"
         minSdk = 24
-        targetSdk = 35
-        versionCode = 23
-        versionName = "0.0.23"
-
-        ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
-        }
+        targetSdk = 36
+        versionCode = 28
+        versionName = "0.0.28"
 
         externalNativeBuild {
             cmake {
@@ -54,10 +52,26 @@ android {
     }
 
     buildTypes {
+        debug {
+            ndk { abiFilters += allAbis }
+        }
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfigs.findByName("release")?.let { signingConfig = it }
+            ndk { abiFilters += allAbis }
+        }
+        // debuggable build with HWASan (arm64) + UBSan in native code
+        create("sanitize") {
+            initWith(getByName("debug"))
+            matchingFallbacks += "debug"
+            ndk {
+                abiFilters.clear()
+                abiFilters += "arm64-v8a"
+            }
+            externalNativeBuild {
+                cmake { arguments += "-DSANITIZE=ON" }
+            }
         }
     }
 
@@ -77,6 +91,7 @@ android {
 
     buildFeatures {
         compose = true
+        prefab = true
     }
 }
 
@@ -110,6 +125,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime)
+    implementation(libs.androidx.lifecycle.service)
     implementation(libs.androidx.lifecycle.viewmodel)
     implementation(libs.androidx.datastore.prefs)
     implementation(libs.androidx.media)
@@ -118,6 +134,7 @@ dependencies {
     implementation(libs.media3.ui.compose.material3)
     implementation(libs.media3.transformer)
     implementation(libs.kotlinx.coroutines)
+    implementation(libs.oboe)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

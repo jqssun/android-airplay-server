@@ -115,11 +115,17 @@
     <string name="setting_advertise_video_desc">When off, videos are cast as audio only streams</string>
     <string name="setting_advertise_audio">Advertise AirPlay audio support</string>
     <string name="setting_advertise_audio_desc">When off, the device can only be used for mirroring and will be hidden from media players</string>
+    <string name="setting_alac">Advertise ALAC codec</string>
+    <string name="setting_alac_desc">Offer ALAC in the mDNS record; used for music streaming</string>
+    <string name="setting_aac">Advertise AAC codec</string>
+    <string name="setting_aac_desc">Offer AAC-ELD/AAC-LC in the mDNS record; used for screen mirroring audio</string>
     <string name="setting_launch_on_connect">Open this application on connect</string>
     <string name="setting_launch_on_connect_desc">Show the screen when a client connects</string>
     <string name="setting_return_to_previous_app">Return to previous app after casting</string>
     <string name="setting_return_to_previous_app_desc">When casting ends, switch back to the previously used app</string>
     <string name="setting_launch_on_connect_no_permission">Tap to grant Display over other apps permission</string>
+    <string name="setting_auto_res">Auto resolution</string>
+    <string name="setting_auto_res_desc">Advertise the physical display resolution (%1$s) to clients</string>
     <string name="setting_resolution">Resolution</string>
     <string name="setting_resolution_desc">Video resolution advertised to clients</string>
     <string name="setting_resolution_placeholder">[W]x[H]</string>
@@ -138,12 +144,8 @@
     <string name="setting_h265_desc">Enable H.265 video decoding if device supports it</string>
     <string name="setting_enforce_sdr">MediaFormat.KEY_COLOR_TRANSFER</string>
     <string name="setting_enforce_sdr_desc">Tag video as limited SDR; disable to allow HDR sources to pass through</string>
-    <string name="setting_alac">ALAC audio</string>
-    <string name="setting_alac_desc">ALAC codec for AirPlay music streaming</string>
-    <string name="setting_sw_alac">Software ALAC decoder</string>
-    <string name="setting_sw_alac_desc">Use built-in decoder if platform ALAC is unavailable</string>
-    <string name="setting_aac">AAC audio</string>
-    <string name="setting_aac_desc">AAC-ELD or AAC-LC codec for screen mirroring audio</string>
+    <string name="setting_sw_alac">Force software ALAC decoder</string>
+    <string name="setting_sw_alac_desc">Always use software ALAC decoder instead of hardware decoder, may affect audio latency</string>
 
     <!-- Settings: Developer -->
     <string name="setting_developer_options">Developer options</string>
@@ -152,6 +154,8 @@
     <string name="setting_key_allow_frame_drop_desc">Allow video decoders to drop frames internally to keep up on Android 10+</string>
     <string name="setting_realtime_decoder_priority">MediaFormat.KEY_PRIORITY</string>
     <string name="setting_realtime_decoder_priority_desc">Request real-time scheduling for audio and video decoders</string>
+    <string name="setting_low_latency">Low latency</string>
+    <string name="setting_low_latency_desc">Use low-latency audio and video decoding for output; this uses more power and CPU</string>
     <string name="setting_operating_rate_hint">MediaFormat.KEY_OPERATING_RATE</string>
     <string name="setting_operating_rate_hint_desc">Request maximum operating rate for video decoder</string>
     <string name="setting_scheduled_output_buffer_release">Aligned frame pacing</string>
@@ -159,19 +163,36 @@
     <string name="setting_audio_delay">Override audio delay</string>
     <string name="setting_audio_delay_desc">Set a custom audio latency reported to client</string>
     <string name="audio_delay_value">%dms</string>
-    <string name="setting_audio_buffer_multiplier">Audio buffer size</string>
-    <string name="setting_audio_buffer_multiplier_desc">AudioTrack buffer size multiplier</string>
-    <string name="setting_audio_buffer_multiplier_value">%dx</string>
+    <string name="setting_audio_auto_buffer">Automatic software audio buffer size</string>
+    <string name="setting_audio_auto_buffer_desc">Adaptively tune the software audio buffer according to network conditions and device performance; slider adjusts how much jitter the buffer can absorb</string>
+    <string name="audio_adaptive_value">%1$d%% (%2$s)</string>
+    <string-array name="audio_adaptive_step_names">
+        <item>Lowest Latency</item>
+        <item>Lower Latency</item>
+        <item>Balanced</item>
+        <item>Better Stability</item>
+        <item>Best Stability</item>
+    </string-array>
+    <string name="setting_audio_cushion_ms">Software audio buffer (ms)</string>
+    <string name="setting_audio_cushion_ms_desc">Buffer to absorb network and decoder jitter: shorter duration means lower latency; longer duration means fewer glitches</string>
+    <string name="setting_oboe_buffer_frames">Hardware output buffer (frames)</string>
+    <string name="setting_oboe_buffer_frames_desc">Stream buffer between this app and the audio device to absorb CPU scheduling jitter only. Keep at 0 for automatic sizing.</string>
     <string name="setting_debug_overlay">Show debug overlay</string>
     <string name="setting_debug_overlay_desc">Overlay stream stats on video: codec, FPS, bitrate, jitter, frames, drops</string>
     <string name="setting_benchmark_log">Enable debug logging</string>
     <string name="setting_benchmark_log_desc">Log stream stats to logcat: codec, FPS, bitrate, jitter, frames, drops</string>
 
     <!-- Debug overlay -->
-    <string name="debug_video">Video: %1$s %2$s</string>
+    <string name="debug_section_video">Video</string>
+    <string name="debug_section_audio">Audio</string>
+    <string name="debug_section_network">Network</string>
+    <string name="debug_video">%1$s %2$s</string>
     <string name="debug_fps_bitrate">FPS: %1$d  Bitrate: %2$s</string>
     <string name="debug_frames_drops">Frames: %1$d  Drops: %2$d</string>
     <string name="debug_jitter">Jitter: %1$s</string>
-    <string name="debug_audio">Audio: %1$s  Vol: %2$d%%</string>
+    <string name="debug_audio">%1$s  Vol: %2$d%%</string>
+    <string name="debug_audio_buffer">Buffer: %1$d ms (tgt: %2$d ms)</string>
+    <string name="debug_audio_glitch">Glitch: trim=%1$d drop=%2$d sil=%3$d ur=%4$d xrun=%5$d</string>
+    <string name="debug_audio_decode">Decode: %1$s</string>
     <string name="debug_clients">Clients: %1$d</string>
 </resources>

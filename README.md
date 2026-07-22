@@ -38,7 +38,7 @@ A fully featured free and open-source implementation of AirPlay for Android that
 
 ## Implementation
 
-This application uses the C-based [UxPlay](https://github.com/FDH2/UxPlay) library to implement the AirPlay/RAOP protocol, with a JNI bridge to the Android application layer. Audio can be decoded via MediaCodec (AAC) or the Apple ALAC decoder (software fallback), while mirroring video is decoded via MediaCodec and rendered to a SurfaceView. HLS sessions are served through a local playlist proxy.
+This application uses the C-based [UxPlay](https://github.com/FDH2/UxPlay) library to implement the AirPlay/RAOP protocol, with a JNI bridge to the Android application layer. Audio can be decoded via MediaCodec or a software ALAC decoder, while mirroring video is decoded via MediaCodec and rendered to a SurfaceView. HLS sessions are served through a local playlist proxy.
 
 ```mermaid
 flowchart LR
@@ -62,7 +62,7 @@ Check out the [CI](https://github.com/jqssun/android-airplay-server/blob/main/.g
 ## Credits
 
 - [UxPlay](https://github.com/FDH2/UxPlay) for the AirPlay/RAOP server implementation
-- [ALAC](https://github.com/macosforge/alac) for the lossless audio decoder
+- [FFmpeg](https://ffmpeg.org) for the lossless audio decoder
 - [Next Player](https://github.com/anilbeesetti/nextplayer) for the video player
 
 ---

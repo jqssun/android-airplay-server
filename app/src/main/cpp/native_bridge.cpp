@@ -5,6 +5,7 @@
 #include <jni.h>
 #include <string.h>
 #include <stdlib.h>
+#include <memory>
 #include <android/log.h>
 
 extern "C" {
@@ -16,8 +17,8 @@ extern "C" {
 #include "android_dnssd_shim.h"
 }
 
-#include "ALACDecoder.h"
-#include "ALACBitUtilities.h"
+#include "audio_engine.h"
+#include "log_sink.h"
 
 #define TAG "AirPlayNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -30,6 +31,7 @@ typedef struct {
     android_callback_ctx_t cb_ctx;
     raop_callbacks_t callbacks;
     char hw_addr[6];
+    std::shared_ptr<LogSink> log;
 } server_ctx_t;
 
 static void _log_callback(void *cls, int level, const char *msg) {
@@ -47,8 +49,7 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
         jobject callback, jbyteArray hwAddr, jstring name, jstring keyFile,
         jboolean nohold, jboolean requirePin) {
 
-    server_ctx_t *ctx = (server_ctx_t *)calloc(1, sizeof(server_ctx_t));
-    if (!ctx) return 0;
+    server_ctx_t *ctx = new server_ctx_t();
 
     jsize hw_len = env->GetArrayLength(hwAddr);
     if (hw_len > 6) hw_len = 6;
@@ -62,7 +63,7 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
     if (!ctx->raop) {
         LOGE("raop_init failed");
         android_callbacks_destroy(&ctx->cb_ctx, env);
-        free(ctx);
+        delete ctx;
         return 0;
     }
     ctx->cb_ctx.raop = ctx->raop;
@@ -106,6 +107,11 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
 
     env->ReleaseStringUTFChars(keyFile, keyfile_c);
     env->ReleaseStringUTFChars(name, name_c);
+
+    ctx->log = std::make_shared<LogSink>();
+    ctx->log->bind(env, callback);
+
+    ctx->cb_ctx.audio_engine = audio_engine_create(ctx->log, 44100, 2);
 
     return (jlong)(intptr_t)ctx;
 }
@@ -168,12 +174,16 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeDestroy(
         raop_destroy(ctx->raop);
         ctx->raop = NULL;
     }
+    // engine teardown safe: raop_destroy() already ran, no decode() calls in flight
+    AudioEngine *engine = ctx->cb_ctx.audio_engine;
+    ctx->cb_ctx.audio_engine = NULL;
+    if (engine) audio_engine_destroy(engine);
     if (ctx->dnssd) {
         dnssd_destroy(ctx->dnssd);
         ctx->dnssd = NULL;
     }
     android_callbacks_destroy(&ctx->cb_ctx, env);
-    free(ctx);
+    delete ctx;
 }
 
 extern "C"
@@ -338,116 +348,67 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeUpdatePlaybackInfo(
     android_callbacks_update_playback_info(&ctx->cb_ctx, position, duration, rate, readyToPlay ? 1 : 0);
 }
 
-/* Milliseconds since the sender last made a request touching the AirPlay Video
-   session (/play, /rate, /scrub, /stop, GET /playback-info polls, playlist
-   actions), or -1 if none yet. Polled by the Kotlin sender-liveness watchdog. */
 extern "C"
-JNIEXPORT jlong JNICALL
-Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeMsSinceVideoRequest(
-    JNIEnv *env, jobject thiz, jlong handle) {
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetDefaultStreamValues(
+        JNIEnv *env, jobject thiz, jint sampleRate, jint framesPerBurst) {
+    audio_engine_set_default_stream_values(sampleRate, framesPerBurst);
+}
 
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeServerAudioStart(
+        JNIEnv *env, jobject thiz, jlong handle) {
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
-    if (!ctx) return -1;
-    return (jlong)android_callbacks_ms_since_video_request(&ctx->cb_ctx);
-}
-
-/* Running count of video-session requests (dominated by GET /playback-info polls),
-   for throttled sender-poll-activity logging on the Kotlin side. */
-extern "C"
-JNIEXPORT jlong JNICALL
-Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeVideoRequestCount(
-    JNIEnv *env, jobject thiz, jlong handle) {
-
-    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
-    if (!ctx) return 0;
-    return (jlong)android_callbacks_video_request_count(&ctx->cb_ctx);
-}
-
-/* ---------- Software ALAC decoder (Apple reference, Apache 2.0) ---------- */
-
-extern "C"
-JNIEXPORT jlong JNICALL
-Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeAlacInit(
-        JNIEnv *env, jobject thiz,
-        jint frameLength, jint numChannels, jint bitDepth,
-        jint pb, jint mb, jint kb) {
-
-    ALACDecoder *dec = new ALACDecoder();
-    if (!dec) return 0;
-
-    /* Build the 24-byte ALACSpecificConfig (big-endian) */
-    uint8_t cookie[24];
-    cookie[0] = (frameLength >> 24) & 0xFF;
-    cookie[1] = (frameLength >> 16) & 0xFF;
-    cookie[2] = (frameLength >> 8) & 0xFF;
-    cookie[3] = frameLength & 0xFF;
-    cookie[4] = 0;                /* compatibleVersion */
-    cookie[5] = (uint8_t)bitDepth;
-    cookie[6] = (uint8_t)pb;
-    cookie[7] = (uint8_t)mb;
-    cookie[8] = (uint8_t)kb;
-    cookie[9] = (uint8_t)numChannels;
-    cookie[10] = 0; cookie[11] = 0xFF; /* maxRun = 255 (big-endian) */
-    cookie[12] = cookie[13] = cookie[14] = cookie[15] = 0; /* maxFrameBytes */
-    cookie[16] = cookie[17] = cookie[18] = cookie[19] = 0; /* avgBitRate */
-    cookie[20] = 0; cookie[21] = 0;                        /* sampleRate 44100 */
-    cookie[22] = 0xAC; cookie[23] = 0x44;                  /* (big-endian) */
-
-    int32_t status = dec->Init(cookie, sizeof(cookie));
-    if (status != 0) {
-        LOGE("ALACDecoder::Init failed: %d", status);
-        delete dec;
-        return 0;
-    }
-    LOGI("ALACDecoder initialized: %dx%d @%d-bit", frameLength, numChannels, bitDepth);
-    return (jlong)(intptr_t)dec;
-}
-
-extern "C"
-JNIEXPORT jbyteArray JNICALL
-Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeAlacDecode(
-        JNIEnv *env, jobject thiz, jlong handle, jbyteArray input) {
-
-    ALACDecoder *dec = (ALACDecoder *)(intptr_t)handle;
-    if (!dec || !input) return NULL;
-
-    int input_len = env->GetArrayLength(input);
-    jbyte *input_data = env->GetByteArrayElements(input, NULL);
-
-    /* Set up BitBuffer for the Apple decoder */
-    BitBuffer bits;
-    BitBufferInit(&bits, (uint8_t *)input_data, input_len);
-
-    uint32_t numFrames = dec->mConfig.frameLength;
-    uint32_t numChannels = dec->mConfig.numChannels;
-    uint32_t outBytes = numFrames * numChannels * (dec->mConfig.bitDepth / 8);
-    uint8_t *pcm = (uint8_t *)calloc(outBytes, 1);
-    if (!pcm) {
-        env->ReleaseByteArrayElements(input, input_data, JNI_ABORT);
-        return NULL;
-    }
-
-    uint32_t outSamples = 0;
-    int32_t status = dec->Decode(&bits, pcm, numFrames, numChannels, &outSamples);
-    env->ReleaseByteArrayElements(input, input_data, JNI_ABORT);
-
-    if (status != 0 || outSamples == 0) {
-        free(pcm);
-        return NULL;
-    }
-
-    int pcm_bytes = outSamples * numChannels * (dec->mConfig.bitDepth / 8);
-    jbyteArray result = env->NewByteArray(pcm_bytes);
-    env->SetByteArrayRegion(result, 0, pcm_bytes, (jbyte *)pcm);
-    free(pcm);
-    return result;
+    if (!ctx || !ctx->cb_ctx.audio_engine) return JNI_FALSE;
+    return audio_engine_start(ctx->cb_ctx.audio_engine) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeAlacDestroy(
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeServerAudioStop(
         JNIEnv *env, jobject thiz, jlong handle) {
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (ctx && ctx->cb_ctx.audio_engine) audio_engine_pause(ctx->cb_ctx.audio_engine);
+}
 
-    ALACDecoder *dec = (ALACDecoder *)(intptr_t)handle;
-    delete dec;
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeServerAudioConfigure(
+        JNIEnv *env, jobject thiz, jlong handle, jint cushionMs, jint percentilePct,
+        jint oboeBufferFrames, jboolean forceSwAlac, jboolean realtimePriority, jboolean lowLatency,
+        jboolean benchmarkLog) {
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx || !ctx->cb_ctx.audio_engine) return JNI_FALSE;
+    return audio_engine_configure(ctx->cb_ctx.audio_engine, cushionMs, percentilePct,
+                                  oboeBufferFrames, forceSwAlac, realtimePriority, lowLatency,
+                                  benchmarkLog) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeServerAudioSetVolume(
+        JNIEnv *env, jobject thiz, jlong handle, jfloat volume) {
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (ctx && ctx->cb_ctx.audio_engine) audio_engine_set_volume(ctx->cb_ctx.audio_engine, volume);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeServerAudioFormat(
+        JNIEnv *env, jobject thiz, jlong handle, jint ct, jint spf) {
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (ctx && ctx->cb_ctx.audio_engine) audio_engine_on_format(ctx->cb_ctx.audio_engine, ct, spf);
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeServerAudioDebug(
+        JNIEnv *env, jobject thiz, jlong handle, jobject buf) {
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx || !ctx->cb_ctx.audio_engine || !buf) return JNI_FALSE;
+    void *addr = env->GetDirectBufferAddress(buf);
+    jlong cap = env->GetDirectBufferCapacity(buf);
+    if (!addr || cap <= 0) return JNI_FALSE;
+    return audio_engine_get_debug(ctx->cb_ctx.audio_engine, addr, (size_t)cap) ? JNI_TRUE : JNI_FALSE;
 }

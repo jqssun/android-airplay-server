@@ -30,32 +30,20 @@ object NativeBridge {
         handle: Long, position: Float, duration: Float, rate: Float, readyToPlay: Boolean
     )
 
-    /**
-     * Milliseconds since the sender last made a request touching the AirPlay Video
-     * session (POST /play, /rate, /scrub, /stop, GET /playback-info polls, playlist
-     * actions), or -1 if none has arrived since native init. Senders poll GET
-     * /playback-info continuously while a video session is mounted -- including
-     * while paused -- so a long silence here while playback isn't progressing means
-     * the sender abandoned the session (see AirPlayService's sender-liveness
-     * watchdog).
-     */
-    external fun nativeMsSinceVideoRequest(handle: Long): Long
-
-    /**
-     * Running count of video-session requests from the sender since native init
-     * (dominated by GET /playback-info polls). Used for throttled poll-activity
-     * logging so real-device traces show whether a sender is still polling.
-     */
-    external fun nativeVideoRequestCount(handle: Long): Long
-
     external fun nativeGetRaopTxtRecords(handle: Long): Map<String, String>?
     external fun nativeGetAirplayTxtRecords(handle: Long): Map<String, String>?
     external fun nativeGetRaopServiceName(handle: Long): String?
     external fun nativeGetServerName(handle: Long): String?
 
-    // software alac decoder
-    external fun nativeAlacInit(frameLength: Int, numChannels: Int, bitDepth: Int,
-                                pb: Int, mb: Int, kb: Int): Long
-    external fun nativeAlacDecode(handle: Long, input: ByteArray): ByteArray?
-    external fun nativeAlacDestroy(handle: Long)
+    external fun nativeSetDefaultStreamValues(sampleRate: Int, framesPerBurst: Int)
+    external fun nativeServerAudioConfigure(handle: Long, cushionMs: Int, percentilePct: Int,
+                                            oboeBufferFrames: Int, forceSwAlac: Boolean,
+                                            realtimePriority: Boolean, lowLatency: Boolean,
+                                            benchmarkLog: Boolean): Boolean
+    external fun nativeServerAudioStart(handle: Long): Boolean
+    external fun nativeServerAudioStop(handle: Long)
+    external fun nativeServerAudioSetVolume(handle: Long, volume: Float)
+    external fun nativeServerAudioFormat(handle: Long, ct: Int, spf: Int)
+    // fills direct buffer with packed debug snapshot; false if audio isn't running
+    external fun nativeServerAudioDebug(handle: Long, buf: java.nio.ByteBuffer): Boolean
 }

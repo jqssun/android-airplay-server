@@ -13,6 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -22,6 +23,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.shape.RoundedCornerShape
 
@@ -42,12 +44,17 @@ fun Modifier.dpadFocus(shape: Shape = RoundedCornerShape(12.dp)): Modifier = com
         .border(2.dp, if (focused) MaterialTheme.colorScheme.primary else Color.Transparent, shape)
 }
 
-fun Modifier.dpadAdjust(onLeft: () -> Unit, onRight: () -> Unit): Modifier =
+fun Modifier.dpadAdjust(onLeft: () -> Unit, onRight: () -> Unit): Modifier = composed {
+    val focus = LocalFocusManager.current
     onPreviewKeyEvent { e ->
         if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         when (e.key) {
             Key.DirectionLeft -> { onLeft(); true }
             Key.DirectionRight -> { onRight(); true }
+            // slider
+            Key.DirectionUp -> { focus.moveFocus(FocusDirection.Up); true }
+            Key.DirectionDown -> { focus.moveFocus(FocusDirection.Down); true }
             else -> false
         }
     }
+}
