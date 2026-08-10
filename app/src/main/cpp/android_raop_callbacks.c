@@ -42,6 +42,7 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     pthread_mutex_init(&ctx->playback_info_lock, NULL);
     pthread_cond_init(&ctx->play_ready_cond, NULL);
     ctx->play_ready = 0;
+    ctx->last_video_request_ns = 0;
     ctx->playback_position = 0.0;
     /* -1.0 is the video finished sentinel, reserved for _video_stop */
     ctx->playback_duration = 0.0;
@@ -84,6 +85,29 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env) {
     ctx->registered_count = 0;
     pthread_cond_destroy(&ctx->play_ready_cond);
     pthread_mutex_destroy(&ctx->playback_info_lock);
+}
+
+static uint64_t _monotonic_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+/* Records that the sender just made a request touching the AirPlay Video session
+   (see last_video_request_ns in the header). Called from httpd threads. */
+static void _touch_video_request(android_callback_ctx_t *ctx) {
+    uint64_t now = _monotonic_ns();
+    pthread_mutex_lock(&ctx->playback_info_lock);
+    ctx->last_video_request_ns = now;
+    pthread_mutex_unlock(&ctx->playback_info_lock);
+}
+
+int64_t android_callbacks_ms_since_video_request(android_callback_ctx_t *ctx) {
+    pthread_mutex_lock(&ctx->playback_info_lock);
+    uint64_t last = ctx->last_video_request_ns;
+    pthread_mutex_unlock(&ctx->playback_info_lock);
+    if (last == 0) return -1;
+    return (int64_t)((_monotonic_ns() - last) / 1000000ull);
 }
 
 void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double position,
@@ -301,6 +325,7 @@ static bool _check_register(void *cls, const char *pk_str) {
 static void _video_play(void *cls, const char *location, const float start_position) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     LOGI("video_play: %s @ %.2fs", location ? location : "(null)", start_position);
+    _touch_video_request(ctx);
     pthread_mutex_lock(&ctx->playback_info_lock);
     ctx->play_ready = 0;
     pthread_mutex_unlock(&ctx->playback_info_lock);
@@ -324,6 +349,7 @@ static void _video_play(void *cls, const char *location, const float start_posit
 
 static void _video_scrub(void *cls, const float position) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    _touch_video_request(ctx);
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_scrub, (jfloat)position);
@@ -331,6 +357,7 @@ static void _video_scrub(void *cls, const float position) {
 
 static void _video_rate(void *cls, const float rate) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    _touch_video_request(ctx);
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_rate, (jfloat)rate);
@@ -338,6 +365,7 @@ static void _video_rate(void *cls, const float rate) {
 
 static void _video_stop(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    _touch_video_request(ctx);
     android_callbacks_update_playback_info(ctx, 0.0, -1.0, 0.0f, 0);
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
@@ -348,6 +376,8 @@ static void _video_stop(void *cls) {
 static void _video_acquire_playback_info(void *cls, playback_info_t *info) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     pthread_mutex_lock(&ctx->playback_info_lock);
+    /* the sender's periodic GET /playback-info poll is its liveness heartbeat */
+    ctx->last_video_request_ns = _monotonic_ns();
     info->position = ctx->playback_position;
     info->duration = ctx->playback_duration;
     info->rate = ctx->playback_rate;
@@ -368,6 +398,7 @@ static void _video_acquire_playback_info(void *cls, playback_info_t *info) {
 static float _video_playlist_remove(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     pthread_mutex_lock(&ctx->playback_info_lock);
+    ctx->last_video_request_ns = _monotonic_ns();
     double position = ctx->playback_position;
     pthread_mutex_unlock(&ctx->playback_info_lock);
     return (float) position;

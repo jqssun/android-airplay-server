@@ -576,9 +576,55 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         // lingering polls after a stop must not bounce the UI back to a pending session
         _videoPollSuppressed = true
         _videoPlaybackActive.value = false
+        _mainHandler.removeCallbacks(_senderLivenessTick)
         airPlayVideoPlayer.stop()
         if (!_audioOnly.value) mediaSession?.isActive = false
         log(message)
+    }
+
+    // -- sender-liveness watchdog for AirPlay Video --
+    //
+    // Some sender apps (seen with iFit on iOS) abandon a video without ANY signal
+    // the receiver can react to: no POST /stop, no /rate change, no disconnect --
+    // the AirPlay TCP connections stay open, they just stop driving the stream, so
+    // the receiver would sit on the last frame forever. The one thing that does
+    // change is that the sender's otherwise-continuous GET /playback-info polling
+    // (which keeps going through deliberate pauses) falls silent. The native layer
+    // timestamps every video-session request (NativeBridge.nativeMsSinceVideoRequest);
+    // while a video session is active but NOT progressing, this watchdog treats a
+    // long request silence as sender-abandoned and ends the session. It never
+    // fires while the position is advancing, so a steady-state playing session
+    // can't be killed even if its sender happens to go quiet mid-stream.
+
+    // last position sampled by the watchdog, to detect "not progressing"
+    private var _livenessLastPositionMs = -1L
+
+    private val _senderLivenessTick = object : Runnable {
+        override fun run() {
+            if (!_videoPlaybackActive.value) return
+            _checkSenderLiveness()
+            if (_videoPlaybackActive.value) {
+                _mainHandler.postDelayed(this, SENDER_LIVENESS_CHECK_MS)
+            }
+        }
+    }
+
+    private fun _checkSenderLiveness() {
+        // positionMs comes from the periodic ExoPlayer snapshot; between watchdog
+        // ticks (1s apart) it always moves while playback progresses. It stays frozen
+        // when paused, stalled, errored, or still stuck loading (no snapshot at all).
+        val positionMs = _videoPlaybackInfo.value.positionMs
+        val progressing = positionMs != _livenessLastPositionMs
+        _livenessLastPositionMs = positionMs
+        if (progressing) return
+        val handle = nativeHandle
+        if (handle == 0L) return
+        val silentMs = NativeBridge.nativeMsSinceVideoRequest(handle)
+        // -1 (no request seen) can't normally happen while a session is active,
+        // since the session's own POST /play bumps the timestamp
+        if (silentMs < 0) return
+        if (silentMs < SENDER_ABANDON_TIMEOUT_MS) return
+        _endVideoPlayback("AirPlay Video stopped (sender silent for ${silentMs / 1000}s)")
     }
 
     override fun onDestroy() {
@@ -622,16 +668,26 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         // claim media-button routing for keys that arrive as media-session events
         mediaSession?.isActive = true
         log("AirPlay Video play: $location @ ${startPositionSeconds}s")
+        // (re)arm the sender-liveness watchdog for this session
+        _mainHandler.removeCallbacks(_senderLivenessTick)
+        _livenessLastPositionMs = -1L
+        _mainHandler.postDelayed(_senderLivenessTick, SENDER_LIVENESS_CHECK_MS)
         // re-summon on every play, not only first connect: a queue-item switch can
         // land after a summoned activity already stepped back to the previous app
         if (shouldLaunchOnConnect()) launchMainActivity()
     }
 
+    // rate/scrub are logged because sender apps differ wildly in how (or whether)
+    // they signal a stop -- e.g. iFit sends nothing at all -- and the native layer
+    // only logs these requests at debug level, which is compiled to logcat-DEBUG
+    // and above the level the raop logger is set to
     override fun onVideoScrub(positionSeconds: Float) {
+        log("AirPlay Video scrub: ${positionSeconds}s")
         airPlayVideoPlayer.scrub(positionSeconds)
     }
 
     override fun onVideoRate(rate: Float) {
+        log("AirPlay Video rate: $rate")
         airPlayVideoPlayer.setRate(rate)
     }
 
@@ -1119,6 +1175,19 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         // shared with dpad/double-tap seeks
         const val VIDEO_SEEK_STEP_MS = 10_000L
         const val VIDEO_POLL_PENDING_TIMEOUT_MS = 3_000L
+
+        /**
+         * Sender-liveness timeout for AirPlay Video: while the session is active
+         * but playback is not progressing (paused/stalled/still loading), a sender
+         * that has made no video-session request (GET /playback-info poll, /rate,
+         * /scrub, ...) for this long is treated as having abandoned the session.
+         * iOS senders normally poll /playback-info about once a second for the
+         * whole life of a session, including while paused via /rate 0, so a
+         * deliberate pause never trips this. Never checked while the position is
+         * advancing.
+         */
+        const val SENDER_ABANDON_TIMEOUT_MS = 10_000L
+        private const val SENDER_LIVENESS_CHECK_MS = 1_000L
 
         private const val AUDIO_CONFIG_DEBOUNCE_MS = 500L
     }
