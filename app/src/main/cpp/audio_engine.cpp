@@ -95,12 +95,6 @@ struct AudioEngine {
         mDecoder = {};
     }
 
-    void setVolume(float v) {
-        std::lock_guard<std::mutex> lk(mRebuildLock);
-        mVolume = v;
-        if (mOutput) mOutput->setVolume(v);
-    }
-
     void onFormat(int ct, int spf) {
         const int i = ctIndex(ct);
         if (i < 0 || spf <= 0) return;
@@ -172,7 +166,6 @@ private:
                                                      cfg.staticCushionMs, cfg.percentilePct);
         mOutput = AudioOutput::create(mSampleRate, mChannels, cfg.oboeBufferFrames,
                                       cfg.lowLatency, mTimeline, mLog);
-        mOutput->setVolume(mVolume);  // carry current level across rebuild
         mApplied = std::make_unique<AudioConfig>(cfg);
     }
 
@@ -190,7 +183,6 @@ private:
     std::shared_ptr<AudioOutput> mOutput;      // guarded by mRebuildLock
     bool mRunning = false;                     // requested output state, guarded by mRebuildLock
     bool mOutputActive = false;                // actual output state, guarded by mRebuildLock
-    float mVolume = 1.0f;                      // last-set output level, guarded by mRebuildLock
 
     LatencyReporter mDecLatency{"decode", *mLog};
     // decoder + codec/config it was built with
@@ -236,10 +228,6 @@ bool audio_engine_configure(AudioEngine *engine, int cushionMs, int percentilePc
     if (!engine) return false;
     return engine->configure({cushionMs, percentilePct, oboeBufferFrames, forceSwAlac,
                               realtimePriority, lowLatency, benchmarkLog});
-}
-
-void audio_engine_set_volume(AudioEngine *engine, float volume) {
-    if (engine) engine->setVolume(volume);
 }
 
 void audio_engine_on_format(AudioEngine *engine, int ct, int spf) {

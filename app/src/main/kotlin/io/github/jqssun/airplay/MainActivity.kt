@@ -154,6 +154,19 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // auto-enter pre-declared in pip params
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            lifecycleScope.launch {
+                repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    combine(
+                        viewModel.serverState, viewModel.connectionCount,
+                        viewModel.videoPlaybackActive, viewModel.videoPlaybackAspect,
+                        viewModel.videoAspect
+                    ) { _, _, _, _, _ -> }.collect { setPictureInPictureParams(_pipParams()) }
+                }
+            }
+        }
+
         setContent {
             AirPlayTheme {
                 MainScreen(
@@ -262,24 +275,27 @@ class MainActivity : ComponentActivity() {
 
     fun enterPip() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        enterPictureInPictureMode(_pipParams())
+    }
+
+    private fun _pipParams(): PictureInPictureParams {
         val aspect = if (viewModel.videoPlaybackActive.value) viewModel.videoPlaybackAspect.value
             else viewModel.videoAspect.value
-        val rational = Rational(
-            (aspect * 1000).toInt().coerceIn(1, 2390),
-            1000.coerceIn(1, 2390)
-        )
-        val params = PictureInPictureParams.Builder()
-            .setAspectRatio(rational)
-            .build()
-        enterPictureInPictureMode(params)
+        val rational = Rational((aspect * 1000).toInt().coerceIn(1, 2390), 1000)
+        val builder = PictureInPictureParams.Builder().setAspectRatio(rational)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setAutoEnterEnabled(_shouldAutoPip())
+        }
+        return builder.build()
     }
+
+    private fun _shouldAutoPip(): Boolean =
+        viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&
+            viewModel.connectionCount.value > 0
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&
-            viewModel.connectionCount.value > 0) {
-            enterPip()
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && _shouldAutoPip()) enterPip()
     }
 
     override fun onPictureInPictureModeChanged(inPip: Boolean, newConfig: Configuration) {

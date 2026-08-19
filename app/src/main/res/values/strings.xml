@@ -94,7 +94,6 @@
     <string name="setting_boot_auto_start_desc">Start the AirPlay server when the device starts</string>
     <string name="setting_run_in_background">Run in background</string>
     <string name="setting_run_in_background_desc">Keep the server running after leaving the app</string>
-    <string name="btn_save">Save</string>
 
     <!-- Settings: Connection -->
     <string name="setting_require_pin">Require PIN (Beta)</string>
@@ -124,8 +123,6 @@
     <string name="setting_return_to_previous_app">Return to previous app after casting</string>
     <string name="setting_return_to_previous_app_desc">When casting ends, switch back to the previously used app</string>
     <string name="setting_launch_on_connect_no_permission">Tap to grant Display over other apps permission</string>
-    <string name="setting_auto_res">Auto resolution</string>
-    <string name="setting_auto_res_desc">Advertise the physical display resolution (%1$s) to clients</string>
     <string name="setting_resolution">Resolution</string>
     <string name="setting_resolution_desc">Video resolution advertised to clients</string>
     <string name="setting_resolution_placeholder">[W]x[H]</string>
@@ -138,6 +135,8 @@
     <string name="setting_overscanned">Overscanned</string>
     <string name="setting_overscanned_desc">Add pixel boundary for full-screen overscan displays</string>
     <string name="chip_custom">Custom</string>
+    <string name="chip_device_portrait">Portrait</string>
+    <string name="chip_device_landscape">Landscape</string>
 
     <!-- Settings: Decode -->
     <string name="setting_h265">H.265 (HEVC)</string>

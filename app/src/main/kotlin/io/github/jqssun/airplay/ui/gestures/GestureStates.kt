@@ -23,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.unit.IntSize
+import io.github.jqssun.airplay.audio.VolumeBroadcast
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -154,10 +155,10 @@ class VolumeState(private val context: Context) {
     fun handleLifecycle(scope: DisposableEffectScope): DisposableEffectResult = with(scope) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
-                if (intent.action == VOLUME_CHANGED_ACTION) sync()
+                if (intent.action == VolumeBroadcast.ACTION) sync()
             }
         }
-        context.registerReceiver(receiver, IntentFilter(VOLUME_CHANGED_ACTION))
+        context.registerReceiver(receiver, IntentFilter(VolumeBroadcast.ACTION))
         onDispose { context.unregisterReceiver(receiver) }
     }
 
@@ -169,10 +170,6 @@ class VolumeState(private val context: Context) {
                 device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
                 device.type == AudioDeviceInfo.TYPE_USB_HEADSET
         }
-
-    companion object {
-        private const val VOLUME_CHANGED_ACTION = "android.media.VOLUME_CHANGED_ACTION"
-    }
 }
 
 @Stable

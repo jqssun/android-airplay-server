@@ -42,7 +42,6 @@ object NativeBridge {
                                             benchmarkLog: Boolean): Boolean
     external fun nativeServerAudioStart(handle: Long): Boolean
     external fun nativeServerAudioStop(handle: Long)
-    external fun nativeServerAudioSetVolume(handle: Long, volume: Float)
     external fun nativeServerAudioFormat(handle: Long, ct: Int, spf: Int)
     // fills direct buffer with packed debug snapshot; false if audio isn't running
     external fun nativeServerAudioDebug(handle: Long, buf: java.nio.ByteBuffer): Boolean

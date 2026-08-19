@@ -22,22 +22,12 @@ class AudioOutput;
 class OboeCallbacks : public oboe::AudioStreamDataCallback,
                       public oboe::AudioStreamErrorCallback {
 public:
-    OboeCallbacks(std::shared_ptr<TimelineBuffer> timeline, std::shared_ptr<LogSink> log,
-                  int channels)
-        : mTimeline(std::move(timeline)), mLog(std::move(log)), mChannels(channels) {}
-
-    void setVolume(float v) { mVolume.store(v, std::memory_order_relaxed); }
+    OboeCallbacks(std::shared_ptr<TimelineBuffer> timeline, std::shared_ptr<LogSink> log)
+        : mTimeline(std::move(timeline)), mLog(std::move(log)) {}
 
     oboe::DataCallbackResult onAudioReady(oboe::AudioStream *, void *audioData,
                                           int32_t numFrames) override {
-        auto *out = static_cast<int16_t *>(audioData);
-        mTimeline->read(out, numFrames);
-
-        const float vol = mVolume.load(std::memory_order_relaxed);
-        if (vol < 0.999f) {
-            const size_t n = (size_t)numFrames * mChannels;
-            for (size_t i = 0; i < n; i++) out[i] = (int16_t)(out[i] * vol);
-        }
+        mTimeline->read(static_cast<int16_t *>(audioData), numFrames);
         return oboe::DataCallbackResult::Continue;
     }
 
@@ -48,15 +38,12 @@ private:
 
     std::shared_ptr<TimelineBuffer> mTimeline;
     std::shared_ptr<LogSink> mLog;
-    const int mChannels;
-    std::atomic<float> mVolume{1.0f};
     std::weak_ptr<AudioOutput> mOwner;
 };
 
 /*
  * low-latency audio output via oboe (AAudio or OpenSL ES). data callback pulls PCM from
- * TimelineBuffer and applies volume; transparently handles device-loss errors
- * (e.g. BT/headset change)
+ * TimelineBuffer; transparently handles device-loss errors (e.g. BT/headset change)
  */
 class AudioOutput {
 public:
@@ -74,7 +61,7 @@ public:
                 std::shared_ptr<TimelineBuffer> timeline, std::shared_ptr<LogSink> log)
         : mSampleRate(sampleRate), mChannels(channels), mOboeBufferFrames(oboeBufferFrames),
           mLowLatency(lowLatency), mTimeline(std::move(timeline)), mLog(std::move(log)),
-          mCallbacks(std::make_shared<OboeCallbacks>(mTimeline, mLog, channels)) {}
+          mCallbacks(std::make_shared<OboeCallbacks>(mTimeline, mLog)) {}
 
     ~AudioOutput() { stop(); }
 
@@ -99,8 +86,6 @@ public:
             mStream.reset();
         }
     }
-
-    void setVolume(float v) { mCallbacks->setVolume(v); }
 
     // packed: nests into AudioDebugData with fixed layout
     struct __attribute__((packed)) Debug {

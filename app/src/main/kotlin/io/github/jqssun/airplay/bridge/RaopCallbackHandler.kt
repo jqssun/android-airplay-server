@@ -5,6 +5,8 @@ interface RaopCallbackHandler {
     fun onAudioFormat(ct: Int, spf: Int, usingScreen: Boolean)
     fun onVideoSize(srcW: Float, srcH: Float, w: Float, h: Float)
     fun onVolumeChange(volume: Float)
+    fun onClientVolume(): Float
+    fun onAudioTeardown()
     fun onConnectionInit()
     fun onConnectionDestroy()
     fun onConnectionReset(reason: Int)

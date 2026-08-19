@@ -27,9 +27,6 @@ bool audio_engine_configure(AudioEngine *engine, int cushionMs, int percentilePc
                             int oboeBufferFrames, bool forceSwAlac, bool realtimePriority,
                             bool lowLatency, bool benchmarkLog);
 
-/* output volume, linear gain */
-void audio_engine_set_volume(AudioEngine *engine, float volume);
-
 /* sender is switching audio formats */
 void audio_engine_on_format(AudioEngine *engine, int ct, int spf);
 

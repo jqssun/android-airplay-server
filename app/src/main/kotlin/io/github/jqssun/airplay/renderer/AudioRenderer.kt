@@ -2,14 +2,12 @@ package io.github.jqssun.airplay.renderer
 
 import io.github.jqssun.airplay.bridge.NativeBridge
 import io.github.jqssun.airplay.viewmodel.AudioDebug
-import kotlin.math.pow
 
 // wrapper around native audio engine
 class AudioRenderer {
 
     @Volatile var config = AudioConfig(); private set
 
-    @Volatile var volume = 1.0f; private set
     @Volatile var codecLabel = ""; private set
 
     private var serverHandle = 0L
@@ -18,7 +16,6 @@ class AudioRenderer {
     fun attachEngine(server: Long) {
         serverHandle = server
         pushConfig()
-        NativeBridge.nativeServerAudioSetVolume(serverHandle, volume)
     }
 
     @Synchronized
@@ -86,18 +83,6 @@ class AudioRenderer {
             CT_ALAC -> "ALAC"; CT_AAC_LC -> "AAC-LC"; CT_AAC_ELD -> "AAC-ELD"; else -> "?"
         }
         if (serverHandle != 0L) NativeBridge.nativeServerAudioFormat(serverHandle, ct, spf)
-    }
-
-    @Synchronized
-    fun setVolume(vol: Float) {
-        // dB: max = 0, min = -30, mute = -144
-        volume = when {
-            vol <= -144f -> 0f
-            vol >= 0f -> 1f
-            else -> 10f.pow(vol / 20f)
-        }
-        if (serverHandle == 0L) return
-        NativeBridge.nativeServerAudioSetVolume(serverHandle, volume)
     }
 
     companion object {

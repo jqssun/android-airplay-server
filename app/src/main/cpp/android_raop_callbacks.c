@@ -56,6 +56,8 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->on_audio_format = (*env)->GetMethodID(env, cls, "onAudioFormat", "(IIZ)V");
     ctx->on_video_size = (*env)->GetMethodID(env, cls, "onVideoSize", "(FFFF)V");
     ctx->on_volume_change = (*env)->GetMethodID(env, cls, "onVolumeChange", "(F)V");
+    ctx->on_client_volume = (*env)->GetMethodID(env, cls, "onClientVolume", "()F");
+    ctx->on_audio_teardown = (*env)->GetMethodID(env, cls, "onAudioTeardown", "()V");
     ctx->on_conn_init = (*env)->GetMethodID(env, cls, "onConnectionInit", "()V");
     ctx->on_conn_destroy = (*env)->GetMethodID(env, cls, "onConnectionDestroy", "()V");
     ctx->on_conn_reset = (*env)->GetMethodID(env, cls, "onConnectionReset", "(I)V");
@@ -240,8 +242,21 @@ static void _video_reset(void *cls, reset_type_t t) {
     }
 }
 static void _audio_flush(void *cls) { LOGI("audio_flush"); }
+
+static void _audio_stop_coverart_rendering(void *cls) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    LOGI("audio_teardown");
+    JNIEnv *env = _get_env(ctx);
+    if (!env) return;
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_audio_teardown);
+}
 static void _video_flush(void *cls) { LOGI("video_flush"); }
-static double _audio_set_client_volume(void *cls) { return 0.0; }
+static double _audio_set_client_volume(void *cls) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    JNIEnv *env = _get_env(ctx);
+    if (!env) return 0.0;
+    return (double)(*env)->CallFloatMethod(env, ctx->callback_obj, ctx->on_client_volume);
+}
 static void _audio_set_metadata(void *cls, const void *buf, int len) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
@@ -414,6 +429,7 @@ void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx) 
     cbs->audio_set_volume = _audio_set_volume;
     cbs->audio_set_metadata = _audio_set_metadata;
     cbs->audio_set_coverart = _audio_set_coverart;
+    cbs->audio_stop_coverart_rendering = _audio_stop_coverart_rendering;
     cbs->audio_remote_control_id = _audio_remote_control_id;
     cbs->audio_set_progress = _audio_set_progress;
     cbs->audio_get_format = _audio_get_format;
