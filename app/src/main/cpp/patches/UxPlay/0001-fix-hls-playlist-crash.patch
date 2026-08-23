@@ -1,10 +1,10 @@
 diff --git a/lib/airplay_video.c b/lib/airplay_video.c
-index 19505b2..fa8eeb4 100644
+index 8fa87ff..56ba9d0 100644
 --- a/lib/airplay_video.c
 +++ b/lib/airplay_video.c
-@@ -64,6 +64,18 @@ struct airplay_video_s {
-     int num_uri;
- };
+@@ -73,3 +73,15 @@
+     char type;
+ } slice_t;
  
 +static char *_raw_copy_playlist(const char *s) {
 +    size_t len = strlen(s);
@@ -18,11 +18,7 @@ index 19505b2..fa8eeb4 100644
 +    return copy;
 +}
 +
- //  initialize airplay_video service.
- airplay_video_t *airplay_video_init(raop_t *raop, unsigned short http_port, const char *lang) {
-     char uri[] = "http://localhost:";
-@@ -631,10 +643,12 @@ int store_media_playlist(airplay_video_t *airplay_video, char * media_playlist,
-     /* dont store duplicate media paylists */
+@@ -968,9 +980,11 @@
      for (int i = 0; i < num ; i++) {
          if (strcmp(media_data_store[i].uri, media_data_store[num].uri) == 0) {
 -            assert(strcmp(media_data_store[i].playlist, media_playlist) == 0);
@@ -38,7 +34,7 @@ index 19505b2..fa8eeb4 100644
          }
      }
      media_item_t *media_item = &media_data_store[num];
-@@ -791,59 +805,45 @@ char *adjust_master_playlist (char *fcup_response_data, int fcup_response_datale
+@@ -1122,4 +1136,18 @@
      return new_master;
  }
  
@@ -57,10 +53,7 @@ index 19505b2..fa8eeb4 100644
 +}
 +
  char *adjust_yt_condensed_playlist(const char *media_playlist) {
- /* this copies a Media Playlist into a null-terminated string. 
-    If it has the "#YT-EXT-CONDENSED-URI" header, it is also expanded into 
-    the full Media Playlist format.
-    It  returns a pointer to the expanded playlist, WHICH MUST BE FREED AFTER USE */
+@@ -1130,49 +1158,21 @@
  
 -    const char *base_uri_begin;
 -    const char *params_begin;
@@ -125,9 +118,7 @@ index 19505b2..fa8eeb4 100644
 +        return _raw_copy_playlist(media_playlist);
 +    }
  
-     /* expand params */
-     int nparams = 0;
-@@ -886,8 +886,7 @@ char *adjust_yt_condensed_playlist(const char *media_playlist) {
+@@ -1217,8 +1217,7 @@
      }
  
      size_t old_size = strlen(media_playlist);
@@ -135,48 +126,42 @@ index 19505b2..fa8eeb4 100644
 -    new_len += count * (base_uri_len + params_len);
 +    size_t new_len = old_size + (size_t) count * (base_uri_len + params_len + 2 * nparams + 2);
  
-     int byte_count = 0;
      char * new_playlist = (char *) malloc(new_len + 1);
-@@ -900,7 +899,7 @@ char *adjust_yt_condensed_playlist(const char *media_playlist) {
+     if (!new_playlist) {
+@@ -1230,4 +1229,4 @@
      char *new_pos = new_playlist;
      ptr = old_pos;
      ptr = strstr(old_pos, "#EXTINF:");
 -    size_t len = ptr - old_pos;
 +    size_t len = (ptr ? ptr : old_pos + strlen(old_pos)) - old_pos;
-     /* copy header section before chunks */
-     memcpy(new_pos, old_pos, len);
-     byte_count += len;
-@@ -910,6 +909,7 @@ char *adjust_yt_condensed_playlist(const char *media_playlist) {
-         /* for each chunk */
+@@ -1240,3 +1239,4 @@
          const char *end = NULL;
          const char *start = strstr(ptr, prefix);
 +        if (!start) break;
          len = start - ptr;
-         /* copy first line of chunk entry */
-         memcpy(new_pos, old_pos, len);
-@@ -945,6 +945,7 @@ char *adjust_yt_condensed_playlist(const char *media_playlist) {
-             byte_count++;
+@@ -1269,6 +1269,7 @@
+             *new_pos = '/';
              new_pos++;
  
 +            if (!end) end = old_pos + strlen(old_pos);
              len = end - old_pos;
              end++;
  
-@@ -965,7 +966,8 @@ char *adjust_yt_condensed_playlist(const char *media_playlist) {
+@@ -1287,6 +1288,9 @@
      new_pos += len;
      old_pos += len;
  
--    assert(byte_count == (int) new_len);
-+    new_playlist[byte_count] = '\0';
-+    assert(byte_count <= (int) new_len);
- 
++    *new_pos = '\0';
++    assert(new_pos <= new_playlist + new_len);
++
      free (prefix);
      free (base_uri);
+     free (params);
 diff --git a/lib/http_handlers.h b/lib/http_handlers.h
-index 7984be8..aa985bf 100644
+index b92bf75..13c9685 100644
 --- a/lib/http_handlers.h
 +++ b/lib/http_handlers.h
-@@ -468,7 +468,6 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t
+@@ -397,7 +397,6 @@
  
      raop_t *raop = conn->raop;
      airplay_video_t *airplay_video = (airplay_video_t *) hls_get_current_video(raop);
@@ -184,7 +169,7 @@ index 7984be8..aa985bf 100644
      bool data_is_plist = false;
      plist_t req_root_node = NULL;
      uint64_t uint_val = 0;
-@@ -476,6 +475,7 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t
+@@ -405,6 +404,7 @@
      int fcup_response_statuscode = 0;
      char *type = NULL;
      bool logger_debug = (logger_get_level(raop->logger) >= LOGGER_DEBUG);

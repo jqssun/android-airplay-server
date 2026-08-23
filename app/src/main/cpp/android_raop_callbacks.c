@@ -195,7 +195,6 @@ static void _display_pin(void *cls, char *pin) {
 
 /* Stubs for less critical callbacks */
 static void _noop(void *cls) { (void)cls; }
-static void _noop_teardown(void *cls, bool *a, bool *b) { (void)cls; (void)a; (void)b; }
 static void _video_pause(void *cls) { LOGI("video_pause"); }
 static void _video_resume(void *cls) { LOGI("video_resume"); }
 static void _conn_feedback(void *cls) { (void)cls; }
@@ -397,7 +396,6 @@ void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx) 
     cbs->video_reset = _video_reset;
     cbs->conn_init = _conn_init;
     cbs->conn_destroy = _conn_destroy;
-    cbs->conn_teardown = _noop_teardown;
     cbs->audio_flush = _audio_flush;
     cbs->video_flush = _video_flush;
     cbs->audio_set_client_volume = _audio_set_client_volume;

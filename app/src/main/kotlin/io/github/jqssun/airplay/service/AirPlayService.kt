@@ -395,6 +395,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         val advertiseVideo = prefs.getBoolean(Prefs.ADVERTISE_VIDEO, Prefs.DEF_ADVERTISE_VIDEO)
         val advertiseAudio = prefs.getBoolean(Prefs.ADVERTISE_AUDIO, Prefs.DEF_ADVERTISE_AUDIO)
         NativeBridge.nativeSetHlsEnabled(nativeHandle, advertiseVideo)
+        NativeBridge.nativeSetLang(nativeHandle, "", "", resources.configuration.locales.toLanguageTags().replace(',', ':'))
         NativeBridge.nativeSetAudioEnabled(nativeHandle, advertiseAudio)
         NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", maxFps)
         NativeBridge.nativeSetPlist(nativeHandle, "overscanned", if (overscanned) 1 else 0)

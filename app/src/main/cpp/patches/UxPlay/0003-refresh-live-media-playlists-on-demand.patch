@@ -1,5 +1,5 @@
 diff --git a/lib/airplay_video.c b/lib/airplay_video.c
-index ec478dd..1b8c61c 100644
+index 61afa87..8f7f532 100644
 --- a/lib/airplay_video.c
 +++ b/lib/airplay_video.c
 @@ -23,10 +23,13 @@
@@ -16,7 +16,7 @@ index ec478dd..1b8c61c 100644
  typedef enum playlist_type_e {
      NONE,
      VOD,
-@@ -43,6 +46,8 @@ struct media_item_s {
+@@ -43,6 +46,8 @@
      playlist_type_t playlist_type;
      int hls_version;
      int media_sequence;
@@ -25,15 +25,15 @@ index ec478dd..1b8c61c 100644
  };
  
  struct airplay_video_s {
-@@ -64,6 +69,7 @@ struct airplay_video_s {
+@@ -64,6 +69,7 @@
      media_item_t *media_data_store;
      int num_uri;
      pthread_mutex_t media_data_store_lock;
 +    bool initial_fetch_complete;
  };
  
- static char *_raw_copy_playlist(const char *s) {
-@@ -593,9 +599,18 @@ void create_media_data_store(airplay_video_t * airplay_video, char ** uri_list,
+ typedef struct slice_s{
+@@ -929,9 +935,18 @@
      }
      airplay_video->media_data_store = media_data_store;
      airplay_video->num_uri = num_uri;
@@ -52,7 +52,7 @@ index ec478dd..1b8c61c 100644
  
  static int parse_media_playlist(media_item_t *media_item) {
      const char *ptr = media_item->playlist;
-@@ -652,20 +667,28 @@ int store_media_playlist(airplay_video_t *airplay_video, char * media_playlist,
+@@ -988,7 +1003,7 @@
      if ( num < 0 ||  num >= airplay_video->num_uri) {
          pthread_mutex_unlock(&airplay_video->media_data_store_lock);
          return -1;
@@ -61,7 +61,7 @@ index ec478dd..1b8c61c 100644
          pthread_mutex_unlock(&airplay_video->media_data_store_lock);
          return -2;
      }
--    /* dont store duplicate media paylists */
+@@ -996,12 +1011,20 @@
 -    for (int i = 0; i < num ; i++) {
 -        if (strcmp(media_data_store[i].uri, media_data_store[num].uri) == 0) {
 -            if (strcmp(media_data_store[i].playlist, media_playlist) == 0) {
@@ -76,7 +76,6 @@ index ec478dd..1b8c61c 100644
 +            media_data_store[num].playlist = NULL;
 +        }
 +    } else {
-+        /* dont store duplicate media paylists */
 +        for (int i = 0; i < num ; i++) {
 +            if (strcmp(media_data_store[i].uri, media_data_store[num].uri) == 0) {
 +                if (strcmp(media_data_store[i].playlist, media_playlist) == 0) {
@@ -91,7 +90,7 @@ index ec478dd..1b8c61c 100644
          }
      }
      media_item_t *media_item = &media_data_store[num];
-@@ -673,12 +696,14 @@ int store_media_playlist(airplay_video_t *airplay_video, char * media_playlist,
+@@ -1009,12 +1032,14 @@
      media_item->count = *count;
      media_item->duration = *duration;
      media_item->endlist = *endlist;
@@ -107,7 +106,7 @@ index ec478dd..1b8c61c 100644
      pthread_mutex_lock(&airplay_video->media_data_store_lock);
      media_item_t *media_data_store = airplay_video->media_data_store;
      if (media_data_store == NULL) {
-@@ -687,12 +712,20 @@ char * get_media_playlist(airplay_video_t *airplay_video, int *count, float *dur
+@@ -1023,12 +1048,20 @@
      }
      for (int i = 0; i < airplay_video->num_uri; i++) {
          if (strstr(media_data_store[i].uri, uri)) {
@@ -133,7 +132,7 @@ index ec478dd..1b8c61c 100644
              }
              pthread_mutex_unlock(&airplay_video->media_data_store_lock);
              return copy;
-@@ -710,6 +743,22 @@ char * get_media_uri_by_num(airplay_video_t *airplay_video, int num) {
+@@ -1046,6 +1079,22 @@
      return NULL;
  }
  
@@ -156,13 +155,7 @@ index ec478dd..1b8c61c 100644
  int analyze_media_playlist(char *playlist, float *duration, bool *endlist) {
      float next;
      int count = 0;
-@@ -958,10 +1007,17 @@ char *adjust_yt_condensed_playlist(const char *media_playlist) {
-             if (i != last) {
-                 end = strchr(end, '/');
-             } else {
--                /* the next line starts with either #EXTINF (usually) 
-+                /* the next line starts with either #EXTINF (usually)
-                 or #EXT-X-ENDLIST (at last chunk)*/
+@@ -1290,5 +1339,12 @@
  	            end = strstr(end, "#EXT");
              }
 +            if (!end) {
@@ -173,10 +166,10 @@ index ec478dd..1b8c61c 100644
 +                }
 +            }
              *new_pos = '/';
-             byte_count++;
              new_pos++;
-@@ -972,7 +1028,9 @@ char *adjust_yt_condensed_playlist(const char *media_playlist) {
-             byte_count++;
+             memcpy(new_pos, params_start[i], params_size[i]);
+@@ -1296,7 +1352,9 @@
+             *new_pos = '/';
              new_pos++;
  
 -            if (!end) end = old_pos + strlen(old_pos);
@@ -186,8 +179,7 @@ index ec478dd..1b8c61c 100644
              len = end - old_pos;
              end++;
  
-@@ -984,7 +1042,11 @@ char *adjust_yt_condensed_playlist(const char *media_playlist) {
-                 old_pos++; /* last entry is not followed by "/" separator */
+@@ -1308,3 +1366,7 @@
              }
          }
 +        if (ptr && old_pos != ptr) {
@@ -195,14 +187,11 @@ index ec478dd..1b8c61c 100644
 +        }
      }
 + stop_rewriting_chunks:
-     /* copy tail */
-      
-     len = media_playlist + strlen(media_playlist) - old_pos;
 diff --git a/lib/airplay_video.h b/lib/airplay_video.h
-index 95ad87c..77fdcb0 100644
+index bdb607a..d5ff42e 100644
 --- a/lib/airplay_video.h
 +++ b/lib/airplay_video.h
-@@ -51,6 +51,9 @@ void set_next_media_uri_id(airplay_video_t *airplay_video, int id);
+@@ -47,6 +47,9 @@
  int get_next_media_uri_id(airplay_video_t *airplay_video);
  int get_num_media_uri(airplay_video_t *airplay_video);
  char *get_media_uri_by_num(airplay_video_t *airplay_video, int num);
@@ -212,7 +201,7 @@ index 95ad87c..77fdcb0 100644
  
  int analyze_media_playlist(char *playlist, float *duration, bool *endlist);
  int create_media_uri_table(const char *url_prefix, const char *master_playlist_data,
-@@ -59,7 +62,7 @@ void store_master_playlist(airplay_video_t *airplay_video, char *master_playlist
+@@ -55,7 +58,7 @@
  char *select_master_playlist_language(airplay_video_t *airplay_video, char *master_playlist);
  int store_media_playlist(airplay_video_t *airplay_video, char *media_playlist, int *count, float *duration, bool*endlist, int num);
  char *get_master_playlist(airplay_video_t *airplay_video);
@@ -222,10 +211,10 @@ index 95ad87c..77fdcb0 100644
  void destroy_media_data_store(airplay_video_t *airplay_video);
  void create_media_data_store(airplay_video_t * airplay_video, char ** media_data_store, int num_uri);
 diff --git a/lib/http_handlers.h b/lib/http_handlers.h
-index fbc7a7a..f49e62c 100644
+index 17699b2..5a4c801 100644
 --- a/lib/http_handlers.h
 +++ b/lib/http_handlers.h
-@@ -676,6 +676,18 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t
+@@ -605,4 +605,16 @@
              float duration = 0.0f;
              bool endlist = false;
              int count = analyze_media_playlist(playlist, &duration, &endlist);
@@ -242,9 +231,7 @@ index fbc7a7a..f49e62c 100644
 +                return;
 +            }
              int uri_num = get_next_media_uri_id(airplay_video);
-             --uri_num;    // (next num is current num + 1)
-             int ret = store_media_playlist(airplay_video, playlist, &count, &duration, &endlist, uri_num);
-@@ -698,6 +710,7 @@ http_handler_action(raop_conn_t *conn, http_request_t *request, http_response_t
+@@ -627,6 +639,7 @@
                                                               get_next_FCUP_RequestID(airplay_video));
              set_next_media_uri_id(airplay_video, ++uri_num);
          } else {
@@ -252,7 +239,7 @@ index fbc7a7a..f49e62c 100644
              raop->callbacks.on_video_play(raop->callbacks.cls,
                                                  get_playback_location(airplay_video),
                                                  get_start_position_seconds(airplay_video));
-@@ -988,7 +1001,9 @@ http_handler_hls(raop_conn_t *conn,  http_request_t *request, http_response_t *r
+@@ -924,7 +937,9 @@
      } else {
          int chunks = 0;
          float duration = 0.0f;
@@ -263,7 +250,7 @@ index fbc7a7a..f49e62c 100644
          if (media_playlist) {
              char *data  = adjust_yt_condensed_playlist(media_playlist);
              free(media_playlist);
-@@ -999,7 +1014,11 @@ http_handler_hls(raop_conn_t *conn,  http_request_t *request, http_response_t *r
+@@ -935,7 +950,11 @@
          } else {
              logger_log(raop->logger, LOGGER_ERR,"requested media playlist %s not found", url); 
          }

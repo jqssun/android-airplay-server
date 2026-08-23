@@ -1,5 +1,5 @@
 diff --git a/lib/airplay_video.c b/lib/airplay_video.c
-index 39c83a0..21d342d 100644
+index 56ba9d0..61afa87 100644
 --- a/lib/airplay_video.c
 +++ b/lib/airplay_video.c
 @@ -22,6 +22,7 @@
@@ -10,15 +10,15 @@ index 39c83a0..21d342d 100644
  
  #include "raop.h"
  #include "airplay_video.h"
-@@ -62,6 +63,7 @@ struct airplay_video_s {
+@@ -62,6 +63,7 @@
      char *master_playlist;
      media_item_t *media_data_store;
      int num_uri;
 +    pthread_mutex_t media_data_store_lock;
  };
  
- static char *_raw_copy_playlist(const char *s) {
-@@ -110,6 +112,7 @@ airplay_video_t *airplay_video_init(raop_t *raop, unsigned short http_port, cons
+ typedef struct slice_s{
+@@ -119,6 +121,7 @@
      airplay_video->media_data_store = NULL;
      airplay_video->master_playlist = NULL;
      airplay_video->num_uri = 0;
@@ -26,9 +26,9 @@ index 39c83a0..21d342d 100644
      airplay_video->next_uri = 0;
      return airplay_video;
  }
-@@ -138,9 +141,12 @@ airplay_video_destroy(airplay_video_t *airplay_video) {
-     if (airplay_video->language_code) {
-        free(airplay_video->language_code);
+@@ -141,9 +144,12 @@
+     if (airplay_video->playback_location) {
+         free(airplay_video->playback_location);
      }
 +    pthread_mutex_lock(&airplay_video->media_data_store_lock);
      if (airplay_video->media_data_store) {
@@ -39,7 +39,7 @@ index 39c83a0..21d342d 100644
      if (airplay_video->master_playlist){
          free (airplay_video->master_playlist);
      }
-@@ -306,10 +312,12 @@ int get_next_media_uri_id(airplay_video_t *airplay_video) {
+@@ -270,10 +276,12 @@
  }
  
  void store_master_playlist(airplay_video_t *airplay_video, char *master_playlist) {
@@ -51,8 +51,8 @@ index 39c83a0..21d342d 100644
 +    pthread_mutex_unlock(&airplay_video->media_data_store_lock);
  }
  
- typedef struct language_s {
-@@ -536,7 +544,10 @@ char * select_master_playlist_language(airplay_video_t *airplay_video, char *mas
+ static char * list_languages(const char *master_playlist, int n_slice, slice_t *slice, char type, int *nlang, char **default_lang, bool autoselect)  {
+@@ -872,6 +880,9 @@
  }
  
  char *get_master_playlist(airplay_video_t *airplay_video) {
@@ -63,8 +63,7 @@ index 39c83a0..21d342d 100644
 +    return copy;
  }
  
- /* media_data_store */
-@@ -562,6 +573,7 @@ void destroy_media_data_store(airplay_video_t *airplay_video) {
+@@ -898,6 +909,7 @@
  }
  
  void create_media_data_store(airplay_video_t * airplay_video, char ** uri_list, int num_uri) {  
@@ -72,7 +71,7 @@ index 39c83a0..21d342d 100644
      destroy_media_data_store(airplay_video);
      media_item_t *media_data_store = calloc(num_uri, sizeof(media_item_t));
      if (!media_data_store) {
-@@ -581,6 +593,7 @@ void create_media_data_store(airplay_video_t * airplay_video, char ** uri_list,
+@@ -917,6 +929,7 @@
      }
      airplay_video->media_data_store = media_data_store;
      airplay_video->num_uri = num_uri;
@@ -80,7 +79,7 @@ index 39c83a0..21d342d 100644
  }
  
  
-@@ -634,10 +647,13 @@ static int parse_media_playlist(media_item_t *media_item) {
+@@ -970,9 +983,12 @@
  }
  
  int store_media_playlist(airplay_video_t *airplay_video, char * media_playlist, int *count, float *duration, bool *endlist, int num) {
@@ -93,8 +92,7 @@ index 39c83a0..21d342d 100644
 +        pthread_mutex_unlock(&airplay_video->media_data_store_lock);
          return -2;
      }
-     /* dont store duplicate media paylists */
-@@ -646,6 +662,7 @@ int store_media_playlist(airplay_video_t *airplay_video, char * media_playlist,
+@@ -982,6 +998,7 @@
              if (strcmp(media_data_store[i].playlist, media_playlist) == 0) {
                  media_data_store[num].num = i;
                  free (media_playlist);
@@ -102,7 +100,7 @@ index 39c83a0..21d342d 100644
                  return 1;
              }
              break;
-@@ -657,21 +674,31 @@ int store_media_playlist(airplay_video_t *airplay_video, char * media_playlist,
+@@ -993,21 +1010,31 @@
      media_item->duration = *duration;
      media_item->endlist = *endlist;
      parse_media_playlist(media_item);
@@ -138,10 +136,10 @@ index 39c83a0..21d342d 100644
  }
  
 diff --git a/lib/http_handlers.h b/lib/http_handlers.h
-index aa985bf..fbc7a7a 100644
+index 13c9685..17699b2 100644
 --- a/lib/http_handlers.h
 +++ b/lib/http_handlers.h
-@@ -978,6 +978,7 @@ http_handler_hls(raop_conn_t *conn,  http_request_t *request, http_response_t *r
+@@ -914,6 +914,7 @@
              }
              memcpy(data, master_playlist, len);
              data[len] = '\0';
@@ -149,7 +147,7 @@ index aa985bf..fbc7a7a 100644
              *response_data = data;
              *response_datalen = (int ) len;
          } else {
-@@ -990,6 +991,7 @@ http_handler_hls(raop_conn_t *conn,  http_request_t *request, http_response_t *r
+@@ -926,6 +927,7 @@
          char *media_playlist = get_media_playlist(airplay_video, &chunks, &duration, url);
          if (media_playlist) {
              char *data  = adjust_yt_condensed_playlist(media_playlist);

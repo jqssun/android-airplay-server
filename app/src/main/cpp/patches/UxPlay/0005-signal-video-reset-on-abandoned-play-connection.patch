@@ -1,8 +1,8 @@
 diff --git a/lib/http_handlers.h b/lib/http_handlers.h
-index 8a3f192..d76c984 100644
+index dd55290..7123c96 100644
 --- a/lib/http_handlers.h
 +++ b/lib/http_handlers.h
-@@ -152,6 +152,7 @@ http_handler_stop(raop_conn_t *conn, http_request_t *request, http_response_t *r
+@@ -152,6 +152,7 @@
      raop_t *raop = conn->raop;
      logger_log(raop->logger, LOGGER_INFO, "client HTTP request POST stop");
  
@@ -10,7 +10,7 @@ index 8a3f192..d76c984 100644
      raop->callbacks.on_video_stop(raop->callbacks.cls);
  }
  
-@@ -985,6 +986,8 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
+@@ -916,6 +917,8 @@
          goto play_error;
      }
  
@@ -20,18 +20,15 @@ index 8a3f192..d76c984 100644
  
      if (req_root_node) {
 diff --git a/lib/raop.c b/lib/raop.c
-index 7098fae..86db001 100644
+index b6fc8f3..c86393f 100644
 --- a/lib/raop.c
 +++ b/lib/raop.c
-@@ -88,6 +88,7 @@ struct raop_s {
-     /* activate support for HLS live streaming */
+@@ -89,3 +89,4 @@
      bool hls_support;
      bool hls_pending;
 +    void *video_play_conn;
    
-     /* used in digest authentication */
-     char *nonce;
-@@ -549,6 +550,13 @@ conn_destroy(void *ptr) {
+@@ -551,6 +552,13 @@
      raop_t *raop = conn->raop;
      logger_log(raop->logger, LOGGER_DEBUG, "Destroying connection");
  
@@ -45,7 +42,7 @@ index 7098fae..86db001 100644
      if (raop->callbacks.conn_destroy) {
          raop->callbacks.conn_destroy(raop->callbacks.cls);
      }
-@@ -638,6 +646,7 @@ raop_init(raop_callbacks_t *callbacks) {
+@@ -640,6 +648,7 @@
  
      raop->hls_support = false;
      raop->hls_pending = false;
@@ -53,7 +50,7 @@ index 7098fae..86db001 100644
      
      raop->nonce = NULL;
  
-@@ -854,6 +863,7 @@ void raop_remove_known_connections(raop_t * raop) {
+@@ -848,6 +857,7 @@
  }
  
  void raop_remove_hls_connections(raop_t * raop) {
@@ -61,19 +58,16 @@ index 7098fae..86db001 100644
      httpd_remove_connections_by_type(raop->httpd, CONNECTION_TYPE_HLS);
      httpd_remove_connections_by_type(raop->httpd, CONNECTION_TYPE_PTTH);
      httpd_remove_connections_by_type(raop->httpd, CONNECTION_TYPE_AIRPLAY);
-@@ -880,6 +890,7 @@ void raop_handle_eos(raop_t *raop) {
+@@ -874,3 +884,4 @@
      assert (id >= 0);
      raop_destroy_airplay_video(raop, id);
      raop->current_video = -1;
 +    raop->video_play_conn = NULL;
-     /* reset video without deleting raop->airplay_video */
-     raop->callbacks.video_reset(raop->callbacks.cls, RESET_TYPE_HLS_EOS);
- }
 diff --git a/lib/raop.h b/lib/raop.h
-index fcc3fe9..e635768 100644
+index d659134..c6dc8ae 100644
 --- a/lib/raop.h
 +++ b/lib/raop.h
-@@ -65,7 +65,8 @@ typedef enum reset_type_e {
+@@ -65,7 +65,8 @@
      RESET_TYPE_HLS_SHUTDOWN,
      RESET_TYPE_HLS_EOS,
      RESET_TYPE_ON_VIDEO_PLAY,

@@ -34,8 +34,8 @@ android {
         applicationId = "io.github.jqssun.airplay"
         minSdk = 24
         targetSdk = 36
-        versionCode = 30
-        versionName = "0.0.30"
+        versionCode = 31
+        versionName = "0.0.31"
 
         externalNativeBuild {
             cmake {
@@ -108,7 +108,7 @@ tasks.register("applyUxplayPatches") {
         val touched = patches.flatMap { git("apply", "--numstat", it.path).trim().lines() }
             .map { it.substringAfterLast("\t") }.distinct()
         git("checkout", "--", *touched.toTypedArray())
-        patches.forEach { git("apply", it.path) }
+        patches.forEach { git("apply", "--unidiff-zero", it.path) }
     }
 }
 
