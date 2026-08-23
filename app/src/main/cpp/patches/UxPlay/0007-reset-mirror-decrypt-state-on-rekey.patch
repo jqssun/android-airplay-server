@@ -1,0 +1,14 @@
+diff --git a/lib/mirror_buffer.c b/lib/mirror_buffer.c
+index d6d5667..beaaf03 100644
+--- a/lib/mirror_buffer.c
++++ b/lib/mirror_buffer.c
+@@ -64,7 +64,9 @@ mirror_buffer_init_aes(mirror_buffer_t *mirror_buffer, const uint64_t *streamCon
+     sha_destroy(ctx);
+ 
+     // Need to be initialized externally
++    aes_ctr_destroy(mirror_buffer->aes_ctx);
+     mirror_buffer->aes_ctx = aes_ctr_init(aeskey_video, aesiv_video);
++    mirror_buffer->nextDecryptCount = 0;
+ }
+ 
+ mirror_buffer_t *

@@ -132,7 +132,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             !_videoPollSuppressed &&
             SystemClock.elapsedRealtime() - _lastVideoPollAt < VIDEO_POLL_PENDING_TIMEOUT_MS
 
-    // set once mirroring reports a real size; connectionCount can't tell session kinds apart
+    // set once mirroring reports a real size; stops with session
     private val _mirroringActive = MutableStateFlow(false)
     val mirroringActive = _mirroringActive.asStateFlow()
 
@@ -177,7 +177,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private val _volSyncTimeout = Runnable { _volSyncEnd() }
 
     var logCallback: ((String) -> Unit)? = null
-    var modeCallback: ((Boolean) -> Unit)? = null
 
     @Volatile private var _lastPin: String? = null
     var pinCallback: ((String?) -> Unit)? = null
@@ -641,7 +640,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         if (!usingScreen) _setPlaying(true)
         if (!usingScreen && !_audioOnly.value) {
             // pure music streaming (not screen mirroring audio)
-            onAudioOnly(true)
+            _setAudioOnly(true)
         }
         log("Audio format: ct=$ct spf=$spf screen=$usingScreen")
     }
@@ -733,7 +732,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             // last client gone: release audio output devices to save power
             audioRenderer.stop()
             _audioOnly.value = false
-            _mirroringActive.value = false
             _lastVideoPollAt = 0
             _videoPollSuppressed = false
             _coverArtBytes = null
@@ -810,13 +808,20 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         log("DACP: $dacpId")
     }
 
-    override fun onAudioOnly(audioOnly: Boolean) {
+    override fun onMirrorRunning(running: Boolean) {
+        if (running) videoRenderer.startSession() else {
+            videoRenderer.stopSession()
+            _mirroringActive.value = false
+        }
+        _setAudioOnly(!running)
+    }
+
+    private fun _setAudioOnly(audioOnly: Boolean) {
         val prev = _audioOnly.value
         _audioOnly.value = audioOnly
         _refreshDacpPlayer()
         if (audioOnly && !prev) {
             mediaSession?.isActive = true
-            modeCallback?.invoke(true)
             log("Audio mode")
         } else if (!audioOnly && prev) {
             mediaSession?.isActive = false
@@ -825,7 +830,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             _positionMs.value = 0
             _durationMs.value = 0
             _updateMediaNotification()
-            modeCallback?.invoke(false)
             log("Mirror mode")
         }
     }

@@ -62,6 +62,17 @@ class VideoRenderer {
         pipeline.setDisplaySurface(null)
     }
 
+    // codec per mirror session; pipeline persists across sessions
+    fun startSession() = synchronized(lock) { _resetStats() }
+
+    fun stopSession() = synchronized(lock) { stopCodec() }
+
+    private fun _resetStats() {
+        fps = 0; bitrateBps = 0; frameCount = 0; codecName = ""
+        droppedFrames = 0; framePacingJitterUs = 0
+        _framesThisSec = 0; _bytesThisSec = 0
+    }
+
     private fun _updateStats(size: Int) {
         val now = System.currentTimeMillis()
         if (now - _lastStatReset >= 1000) {
@@ -88,9 +99,8 @@ class VideoRenderer {
     }
 
     fun feedFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
-        _updateStats(data.size)
-
         synchronized(lock) {
+            _updateStats(data.size)
             if (videoWidth == 0 || videoHeight == 0) return
 
             if (codec == null || isH265 != currentH265) {
@@ -247,10 +257,7 @@ class VideoRenderer {
     fun release() = synchronized(lock) {
         stopCodec()
         pipeline.release()
-        fps = 0; bitrateBps = 0; frameCount = 0; codecName = ""
-        droppedFrames = 0; framePacingJitterUs = 0
-        _framesThisSec = 0; _bytesThisSec = 0
-        _frameIntervalIdx = 0; _frameIntervalCount = 0; _lastOutputFrameNs = 0L
+        _resetStats()
     }
 
     private fun _recordOutputFrameTime() {
