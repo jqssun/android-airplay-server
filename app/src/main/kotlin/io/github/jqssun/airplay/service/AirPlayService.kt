@@ -75,7 +75,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private var foregroundStarted = false
     private var lastOrientation = Configuration.ORIENTATION_UNDEFINED
 
-    val videoRenderer = VideoRenderer()
+    val videoRenderer = VideoRenderer(this)
     val audioRenderer = AudioRenderer()
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val airPlayVideoPlayer by lazy { AirPlayVideoPlayer(this) }
@@ -377,17 +377,16 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         val maxFps = prefs.getInt(Prefs.MAX_FPS, Prefs.DEF_MAX_FPS)
         val overscanned = prefs.getBoolean(Prefs.OVERSCANNED, Prefs.DEF_OVERSCANNED)
         val audioLatencyMs = prefs.getInt(Prefs.AUDIO_LATENCY_MS, Prefs.DEF_AUDIO_LATENCY_MS)
-        val h265 = _h265()
+        val (reqW, reqH) = _displaySize(clamp = false)
+        val h265 = videoRenderer.selectDecoders(reqW, reqH, maxFps, prefs.getBoolean(Prefs.H265_ENABLED, Prefs.DEF_H265_ENABLED))
         val alac = prefs.getBoolean(Prefs.ALAC_ENABLED, Prefs.DEF_ALAC_ENABLED)
         val aac = prefs.getBoolean(Prefs.AAC_ENABLED, Prefs.DEF_AAC_ENABLED)
 
-        val realtimePriority = prefs.getBoolean(Prefs.KEY_PRIORITY, Prefs.DEF_KEY_PRIORITY)
-        val lowLatency = prefs.getBoolean(Prefs.LOW_LATENCY, Prefs.DEF_LOW_LATENCY)
         videoRenderer.enforceSdr = prefs.getBoolean(Prefs.ENFORCE_SDR, Prefs.DEF_ENFORCE_SDR)
         videoRenderer.keyAllowFrameDrop = prefs.getBoolean(Prefs.KEY_ALLOW_FRAME_DROP, Prefs.DEF_KEY_ALLOW_FRAME_DROP)
-        videoRenderer.realtimeDecoderPriority = realtimePriority
-        videoRenderer.lowLatency = lowLatency
-        videoRenderer.operatingRateHint = prefs.getBoolean(Prefs.KEY_OPERATING_RATE, Prefs.DEF_KEY_OPERATING_RATE)
+        videoRenderer.selector.maxOperatingRate = when (prefs.getString(Prefs.OPERATING_RATE, Prefs.DEF_OPERATING_RATE)) {
+            Prefs.ON -> true; Prefs.OFF -> false; else -> null
+        }
         videoRenderer.benchmarkLog = prefs.getBoolean(Prefs.BENCHMARK_LOG, Prefs.DEF_BENCHMARK_LOG)
         videoRenderer.benchmarkLogCallback = { msg -> logCallback?.invoke(msg) }
         videoRenderer.scheduledOutputBufferRelease = prefs.getBoolean(Prefs.SCHEDULED_OUTPUT_BUFFER_RELEASE, Prefs.DEF_SCHEDULED_OUTPUT_BUFFER_RELEASE)
@@ -438,13 +437,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         log("Server started on port $port")
     }
 
-    private fun _h265(): Boolean =
-        prefs.getBoolean(Prefs.H265_ENABLED, Prefs.DEF_H265_ENABLED) && VideoRenderer.supportsH265()
-
     private fun _orientationFollowsDevice(): Boolean =
-        prefs.getString(Prefs.RESOLUTION, Prefs.DEF_RESOLUTION) == "auto"
+        prefs.getString(Prefs.RESOLUTION, Prefs.DEF_RESOLUTION) == Prefs.AUTO
 
-    private fun _displaySize(): Pair<Int, Int> {
+    private fun _displaySize(clamp: Boolean = true): Pair<Int, Int> {
         val res = prefs.getString(Prefs.RESOLUTION, Prefs.DEF_RESOLUTION)!!
         val portrait = when (res) {
             "portrait" -> true
@@ -457,8 +453,9 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         val (w, h) = if (res.contains("x")) {
             res.split("x").let { it[0].toInt() to it[1].toInt() }
         } else device
+        if (!clamp) return w to h
         // strict decoders black-screen past their limits; advertised size is only upper bound for senders
-        val (maxW, maxH) = VideoRenderer.maxSupportedResolution(_h265())
+        val (maxW, maxH) = videoRenderer.maxResolution()
         return w.coerceAtMost(maxW) to h.coerceAtMost(maxH)
     }
 

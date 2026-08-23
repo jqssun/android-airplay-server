@@ -135,8 +135,8 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _lowLatency = MutableStateFlow(prefs.getBoolean(Prefs.LOW_LATENCY, Prefs.DEF_LOW_LATENCY))
     val lowLatency: StateFlow<Boolean> = _lowLatency.asStateFlow()
 
-    private val _operatingRateHint = MutableStateFlow(prefs.getBoolean(Prefs.KEY_OPERATING_RATE, Prefs.DEF_KEY_OPERATING_RATE))
-    val operatingRateHint: StateFlow<Boolean> = _operatingRateHint.asStateFlow()
+    private val _operatingRate = MutableStateFlow(prefs.getString(Prefs.OPERATING_RATE, Prefs.DEF_OPERATING_RATE)!!)
+    val operatingRate: StateFlow<String> = _operatingRate.asStateFlow()
 
     private val _scheduledOutputBufferRelease = MutableStateFlow(prefs.getBoolean(Prefs.SCHEDULED_OUTPUT_BUFFER_RELEASE, Prefs.DEF_SCHEDULED_OUTPUT_BUFFER_RELEASE))
     val scheduledOutputBufferRelease: StateFlow<Boolean> = _scheduledOutputBufferRelease.asStateFlow()
@@ -380,11 +380,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         _lowLatency.value = v
         prefs.edit().putBoolean(Prefs.LOW_LATENCY, v).apply()
     }
-    fun setOperatingRateHint(v: Boolean) {
-        _operatingRateHint.value = v
-        prefs.edit().putBoolean(Prefs.KEY_OPERATING_RATE, v).apply()
-        _applyByServerRestart()
-    }
+    fun setOperatingRate(v: String) { _operatingRate.value = v; prefs.edit().putString(Prefs.OPERATING_RATE, v).apply(); _applyByServerRestart() }
     fun setScheduledOutputBufferRelease(v: Boolean) {
         _scheduledOutputBufferRelease.value = v
         prefs.edit().putBoolean(Prefs.SCHEDULED_OUTPUT_BUFFER_RELEASE, v).apply()
