@@ -29,6 +29,17 @@ object NativeBridge {
         handle: Long, position: Float, duration: Float, rate: Float, readyToPlay: Boolean
     )
 
+    /**
+     * Milliseconds since the sender last made a request touching the AirPlay Video
+     * session (POST /play, /rate, /scrub, /stop, GET /playback-info polls, playlist
+     * actions), or -1 if none has arrived since native init. Senders poll GET
+     * /playback-info continuously while a video session is mounted -- including
+     * while paused -- so a long silence here while playback isn't progressing means
+     * the sender abandoned the session (see AirPlayService's sender-liveness
+     * watchdog).
+     */
+    external fun nativeMsSinceVideoRequest(handle: Long): Long
+
     external fun nativeGetRaopTxtRecords(handle: Long): Map<String, String>?
     external fun nativeGetAirplayTxtRecords(handle: Long): Map<String, String>?
     external fun nativeGetRaopServiceName(handle: Long): String?

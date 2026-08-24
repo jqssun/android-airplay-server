@@ -3,6 +3,7 @@
 
 #include <jni.h>
 #include <pthread.h>
+#include <stdint.h>
 #include "raop.h"
 #include "audio_engine.h"
 
@@ -44,6 +45,14 @@ typedef struct {
     double playback_duration;
     float playback_rate;
     int playback_ready;
+    /* CLOCK_MONOTONIC ns timestamp of the last sender request touching the AirPlay
+       Video session (/play, /rate, /scrub, /stop, GET /playback-info polls,
+       playlist actions). 0 = none seen yet. Guarded by playback_info_lock. Kotlin
+       reads its age via nativeMsSinceVideoRequest for the sender-liveness timeout:
+       some sender apps (seen with iFit) abandon a video without any stop/rate
+       request or disconnect, and the end of their otherwise-continuous
+       /playback-info polling is the only observable signal. */
+    uint64_t last_video_request_ns;
     /* holds the /play response until the player is ready, so self-driven senders (macOS)
        establish their timeline after the real duration is known, not at duration 0 */
     pthread_cond_t play_ready_cond;
@@ -56,6 +65,10 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env);
 void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx);
 void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double position,
                                              double duration, float rate, int ready);
+
+/* Milliseconds since the last video-session request from the sender, or -1 if none
+   has been seen since init. */
+int64_t android_callbacks_ms_since_video_request(android_callback_ctx_t *ctx);
 
 #ifdef __cplusplus
 }
