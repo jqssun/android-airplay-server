@@ -619,6 +619,9 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         // claim media-button routing for keys that arrive as media-session events
         mediaSession?.isActive = true
         log("AirPlay Video play: $location @ ${startPositionSeconds}s")
+        // re-summon on every play, not only first connect: a queue-item switch can
+        // land after a summoned activity already stepped back to the previous app
+        if (shouldLaunchOnConnect()) launchMainActivity()
     }
 
     override fun onVideoScrub(positionSeconds: Float) {
@@ -1070,9 +1073,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     private fun launchMainActivity() {
-        Handler(Looper.getMainLooper()).post {
+        _mainHandler.post {
             val launchIntent = Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                .putExtra(MainActivity.EXTRA_SESSION_SUMMON, true)
             try {
                 startActivity(launchIntent)
             } catch (e: Exception) {
