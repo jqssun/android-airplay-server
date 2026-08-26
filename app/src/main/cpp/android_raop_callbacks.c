@@ -66,7 +66,7 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->on_coverart = (*env)->GetMethodID(env, cls, "onCoverArt", "([B)V");
     ctx->on_progress = (*env)->GetMethodID(env, cls, "onProgress", "(JJJ)V");
     ctx->on_dacp_id = (*env)->GetMethodID(env, cls, "onDacpId", "(Ljava/lang/String;Ljava/lang/String;)V");
-    ctx->on_audio_only = (*env)->GetMethodID(env, cls, "onAudioOnly", "(Z)V");
+    ctx->on_mirror_running = (*env)->GetMethodID(env, cls, "onMirrorRunning", "(Z)V");
     ctx->on_video_play = (*env)->GetMethodID(env, cls, "onVideoPlay", "(Ljava/lang/String;F)V");
     ctx->on_video_scrub = (*env)->GetMethodID(env, cls, "onVideoScrub", "(F)V");
     ctx->on_video_rate = (*env)->GetMethodID(env, cls, "onVideoRate", "(F)V");
@@ -121,6 +121,11 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
     if (!env || !data->data || data->data_len <= 0) return;
+    /* raop_rtp_mirror marks undecryptable packets by setting byte 0 (start code) to 1 */
+    if (data->data[0]) {
+        LOGE("video packet decryption failed, dropping %d bytes", data->data_len);
+        return;
+    }
 
     jbyteArray arr = (*env)->NewByteArray(env, data->data_len);
     (*env)->SetByteArrayRegion(env, arr, 0, data->data_len, (jbyte *)data->data);
@@ -202,7 +207,6 @@ static void _display_pin(void *cls, char *pin) {
 
 /* Stubs for less critical callbacks */
 static void _noop(void *cls) { (void)cls; }
-static void _noop_teardown(void *cls, bool *a, bool *b) { (void)cls; (void)a; (void)b; }
 static void _video_pause(void *cls) { LOGI("video_pause"); }
 static void _video_resume(void *cls) { LOGI("video_resume"); }
 static void _conn_feedback(void *cls) { (void)cls; }
@@ -301,8 +305,7 @@ static void _mirror_video_running(void *cls, bool running) {
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
     LOGI("mirror running: %d", running);
-    /* audio-only = mirror NOT running */
-    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_audio_only, (jboolean)!running);
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_mirror_running, (jboolean)running);
 }
 static void _register_client(void *cls, const char *device_id, const char *pk_str, const char *name) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
@@ -422,7 +425,6 @@ void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx) 
     cbs->video_reset = _video_reset;
     cbs->conn_init = _conn_init;
     cbs->conn_destroy = _conn_destroy;
-    cbs->conn_teardown = _noop_teardown;
     cbs->audio_flush = _audio_flush;
     cbs->video_flush = _video_flush;
     cbs->audio_set_client_volume = _audio_set_client_volume;

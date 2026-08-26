@@ -64,7 +64,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val keyAllowFrameDrop by viewModel.keyAllowFrameDrop.collectAsState()
     val realtimeDecoderPriority by viewModel.realtimeDecoderPriority.collectAsState()
     val lowLatency by viewModel.lowLatency.collectAsState()
-    val operatingRateHint by viewModel.operatingRateHint.collectAsState()
+    val operatingRate by viewModel.operatingRate.collectAsState()
     val scheduledOutputBufferRelease by viewModel.scheduledOutputBufferRelease.collectAsState()
     val benchmarkLog by viewModel.benchmarkLog.collectAsState()
     val audioAutoBuffer by viewModel.audioAutoBuffer.collectAsState()
@@ -300,11 +300,16 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 onCheckedChange = { viewModel.setRealtimeDecoderPriority(it) }
             )
 
-            SettingSwitch(
-                title = stringResource(R.string.setting_operating_rate_hint),
-                description = stringResource(R.string.setting_operating_rate_hint_desc),
-                checked = operatingRateHint,
-                onCheckedChange = { viewModel.setOperatingRateHint(it) }
+            SettingChips(
+                title = stringResource(R.string.setting_operating_rate),
+                description = stringResource(R.string.setting_operating_rate_desc),
+                value = operatingRate,
+                options = listOf(
+                    Prefs.AUTO to stringResource(R.string.chip_auto),
+                    Prefs.ON to stringResource(R.string.chip_on),
+                    Prefs.OFF to stringResource(R.string.chip_off),
+                ),
+                onValueChange = { viewModel.setOperatingRate(it) }
             )
 
             SettingSwitch(
@@ -439,7 +444,7 @@ private fun SettingResolution(
     onValueChange: (String) -> Unit
 ) {
     val presets = listOf(
-        "auto" to stringResource(R.string.setting_resolution_auto),
+        Prefs.AUTO to stringResource(R.string.chip_auto),
         "1280x720" to "1280x720",
         "1920x1080" to "1920x1080",
         "3840x2160" to "3840x2160"
@@ -560,7 +565,6 @@ private fun SettingTextField(
     )
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SettingChipField(
     title: String,
@@ -581,19 +585,7 @@ private fun SettingChipField(
             Column {
                 Text(description)
                 Spacer(Modifier.height(8.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    presets.forEach { (key, label) ->
-                        FilterChip(
-                            selected = value == key && !editing,
-                            onClick = {
-                                editing = false
-                                text = ""
-                                onValueChange(key)
-                            },
-                            label = { Text(label) },
-                            modifier = Modifier.dpadFocus()
-                        )
-                    }
+                ChipRow(if (editing) "" else value, presets, { editing = false; text = ""; onValueChange(it) }) {
                     FilterChip(
                         selected = !isPreset || editing,
                         onClick = { editing = true },
@@ -621,6 +613,47 @@ private fun SettingChipField(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChipRow(
+    value: String,
+    options: List<Pair<String, String>>,
+    onSelect: (String) -> Unit,
+    trailing: @Composable () -> Unit = {}
+) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { (key, label) ->
+            FilterChip(
+                selected = value == key,
+                onClick = { onSelect(key) },
+                label = { Text(label) },
+                modifier = Modifier.dpadFocus()
+            )
+        }
+        trailing()
+    }
+}
+
+@Composable
+private fun SettingChips(
+    title: String,
+    description: String,
+    value: String,
+    options: List<Pair<String, String>>,
+    onValueChange: (String) -> Unit
+) {
+    ListItem(
+        headlineContent = { Text(title) },
+        supportingContent = {
+            Column {
+                Text(description)
+                Spacer(Modifier.height(8.dp))
+                ChipRow(value, options, onValueChange)
             }
         }
     )

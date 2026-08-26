@@ -2,9 +2,6 @@ package io.github.jqssun.airplay.renderer
 
 import android.graphics.SurfaceTexture
 import android.opengl.EGL14
-import android.opengl.EGLConfig
-import android.opengl.EGLContext
-import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
@@ -23,10 +20,7 @@ class VideoPipeline {
     private var thread: Thread? = null
     @Volatile private var running = false
 
-    private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
-    private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
-    private var eglConfig: EGLConfig? = null
-    private var pbuffer: EGLSurface = EGL14.EGL_NO_SURFACE
+    private var egl: EglCore? = null
     private var window: EGLSurface = EGL14.EGL_NO_SURFACE
     private var winW = 0
     private var winH = 0
@@ -79,7 +73,7 @@ class VideoPipeline {
 
     private fun _loop() {
         try {
-            _initEgl()
+            egl = EglCore()
             _initGl()
         } catch (e: Exception) {
             Log.e(TAG, "GL init failed", e)
@@ -115,34 +109,36 @@ class VideoPipeline {
     }
 
     private fun _bindDisplay(surface: Surface?) {
+        val egl = egl ?: return
         if (window != EGL14.EGL_NO_SURFACE) {
-            EGL14.eglMakeCurrent(eglDisplay, pbuffer, pbuffer, eglContext)
-            EGL14.eglDestroySurface(eglDisplay, window)
+            egl.makeCurrent()
+            egl.destroySurface(window)
             window = EGL14.EGL_NO_SURFACE
         }
         if (surface == null || !surface.isValid) return
-        window = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, surface, intArrayOf(EGL14.EGL_NONE), 0)
+        window = egl.windowSurface(surface)
         if (window == EGL14.EGL_NO_SURFACE) {
             Log.w(TAG, "eglCreateWindowSurface failed: ${EGL14.eglGetError()}")
             return
         }
-        EGL14.eglMakeCurrent(eglDisplay, window, window, eglContext)
-        winW = _query(EGL14.EGL_WIDTH)
-        winH = _query(EGL14.EGL_HEIGHT)
+        egl.makeCurrent(window)
+        winW = egl.query(window, EGL14.EGL_WIDTH)
+        winH = egl.query(window, EGL14.EGL_HEIGHT)
         // an idle source sends no new frames, so repaint last one or new surface stays black
         if (hasFrame) _render()
     }
 
     private fun _consumeAndDraw() {
         val st = surfaceTexture ?: return
+        val egl = egl ?: return
         if (window == EGL14.EGL_NO_SURFACE) {
             // no display: keep consuming so decoder doesn't stall
-            EGL14.eglMakeCurrent(eglDisplay, pbuffer, pbuffer, eglContext)
+            egl.makeCurrent()
             st.updateTexImage()
             hasFrame = true
             return
         }
-        EGL14.eglMakeCurrent(eglDisplay, window, window, eglContext)
+        egl.makeCurrent(window)
         st.updateTexImage()
         st.getTransformMatrix(texMatrix)
         hasFrame = true
@@ -163,35 +159,7 @@ class VideoPipeline {
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         GLES20.glDisableVertexAttribArray(aPos)
         GLES20.glDisableVertexAttribArray(aTex)
-        EGL14.eglSwapBuffers(eglDisplay, window)
-    }
-
-    private fun _query(what: Int): Int {
-        val v = IntArray(1)
-        EGL14.eglQuerySurface(eglDisplay, window, what, v, 0)
-        return v[0]
-    }
-
-    private fun _initEgl() {
-        eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
-        EGL14.eglInitialize(eglDisplay, IntArray(2), 0, IntArray(2), 1)
-        val attribs = intArrayOf(
-            EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
-            EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT or EGL14.EGL_PBUFFER_BIT,
-            EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8,
-            EGL14.EGL_NONE
-        )
-        val configs = arrayOfNulls<EGLConfig>(1)
-        EGL14.eglChooseConfig(eglDisplay, attribs, 0, configs, 0, 1, IntArray(1), 0)
-        eglConfig = configs[0]
-        eglContext = EGL14.eglCreateContext(
-            eglDisplay, eglConfig, EGL14.EGL_NO_CONTEXT,
-            intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE), 0
-        )
-        pbuffer = EGL14.eglCreatePbufferSurface(
-            eglDisplay, eglConfig, intArrayOf(EGL14.EGL_WIDTH, 1, EGL14.EGL_HEIGHT, 1, EGL14.EGL_NONE), 0
-        )
-        EGL14.eglMakeCurrent(eglDisplay, pbuffer, pbuffer, eglContext)
+        egl?.swap(window)
     }
 
     private fun _initGl() {
@@ -242,16 +210,12 @@ class VideoPipeline {
         surfaceTexture = null
         inputSurface?.release()
         inputSurface = null
-        if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
-            EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
-            if (window != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, window)
-            if (pbuffer != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, pbuffer)
-            EGL14.eglDestroyContext(eglDisplay, eglContext)
-            EGL14.eglTerminate(eglDisplay)
+        egl?.let {
+            if (window != EGL14.EGL_NO_SURFACE) it.destroySurface(window)
+            it.close()
         }
-        eglDisplay = EGL14.EGL_NO_DISPLAY
+        egl = null
         window = EGL14.EGL_NO_SURFACE
-        pbuffer = EGL14.EGL_NO_SURFACE
     }
 
     companion object {

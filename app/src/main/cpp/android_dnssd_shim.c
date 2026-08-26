@@ -1,7 +1,5 @@
 /*
- * Android dnssd shim -- implements dnssd.h API without dns_sd.h.
- * Stores TXT records as key=value maps in memory.
- * Actual mDNS registration is done in Kotlin via NsdManager.
+ * Android backend for UxPlay dnssd.c via NsdManager
  */
 
 #include <stdlib.h>
@@ -14,7 +12,6 @@
 #include "global.h"
 #include "utils.h"
 
-#define MAX_DEVICEID 18
 #define MAX_SERVNAME 256
 #define MAX_TXT_ENTRIES 32
 #define MAX_TXT_KEY 32
@@ -28,32 +25,21 @@ typedef struct {
 typedef struct {
     txt_entry_t entries[MAX_TXT_ENTRIES];
     int count;
-    int registered;
 } txt_record_t;
 
-struct dnssd_s {
+typedef struct {
     txt_record_t raop_record;
     txt_record_t airplay_record;
-
-    char *name;
-    int name_len;
-
-    char *hw_addr;
-    int hw_addr_len;
-
-    char *pk;
-
-    uint32_t features1;
-    uint32_t features2;
-
-    unsigned char pin_pw;
 
     char codec_cn[16]; /* dynamic "cn" value, e.g. "0,1,2,3" */
 
     char raop_servname[MAX_SERVNAME];
-    unsigned short raop_port;
-    unsigned short airplay_port;
-};
+} dnssd_private_t;
+
+static dnssd_private_t *_priv(dnssd_t *dnssd) {
+    assert(dnssd && dnssd->dnssd_private);
+    return (dnssd_private_t *) dnssd->dnssd_private;
+}
 
 static void _txt_set(txt_record_t *rec, const char *key, const char *val) {
     for (int i = 0; i < rec->count; i++) {
@@ -69,83 +55,38 @@ static void _txt_set(txt_record_t *rec, const char *key, const char *val) {
     }
 }
 
-dnssd_t *
-dnssd_init(const char *name, int name_len, const char *hw_addr, int hw_addr_len, int *error, unsigned char pin_pw)
-{
+void *dnssd_private_init(dnssd_t *dnssd, int *error) {
     if (error) *error = DNSSD_ERROR_NOERROR;
-
-    dnssd_t *dnssd = (dnssd_t *)calloc(1, sizeof(dnssd_t));
-    if (!dnssd) {
+    dnssd_private_t *priv = (dnssd_private_t *) calloc(1, sizeof(dnssd_private_t));
+    if (!priv) {
         if (error) *error = DNSSD_ERROR_OUTOFMEM;
         return NULL;
     }
-
-    dnssd->pin_pw = pin_pw;
-    strncpy(dnssd->codec_cn, RAOP_CN, sizeof(dnssd->codec_cn) - 1);
-
-    char *end = NULL;
-    unsigned long features = strtoul(FEATURES_1, &end, 16);
-    if (!end || (features & 0xFFFFFFFF) != features) {
-        free(dnssd);
-        if (error) *error = DNSSD_ERROR_BADFEATURES;
-        return NULL;
-    }
-    dnssd->features1 = (uint32_t)features;
-
-    features = strtoul(FEATURES_2, &end, 16);
-    if (!end || (features & 0xFFFFFFFF) != features) {
-        free(dnssd);
-        if (error) *error = DNSSD_ERROR_BADFEATURES;
-        return NULL;
-    }
-    dnssd->features2 = (uint32_t)features;
-
-    dnssd->name_len = name_len;
-    dnssd->name = calloc(1, name_len + 1);
-    if (!dnssd->name) {
-        free(dnssd);
-        if (error) *error = DNSSD_ERROR_OUTOFMEM;
-        return NULL;
-    }
-    memcpy(dnssd->name, name, name_len);
-
-    dnssd->hw_addr_len = hw_addr_len;
-    dnssd->hw_addr = calloc(1, hw_addr_len);
-    if (!dnssd->hw_addr) {
-        free(dnssd->name);
-        free(dnssd);
-        if (error) *error = DNSSD_ERROR_OUTOFMEM;
-        return NULL;
-    }
-    memcpy(dnssd->hw_addr, hw_addr, hw_addr_len);
-
-    return dnssd;
+    strncpy(priv->codec_cn, RAOP_CN, sizeof(priv->codec_cn) - 1);
+    return priv;
 }
 
-void
-dnssd_destroy(dnssd_t *dnssd)
-{
-    if (dnssd) {
-        free(dnssd->name);
-        free(dnssd->hw_addr);
-        free(dnssd);
-    }
+void dnssd_private_destroy(void *priv) {
+    free(priv);
+}
+
+void dnssd_error_text(int *error, const char *appname) {
+    printf("dnssd (android NsdManager) failed with error code %d\n", *error);
 }
 
 int
 dnssd_register_raop(dnssd_t *dnssd, unsigned short port)
 {
     char features[22] = {0};
-    assert(dnssd);
+    dnssd_private_t *priv = _priv(dnssd);
 
-    dnssd->raop_port = port;
     snprintf(features, sizeof(features), "0x%X,0x%X", dnssd->features1, dnssd->features2);
 
-    txt_record_t *rec = &dnssd->raop_record;
+    txt_record_t *rec = &priv->raop_record;
     rec->count = 0;
 
     _txt_set(rec, "ch", RAOP_CH);
-    _txt_set(rec, "cn", dnssd->codec_cn);
+    _txt_set(rec, "cn", priv->codec_cn);
     _txt_set(rec, "da", RAOP_DA);
     _txt_set(rec, "et", RAOP_ET);
     _txt_set(rec, "vv", RAOP_VV);
@@ -182,15 +123,13 @@ dnssd_register_raop(dnssd_t *dnssd, unsigned short port)
     }
 
     /* Build service name: HW@Name */
-    if (utils_hwaddr_raop(dnssd->raop_servname, sizeof(dnssd->raop_servname),
+    if (utils_hwaddr_raop(priv->raop_servname, sizeof(priv->raop_servname),
                           dnssd->hw_addr, dnssd->hw_addr_len) < 0) {
         return -1;
     }
-    strncat(dnssd->raop_servname, "@", sizeof(dnssd->raop_servname) - strlen(dnssd->raop_servname) - 1);
-    strncat(dnssd->raop_servname, dnssd->name, sizeof(dnssd->raop_servname) - strlen(dnssd->raop_servname) - 1);
-
-    rec->registered = 1;
-    return 0; /* success -- actual mDNS registration done in Kotlin */
+    strncat(priv->raop_servname, "@", sizeof(priv->raop_servname) - strlen(priv->raop_servname) - 1);
+    strncat(priv->raop_servname, dnssd->name, sizeof(priv->raop_servname) - strlen(priv->raop_servname) - 1);
+    return 0;
 }
 
 int
@@ -198,16 +137,15 @@ dnssd_register_airplay(dnssd_t *dnssd, unsigned short port)
 {
     char device_id[3 * MAX_HWADDR_LEN];
     char features[22] = {0};
-    assert(dnssd);
+    dnssd_private_t *priv = _priv(dnssd);
 
-    dnssd->airplay_port = port;
     snprintf(features, sizeof(features), "0x%X,0x%X", dnssd->features1, dnssd->features2);
 
     if (utils_hwaddr_airplay(device_id, sizeof(device_id), dnssd->hw_addr, dnssd->hw_addr_len) < 0) {
         return -1;
     }
 
-    txt_record_t *rec = &dnssd->airplay_record;
+    txt_record_t *rec = &priv->airplay_record;
     rec->count = 0;
 
     _txt_set(rec, "deviceid", device_id);
@@ -231,23 +169,14 @@ dnssd_register_airplay(dnssd_t *dnssd, unsigned short port)
     _txt_set(rec, "pi", AIRPLAY_PI);
     _txt_set(rec, "srcvers", AIRPLAY_SRCVERS);
     _txt_set(rec, "vv", AIRPLAY_VV);
-
-    rec->registered = 1;
     return 0;
 }
 
-void dnssd_unregister_raop(dnssd_t *dnssd) {
-    assert(dnssd);
-    dnssd->raop_record.registered = 0;
-}
-
-void dnssd_unregister_airplay(dnssd_t *dnssd) {
-    assert(dnssd);
-    dnssd->airplay_record.registered = 0;
-}
+/* unregisters with NsdManager */
+void dnssd_unregister_raop(dnssd_t *dnssd) {}
+void dnssd_unregister_airplay(dnssd_t *dnssd) {}
 
 const char *dnssd_get_raop_txt(dnssd_t *dnssd, int *length) {
-    /* Not used on Android -- TXT records retrieved via android_dnssd_* helpers */
     if (length) *length = 0;
     return NULL;
 }
@@ -257,93 +186,51 @@ const char *dnssd_get_airplay_txt(dnssd_t *dnssd, int *length) {
     return NULL;
 }
 
-const char *dnssd_get_name(dnssd_t *dnssd, int *length) {
-    *length = dnssd->name_len;
-    return dnssd->name;
-}
-
-const char *dnssd_get_hw_addr(dnssd_t *dnssd, int *length) {
-    *length = dnssd->hw_addr_len;
-    return dnssd->hw_addr;
-}
-
-uint64_t dnssd_get_airplay_features(dnssd_t *dnssd) {
-    uint64_t features = ((uint64_t)dnssd->features2) << 32;
-    features += (uint64_t)dnssd->features1;
-    return features;
-}
-
-void dnssd_set_pk(dnssd_t *dnssd, char *pk_str) {
-    dnssd->pk = pk_str;
-}
-
-void dnssd_set_airplay_features(dnssd_t *dnssd, int bit, int val) {
-    uint32_t mask = 0;
-    uint32_t *features = 0;
-    if (bit < 0 || bit > 63) return;
-    if (val < 0 || val > 1) return;
-    if (bit >= 32) {
-        mask = 0x1 << (bit - 32);
-        features = &(dnssd->features2);
-    } else {
-        mask = 0x1 << bit;
-        features = &(dnssd->features1);
-    }
-    if (val) {
-        *features = *features | mask;
-    } else {
-        *features = *features & ~mask;
-    }
-}
-
 /* --- Android-specific accessors for JNI layer --- */
 
 int android_dnssd_get_raop_txt_count(dnssd_t *dnssd) {
-    return dnssd->raop_record.count;
+    return _priv(dnssd)->raop_record.count;
 }
 
 const char *android_dnssd_get_raop_txt_key(dnssd_t *dnssd, int index) {
-    if (index < 0 || index >= dnssd->raop_record.count) return NULL;
-    return dnssd->raop_record.entries[index].key;
+    txt_record_t *rec = &_priv(dnssd)->raop_record;
+    if (index < 0 || index >= rec->count) return NULL;
+    return rec->entries[index].key;
 }
 
 const char *android_dnssd_get_raop_txt_val(dnssd_t *dnssd, int index) {
-    if (index < 0 || index >= dnssd->raop_record.count) return NULL;
-    return dnssd->raop_record.entries[index].val;
+    txt_record_t *rec = &_priv(dnssd)->raop_record;
+    if (index < 0 || index >= rec->count) return NULL;
+    return rec->entries[index].val;
 }
 
 int android_dnssd_get_airplay_txt_count(dnssd_t *dnssd) {
-    return dnssd->airplay_record.count;
+    return _priv(dnssd)->airplay_record.count;
 }
 
 const char *android_dnssd_get_airplay_txt_key(dnssd_t *dnssd, int index) {
-    if (index < 0 || index >= dnssd->airplay_record.count) return NULL;
-    return dnssd->airplay_record.entries[index].key;
+    txt_record_t *rec = &_priv(dnssd)->airplay_record;
+    if (index < 0 || index >= rec->count) return NULL;
+    return rec->entries[index].key;
 }
 
 const char *android_dnssd_get_airplay_txt_val(dnssd_t *dnssd, int index) {
-    if (index < 0 || index >= dnssd->airplay_record.count) return NULL;
-    return dnssd->airplay_record.entries[index].val;
+    txt_record_t *rec = &_priv(dnssd)->airplay_record;
+    if (index < 0 || index >= rec->count) return NULL;
+    return rec->entries[index].val;
 }
 
 void android_dnssd_set_codecs(dnssd_t *dnssd, int alac, int aac) {
     /* Build cn string: 0=PCM (always), 1=ALAC, 2=AAC, 3=AAC-ELD */
+    dnssd_private_t *priv = _priv(dnssd);
     char buf[16];
     int pos = 0;
     pos += snprintf(buf + pos, sizeof(buf) - pos, "0");
     if (alac) pos += snprintf(buf + pos, sizeof(buf) - pos, ",1");
     if (aac) pos += snprintf(buf + pos, sizeof(buf) - pos, ",2,3");
-    strncpy(dnssd->codec_cn, buf, sizeof(dnssd->codec_cn) - 1);
+    strncpy(priv->codec_cn, buf, sizeof(priv->codec_cn) - 1);
 }
 
 const char *android_dnssd_get_raop_servname(dnssd_t *dnssd) {
-    return dnssd->raop_servname;
-}
-
-unsigned short android_dnssd_get_raop_port(dnssd_t *dnssd) {
-    return dnssd->raop_port;
-}
-
-unsigned short android_dnssd_get_airplay_port(dnssd_t *dnssd) {
-    return dnssd->airplay_port;
+    return _priv(dnssd)->raop_servname;
 }

@@ -7,6 +7,7 @@ import android.provider.Settings
 /** Centralized preference keys and defaults. */
 object Prefs {
     const val NAME = "settings"
+    const val AUTO = "auto"; const val ON = "on"; const val OFF = "off"
 
     const val SERVER_NAME = "server_name"; const val DEF_SERVER_NAME = "Android AirPlay"
 
@@ -35,8 +36,8 @@ object Prefs {
     const val ENFORCE_SDR = "enforce_sdr"; const val DEF_ENFORCE_SDR = true
     val KEY_ALLOW_FRAME_DROP: String = MediaFormat.KEY_ALLOW_FRAME_DROP; const val DEF_KEY_ALLOW_FRAME_DROP = true
     val KEY_PRIORITY: String = MediaFormat.KEY_PRIORITY; const val DEF_KEY_PRIORITY = true
-    val KEY_OPERATING_RATE: String = MediaFormat.KEY_OPERATING_RATE; const val DEF_KEY_OPERATING_RATE = true
     const val LOW_LATENCY = "low_latency"; const val DEF_LOW_LATENCY = false
+    const val OPERATING_RATE = "operating_rate"; const val DEF_OPERATING_RATE = AUTO
     const val SCHEDULED_OUTPUT_BUFFER_RELEASE = "scheduled_output_buffer_release"; const val DEF_SCHEDULED_OUTPUT_BUFFER_RELEASE = false
     const val AUDIO_AUTO_BUFFER = "audio_auto_buffer"; const val DEF_AUDIO_AUTO_BUFFER = true
     // fixed cushion ms, used only when AUDIO_AUTO_BUFFER is off
@@ -49,7 +50,7 @@ object Prefs {
     const val ALAC_ENABLED = "alac_enabled"; const val DEF_ALAC_ENABLED = false
     const val FORCE_SW_ALAC = "force_sw_alac"; const val DEF_FORCE_SW_ALAC = true
     const val AAC_ENABLED = "aac_enabled"; const val DEF_AAC_ENABLED = true
-    const val RESOLUTION = "resolution"; const val DEF_RESOLUTION = "auto"
+    const val RESOLUTION = "resolution"; const val DEF_RESOLUTION = AUTO
     const val MAX_FPS = "max_fps"; const val DEF_MAX_FPS = 60
     const val OVERSCANNED = "overscanned"; const val DEF_OVERSCANNED = false
     const val REQUIRE_PIN = "require_pin"; const val DEF_REQUIRE_PIN = false

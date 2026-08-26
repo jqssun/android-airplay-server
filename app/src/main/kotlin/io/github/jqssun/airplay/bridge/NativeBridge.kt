@@ -23,6 +23,7 @@ object NativeBridge {
     external fun nativeSetH265Enabled(handle: Long, enabled: Boolean)
     external fun nativeSetCodecs(handle: Long, alac: Boolean, aac: Boolean)
     external fun nativeSetHlsEnabled(handle: Long, enabled: Boolean)
+    external fun nativeSetLang(handle: Long, requested: String, subtitles: String, system: String)
     external fun nativeSetAudioEnabled(handle: Long, enabled: Boolean)
 
     // AirPlay Video (HLS) playback info snapshot, polled by native httpd thread

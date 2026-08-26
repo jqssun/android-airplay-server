@@ -126,7 +126,6 @@
     <string name="setting_resolution">Resolution</string>
     <string name="setting_resolution_desc">Video resolution advertised to clients</string>
     <string name="setting_resolution_placeholder">[W]x[H]</string>
-    <string name="setting_resolution_auto">Auto</string>
     <string name="setting_resolution_width">Width</string>
     <string name="setting_resolution_height">Height</string>
     <string name="setting_max_fps">Maximum FPS</string>
@@ -152,11 +151,14 @@
     <string name="setting_key_allow_frame_drop">MediaFormat.KEY_ALLOW_FRAME_DROP</string>
     <string name="setting_key_allow_frame_drop_desc">Allow video decoders to drop frames internally to keep up on Android 10+</string>
     <string name="setting_realtime_decoder_priority">MediaFormat.KEY_PRIORITY</string>
-    <string name="setting_realtime_decoder_priority_desc">Request real-time scheduling for audio and video decoders</string>
+    <string name="setting_realtime_decoder_priority_desc">Request real-time scheduling for audio decoder</string>
+    <string name="setting_operating_rate">MediaFormat.KEY_OPERATING_RATE</string>
+    <string name="setting_operating_rate_desc">Request maximum operating rate from decoder</string>
+    <string name="chip_auto">Auto</string>
+    <string name="chip_on">On</string>
+    <string name="chip_off">Off</string>
     <string name="setting_low_latency">Low latency</string>
-    <string name="setting_low_latency_desc">Use low-latency audio and video decoding for output; this uses more power and CPU</string>
-    <string name="setting_operating_rate_hint">MediaFormat.KEY_OPERATING_RATE</string>
-    <string name="setting_operating_rate_hint_desc">Request maximum operating rate for video decoder</string>
+    <string name="setting_low_latency_desc">Use low-latency audio decoding for output; this uses more power and CPU</string>
     <string name="setting_scheduled_output_buffer_release">Aligned frame pacing</string>
     <string name="setting_scheduled_output_buffer_release_desc">Schedule each decoded frame to the VSYNC matching its presentation timestamp</string>
     <string name="setting_audio_delay">Override audio delay</string>
