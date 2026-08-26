@@ -104,7 +104,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _videoResolution = MutableStateFlow("")
     val videoResolution: StateFlow<String> = _videoResolution.asStateFlow()
 
-    private val _serverName = MutableStateFlow(prefs.getString(Prefs.SERVER_NAME, Prefs.DEF_SERVER_NAME)!!)
+    private val _serverName = MutableStateFlow(Prefs.serverName(app))
     val serverName: StateFlow<String> = _serverName.asStateFlow()
 
     // settings
@@ -189,6 +189,15 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _launchOnConnect = MutableStateFlow(prefs.getBoolean(Prefs.LAUNCH_ON_CONNECT, Prefs.DEF_LAUNCH_ON_CONNECT))
     val launchOnConnect: StateFlow<Boolean> = _launchOnConnect.asStateFlow()
 
+    /**
+     * "Return to previous app after casting": when a session summoned the activity
+     * (see MainActivity.summonedBySession) and then ends, send the task to the back
+     * so whatever was on screen before (HDMI input, another app) comes back. When
+     * off, the app stays in front on its main page (the old behaviour).
+     */
+    private val _returnToPreviousApp = MutableStateFlow(prefs.getBoolean(Prefs.RETURN_TO_PREVIOUS_APP, Prefs.DEF_RETURN_TO_PREVIOUS_APP))
+    val returnToPreviousApp: StateFlow<Boolean> = _returnToPreviousApp.asStateFlow()
+
     // debug
     private val _debugEnabled = MutableStateFlow(prefs.getBoolean(Prefs.DEBUG_ENABLED, Prefs.DEF_DEBUG_ENABLED))
     val debugEnabled: StateFlow<Boolean> = _debugEnabled.asStateFlow()
@@ -214,6 +223,10 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     // audio mode
     private val _audioOnly = MutableStateFlow(false)
     val audioOnly: StateFlow<Boolean> = _audioOnly.asStateFlow()
+
+    // skip the "switched to audio mode" dialog prompt when on
+    private val _autoAudioMode = MutableStateFlow(prefs.getBoolean(Prefs.AUTO_AUDIO_MODE, Prefs.DEF_AUTO_AUDIO_MODE))
+    val autoAudioMode: StateFlow<Boolean> = _autoAudioMode.asStateFlow()
 
     private val _videoPlaybackActive = MutableStateFlow(false)
     val videoPlaybackActive: StateFlow<Boolean> = _videoPlaybackActive.asStateFlow()
@@ -406,7 +419,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setAdvertiseVideo(v: Boolean) { _advertiseVideo.value = v; prefs.edit().putBoolean(Prefs.ADVERTISE_VIDEO, v).apply(); _applyByServerRestart() }
     fun setAdvertiseAudio(v: Boolean) { _advertiseAudio.value = v; prefs.edit().putBoolean(Prefs.ADVERTISE_AUDIO, v).apply(); _applyByServerRestart() }
     fun setLaunchOnConnect(v: Boolean) { _launchOnConnect.value = v; prefs.edit().putBoolean(Prefs.LAUNCH_ON_CONNECT, v).apply() }
+    fun setReturnToPreviousApp(v: Boolean) { _returnToPreviousApp.value = v; prefs.edit().putBoolean(Prefs.RETURN_TO_PREVIOUS_APP, v).apply() }
     fun setDebugEnabled(v: Boolean) { _debugEnabled.value = v; prefs.edit().putBoolean(Prefs.DEBUG_ENABLED, v).apply() }
+    fun setAutoAudioMode(v: Boolean) { _autoAudioMode.value = v; prefs.edit().putBoolean(Prefs.AUTO_AUDIO_MODE, v).apply() }
     fun setDeveloperOptions(v: Boolean) {
         _developerOptions.value = v
         prefs.edit().putBoolean(Prefs.DEVELOPER_OPTIONS, v).apply()
@@ -434,10 +449,31 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     // service binding
     fun bindService(svc: AirPlayService) {
         service = svc
+        // Mirror the AirPlay Video active flag event-driven rather than only via the
+        // 200ms lifecycle-gated UI poll: dismissing the video screen when the sender
+        // stops the session must not depend on the poll loop being scheduled at that
+        // moment, or the last decoded frame stays up (frozen) on the SurfaceView.
+        _serviceVideoJob?.cancel()
+        _serviceVideoJob = viewModelScope.launch {
+            svc.videoPlaybackActive.collect { active ->
+                val prev = _videoPlaybackActive.value
+                if (active && !prev) {
+                    // fresh session: reset overlay state
+                    _videoPlaying.value = true
+                    _videoOverlayTick.value = 0L
+                    _videoScrubPositionMs.value = null
+                }
+                _videoPlaybackActive.value = active
+            }
+        }
         updateFromService()
     }
 
+    private var _serviceVideoJob: Job? = null
+
     fun unbindService() {
+        _serviceVideoJob?.cancel()
+        _serviceVideoJob = null
         service = null
     }
 

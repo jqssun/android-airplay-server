@@ -95,6 +95,8 @@ fun MainScreen(
     val pin by viewModel.pinCode.collectAsState()
     val connections by viewModel.connectionCount.collectAsState()
     val audioOnly by viewModel.audioOnly.collectAsState()
+    val autoAudioMode by viewModel.autoAudioMode.collectAsState()
+    var showModePrompt by remember { mutableStateOf(false) }
     val videoPlaybackActive by viewModel.videoPlaybackActive.collectAsState()
     val videoSessionPending by viewModel.videoSessionPending.collectAsState()
     val mirroringActive by viewModel.mirroringActive.collectAsState()
@@ -110,7 +112,19 @@ fun MainScreen(
         )
     }
 
-    // fullscreen only once mirroring reports a size: connections rise before the kind is known
+    // auto audio mode: skip prompt if preference is on
+    LaunchedEffect(audioOnly) {
+        if (audioOnly && !autoAudioMode) showModePrompt = true
+    }
+
+    // auto fullscreen on a fresh mirroring session (0 -> positive), never while a pin
+    // is pending. This is keyed on mirroringActive (real video size just reported by
+    // the mirroring-only video_report_size callback) rather than connections>0:
+    // connections rise well before we know whether this attempt is mirroring, an
+    // AirPlay Video session, or audio-only -- keying on that alone used to land in
+    // the (empty) mirroring fullscreen view, with its own PiP/exit controls, while an
+    // AirPlay Video session was still starting up or an attempt was resetting
+    // entirely, i.e. a black screen with the wrong controls on it.
     var prevMirroringActive by remember { mutableStateOf(false) }
     LaunchedEffect(mirroringActive, audioOnly, videoPlaybackActive, pin) {
         val justStarted = !prevMirroringActive && mirroringActive
@@ -120,12 +134,17 @@ fun MainScreen(
         }
     }
 
-    // manual fullscreen over the idle preview is deliberate; only undo on disconnect
+    // safety net: leave fullscreen once every connection drops, whatever the attempt
+    // turned out to be (or didn't). Not keyed on mirroringActive alone -- manually
+    // entering fullscreen to look at the idle preview (no connection at all) is a
+    // deliberate, separate feature this shouldn't undo.
     LaunchedEffect(connections) {
         if (connections == 0) fullscreen = false
     }
 
-    // leaving video playback must not fall through to a stale mirroring fullscreen
+    // an AirPlay Video session may start while a prior mirroring session had already
+    // set fullscreen=true; without this, ending the video falls through to the (empty,
+    // black) mirroring fullscreen view instead of the normal app UI
     LaunchedEffect(videoPlaybackActive) {
         if (videoPlaybackActive) fullscreen = false
     }
@@ -143,6 +162,8 @@ fun MainScreen(
         }
     }
 
+    // AirPlay Video (HLS /play protocol): full-screen, independent of mirroring's
+    // fullscreen/pip/tab state, since it's a wholly separate playback surface
     if (videoScreen) {
         val videoPlaybackAspect by viewModel.videoPlaybackAspect.collectAsState()
         val playback: @Composable () -> Unit = {
@@ -560,6 +581,17 @@ fun MainScreen(
         )
     }
 
+    // audio mode notification
+    if (showModePrompt) {
+        AlertDialog(
+            onDismissRequest = { showModePrompt = false },
+            title = { Text(stringResource(R.string.dialog_audio_mode_title)) },
+            text = { Text(stringResource(R.string.dialog_audio_mode_text)) },
+            confirmButton = {
+                TextButton(onClick = { showModePrompt = false }) { Text(stringResource(R.string.btn_ok)) }
+            }
+        )
+    }
 }
 
 @Composable
@@ -615,6 +647,11 @@ private fun OverviewContent(
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center
         ) {
+            // connections > 0 rises well before we know whether this attempt is real
+            // mirroring, AirPlay Video, or audio-only -- showing the mirroring surface
+            // and its PiP/fullscreen controls this early was the same premature-UI bug
+            // fullscreen auto-entry had (see MainScreen's mirroringActive comment).
+            // Show a plain connecting spinner during that undetermined window instead.
             val connecting = state == ServerState.RUNNING && connections > 0 &&
                 !mirroringActive && !videoPlaybackActive
             if (showAudioMode && state == ServerState.RUNNING && connections > 0) {
@@ -643,11 +680,15 @@ private fun OverviewContent(
                         )
                     }
                 } else if (connecting) {
-                    Text(
-                        text = stringResource(R.string.waiting_for_playback),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = stringResource(R.string.connecting),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
                 }
                 if (state == ServerState.RUNNING && mirroringActive) {
                     Row(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
@@ -866,6 +907,15 @@ private fun AudioMiniController(viewModel: MainViewModel, visible: Boolean, onCl
 @AndroidxOptIn(UnstableApi::class)
 private fun NowPlayingContent(viewModel: MainViewModel) {
     val track by viewModel.trackInfo.collectAsState()
+
+    // TV remote: land focus on play/pause when the Now Playing screen appears
+    // (otherwise it stays on the server start/stop button, where DPAD CENTER
+    // would stop the server); LEFT/RIGHT on it skip tracks via DACP directly
+    val tv = isTv()
+    val playPauseFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (tv) playPauseFocus.requestFocus()
+    }
 
     Column(
         modifier = Modifier

@@ -44,9 +44,11 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val idlePreview by viewModel.idlePreview.collectAsState()
     val autoFullscreen by viewModel.autoFullscreen.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState()
+    val autoAudioMode by viewModel.autoAudioMode.collectAsState()
     val advertiseVideo by viewModel.advertiseVideo.collectAsState()
     val advertiseAudio by viewModel.advertiseAudio.collectAsState()
     val launchOnConnect by viewModel.launchOnConnect.collectAsState()
+    val returnToPreviousApp by viewModel.returnToPreviousApp.collectAsState()
     val maxFps by viewModel.maxFps.collectAsState()
     val overscanned by viewModel.overscanned.collectAsState()
     val requirePin by viewModel.requirePin.collectAsState()
@@ -81,13 +83,15 @@ fun SettingsScreen(viewModel: MainViewModel) {
         SettingTextField(
             label = stringResource(R.string.setting_server_name),
             value = serverName,
-            onCommit = { viewModel.setServerName(it) }
+            onCommit = { viewModel.setServerName(it) },
+            description = stringResource(R.string.setting_server_name_desc)
         )
 
         SettingTextField(
             label = stringResource(R.string.setting_server_port),
             value = serverPort.toString(),
             onCommit = { viewModel.setServerPort(it.toInt()) },
+            description = stringResource(R.string.setting_server_port_desc),
             range = 1..65535
         )
 
@@ -119,6 +123,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
             description = stringResource(R.string.setting_allow_new_conn_desc),
             checked = allowNewConn,
             onCheckedChange = { viewModel.setAllowNewConn(it) }
+        )
+
+        SettingSwitch(
+            title = stringResource(R.string.setting_auto_audio_mode),
+            description = stringResource(R.string.setting_auto_audio_mode_desc),
+            checked = autoAudioMode,
+            onCheckedChange = { viewModel.setAutoAudioMode(it) }
         )
 
         val ctx = LocalContext.current
@@ -153,6 +164,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
             trailingContent = {
                 Switch(checked = launchOnConnect, onCheckedChange = null)
             }
+        )
+
+        SettingSwitch(
+            title = stringResource(R.string.setting_return_to_previous_app),
+            description = stringResource(R.string.setting_return_to_previous_app_desc),
+            checked = returnToPreviousApp,
+            onCheckedChange = { viewModel.setReturnToPreviousApp(it) }
         )
 
         SectionHeader(stringResource(R.string.section_display))

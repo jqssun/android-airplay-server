@@ -3,6 +3,7 @@
 
 #include <jni.h>
 #include <pthread.h>
+#include <stdint.h>
 #include "raop.h"
 #include "audio_engine.h"
 
@@ -13,7 +14,8 @@ extern "C" {
 typedef struct {
     JavaVM *jvm;
     jobject callback_obj;
-    raop_t *raop;
+    raop_t *raop; /* set once by native_bridge.cpp after raop_init(); used to force-close
+                     lingering AirPlay Video sub-connections on RESET_TYPE_HLS_SHUTDOWN */
     jmethodID on_video_data;
     jmethodID on_audio_format;
     jmethodID on_video_size;
@@ -38,7 +40,10 @@ typedef struct {
     int require_pin;
     char *registered_keys[16];
     int registered_count;
-    /* playback info snapshot pushed by kotlin, read on the native httpd thread */
+    /* AirPlay Video (HLS) playback info snapshot, pushed by Kotlin, read by
+       on_video_acquire_playback_info on the native httpd thread. Kept as a
+       cheap async snapshot instead of a synchronous JNI round-trip into the
+       player, to avoid blocking/deadlocking the httpd thread on the main thread. */
     pthread_mutex_t playback_info_lock;
     double playback_position;
     double playback_duration;

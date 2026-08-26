@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AirPlay Server</string>
+
+    <!-- Notification -->
+    <string name="notification_channel">Serviço AirPlay</string>
+    <string name="notification_title">Servidor AirPlay em execução</string>
+    <string name="notification_text">Aceitando conexões AirPlay</string>
+    <string name="notification_pin_title">PIN do AirPlay necessário</string>
+    <string name="notification_pin_text">PIN: %1$s</string>
+    <string name="stop_service">Parar</string>
+
+    <!-- Tabs -->
+    <string name="tab_overview">Visão geral</string>
+    <string name="tab_logs">Logs</string>
+    <string name="tab_settings">Configurações</string>
+
+    <!-- Overview -->
+    <string name="server_stopped">Servidor parado</string>
+    <string name="waiting_for_connection">Aguardando conexão…</string>
+    <string name="connecting">Conectando…</string>
+    <string name="error_starting_server">Erro ao iniciar o servidor</string>
+    <string name="connected_count">%d conectado(s)</string>
+    <string name="error_label">Erro</string>
+    <string name="stopped_label">Parado</string>
+    <string name="btn_start">Iniciar</string>
+    <string name="btn_stop">Parar</string>
+    <string name="unknown_track">Desconhecido</string>
+
+    <!-- Content descriptions -->
+    <string name="cd_pip">Picture-in-Picture</string>
+    <string name="cd_fullscreen">Tela cheia</string>
+    <string name="cd_exit_fullscreen">Sair da tela cheia</string>
+    <string name="cd_cover_art">Capa do álbum</string>
+    <string name="cd_previous">Anterior</string>
+    <string name="cd_play_pause">Reproduzir/Pausar</string>
+    <string name="cd_next">Próxima</string>
+
+    <!-- Dialogs -->
+    <string name="dialog_pin_title">PIN do AirPlay</string>
+    <string name="dialog_audio_mode_title">Modo Áudio</string>
+    <string name="dialog_audio_mode_text">Mudando para o modo Áudio para exibir informações da faixa e controles de reprodução.</string>
+    <string name="btn_ok">OK</string>
+
+    <!-- Logs screen -->
+    <string name="btn_export">Exportar</string>
+    <string name="btn_clear">Limpar</string>
+    <string name="export_logs_chooser_title">Exportar logs</string>
+
+    <!-- Settings sections -->
+    <string name="section_server">Servidor</string>
+    <string name="section_connection">Conexão</string>
+    <string name="section_display">Tela</string>
+    <string name="section_decode">Decodificação</string>
+    <string name="section_developer">Desenvolvedor</string>
+
+    <!-- Settings: Server -->
+    <string name="setting_server_name">Nome do servidor</string>
+    <string name="setting_server_name_desc">Nome exibido para os clientes AirPlay</string>
+    <string name="setting_server_port">Porta do servidor</string>
+    <string name="setting_server_port_desc">Porta usada pelo servidor AirPlay</string>
+    <string name="setting_auto_start">Iniciar servidor automaticamente</string>
+    <string name="setting_auto_start_desc">Iniciar o servidor AirPlay quando o app for aberto</string>
+    <string name="setting_boot_auto_start">Iniciar servidor ao ligar o dispositivo</string>
+    <string name="setting_boot_auto_start_desc">Iniciar o servidor AirPlay quando o dispositivo for ligado</string>
+    <string name="btn_save">Salvar</string>
+
+    <!-- Settings: Connection -->
+    <string name="setting_require_pin">Exigir PIN (Beta)</string>
+    <string name="setting_require_pin_desc">Exigir PIN de 4 dígitos para cada nova conexão</string>
+    <string name="setting_allow_new_conn">Permitir novas conexões</string>
+    <string name="setting_allow_new_conn_desc">Desconectar o cliente atual quando um novo se conectar</string>
+
+    <!-- Settings: Display -->
+    <string name="setting_idle_preview">Pré-visualização em espera</string>
+    <string name="setting_idle_preview_desc">Mostrar a superfície de vídeo enquanto aguarda uma conexão</string>
+    <string name="setting_auto_fullscreen">Entrar em tela cheia automaticamente</string>
+    <string name="setting_auto_fullscreen_desc">Entrar em tela cheia quando um cliente se conectar</string>
+    <string name="setting_keep_screen_on">Manter a tela ligada</string>
+    <string name="setting_keep_screen_on_desc">Impedir que a tela desligue enquanto houver um cliente conectado</string>
+    <string name="setting_auto_audio_mode">Entrar no modo áudio automaticamente</string>
+    <string name="setting_auto_audio_mode_desc">Pular o aviso ao mudar para o modo áudio</string>
+    <string name="setting_launch_on_connect">Abrir este aplicativo ao conectar</string>
+    <string name="setting_launch_on_connect_desc">Mostrar a tela quando um cliente se conectar</string>
+    <string name="setting_return_to_previous_app">Voltar ao app anterior após o casting</string>
+    <string name="setting_return_to_previous_app_desc">Quando o casting terminar, retornar ao aplicativo usado anteriormente</string>
+    <string name="setting_launch_on_connect_no_permission">Toque para conceder a permissão de exibir sobre outros apps</string>
+    <string name="setting_resolution">Resolução</string>
+    <string name="setting_resolution_desc">Resolução de vídeo anunciada aos clientes</string>
+    <string name="setting_resolution_placeholder">[L]x[A]</string>
+    <string name="setting_resolution_auto">Automático</string>
+    <string name="setting_resolution_width">Largura</string>
+    <string name="setting_resolution_height">Altura</string>
+    <string name="setting_max_fps">FPS máximo</string>
+    <string name="setting_max_fps_desc">Taxa de quadros máxima anunciada aos clientes</string>
+    <string name="setting_max_fps_placeholder">FPS</string>
+    <string name="setting_overscanned">Overscan</string>
+    <string name="setting_overscanned_desc">Adicionar margem de pixels para telas com overscan em tela cheia</string>
+    <string name="chip_custom">Personalizado</string>
+
+    <!-- Settings: Decode -->
+    <string name="setting_h265">H.265 (HEVC)</string>
+    <string name="setting_h265_desc">Ativar decodificação de vídeo H.265 se o dispositivo suportar</string>
+    <string name="setting_enforce_sdr">MediaFormat.KEY_COLOR_TRANSFER</string>
+    <string name="setting_enforce_sdr_desc">Marcar o vídeo como SDR limitado; desative para permitir que fontes HDR passem sem conversão</string>
+    <string name="setting_alac">Áudio ALAC</string>
+    <string name="setting_alac_desc">Codec ALAC para streaming de música via AirPlay</string>
+    <string name="setting_sw_alac">Decodificador ALAC por software</string>
+    <string name="setting_sw_alac_desc">Usar decodificador interno caso o ALAC da plataforma não esteja disponível</string>
+    <string name="setting_aac">Áudio AAC</string>
+    <string name="setting_aac_desc">Codec AAC-ELD ou AAC-LC para o áudio do espelhamento de tela</string>
+
+    <!-- Settings: Developer -->
+    <string name="setting_developer_options">Opções de desenvolvedor</string>
+    <string name="setting_developer_options_desc">Mostrar opções para usuários avançados</string>
+    <string name="setting_key_allow_frame_drop">MediaFormat.KEY_ALLOW_FRAME_DROP</string>
+    <string name="setting_key_allow_frame_drop_desc">Permitir que os decodificadores de vídeo descartem quadros internamente para acompanhar o ritmo no Android 10+</string>
+    <string name="setting_realtime_decoder_priority">MediaFormat.KEY_PRIORITY</string>
+    <string name="setting_realtime_decoder_priority_desc">Solicitar agendamento em tempo real para os decodificadores de áudio e vídeo</string>
+    <string name="setting_operating_rate_hint">MediaFormat.KEY_OPERATING_RATE</string>
+    <string name="setting_operating_rate_hint_desc">Solicitar taxa de operação máxima para o decodificador de vídeo</string>
+    <string name="setting_scheduled_output_buffer_release">Cadência de quadros alinhada</string>
+    <string name="setting_scheduled_output_buffer_release_desc">Agendar cada quadro decodificado para o VSYNC correspondente ao seu timestamp de apresentação</string>
+    <string name="setting_audio_delay">Substituir atraso de áudio</string>
+    <string name="setting_audio_delay_desc">Definir uma latência de áudio personalizada informada ao cliente</string>
+    <string name="audio_delay_value">%dms</string>
+    <string name="setting_audio_buffer_multiplier">Tamanho do buffer de áudio</string>
+    <string name="setting_audio_buffer_multiplier_desc">Multiplicador do tamanho do buffer do AudioTrack</string>
+    <string name="setting_audio_buffer_multiplier_value">%dx</string>
+    <string name="setting_debug_overlay">Mostrar sobreposição de depuração</string>
+    <string name="setting_debug_overlay_desc">Sobrepor estatísticas do stream no vídeo: codec, FPS, taxa de bits, jitter, quadros, descartes</string>
+    <string name="setting_benchmark_log">Ativar registro de depuração</string>
+    <string name="setting_benchmark_log_desc">Registrar estatísticas do stream no logcat: codec, FPS, taxa de bits, jitter, quadros, descartes</string>
+
+    <!-- Debug overlay -->
+    <string name="debug_video">Vídeo: %1$s %2$s</string>
+    <string name="debug_fps_bitrate">FPS: %1$d  Taxa de bits: %2$s</string>
+    <string name="debug_frames_drops">Quadros: %1$d  Descartes: %2$d</string>
+    <string name="debug_jitter">Jitter: %1$s</string>
+    <string name="debug_audio">Áudio: %1$s  Vol: %2$d%%</string>
+    <string name="debug_clients">Clientes: %1$d</string>
+</resources>

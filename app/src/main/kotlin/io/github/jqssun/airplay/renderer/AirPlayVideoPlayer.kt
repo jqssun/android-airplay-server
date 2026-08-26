@@ -14,6 +14,11 @@ import androidx.media3.common.Timeline
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 
+// AirPlay Video: plays the local HLS proxy URL that UxPlay's /play handler hands us,
+// distinct from screen mirroring's raw H.264/H.265 MediaCodec pipeline (VideoRenderer).
+// All ExoPlayer calls happen on the main thread; UxPlay's httpd thread never touches
+// this class directly, it only reads a cached snapshot pushed via onPlaybackInfo.
+
 // rate is 0 while buffering; speed is the configured rate regardless of pause state
 // native reads the effective rate, overlay reads playWhenReady + speed + skipSilence
 data class PlaybackSnapshot(
@@ -27,7 +32,6 @@ data class PlaybackSnapshot(
     val buffering: Boolean = false,
 )
 
-// exoplayer calls stay on the main thread; native only reads the onPlaybackInfo snapshot
 class AirPlayVideoPlayer(private val context: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -37,6 +41,14 @@ class AirPlayVideoPlayer(private val context: Context) {
     var onPlaybackInfo: ((PlaybackSnapshot) -> Unit)? = null
     var onVideoSize: ((width: Int, height: Int, aspect: Float) -> Unit)? = null
     var onTitle: ((String?) -> Unit)? = null
+
+    // invoked (on the main thread) when playback ends on its own: natural
+    // end-of-stream, or a fatal player error. The error case matters for remote
+    // stops: the HLS source lives on the sender, so a sender that stops casting
+    // without a POST /stop just kills the source mid-stream and ExoPlayer halts on
+    // a fatal error, leaving the last decoded frame on the surface forever unless
+    // the owner tears the session down (mirrors uxplay's gstreamer EOS/error ->
+    // video_reset handling)
     var onEnded: (() -> Unit)? = null
 
     private val _reportTick = object : Runnable {
@@ -69,7 +81,11 @@ class AirPlayVideoPlayer(private val context: Context) {
     }
 
     fun play(location: String, startPositionSeconds: Float) = mainHandler.post {
-        // recycling must not report the stopped sentinel: senders poll right after /play
+        // don't report the "stopped" sentinel (duration=-1) while recycling any
+        // old player here: the sender polls GET /playback-info right after POST
+        // /play, and reading duration=-1 at that point makes the native side
+        // treat the brand-new session as already finished (video_reset
+        // HLS_SHUTDOWN) and tear it down ~100ms in. Only report on real stops.
         _stopInternal(reportStopped = false)
         val p = ExoPlayer.Builder(context).build().also {
             it.addListener(_listener)
@@ -103,7 +119,11 @@ class AirPlayVideoPlayer(private val context: Context) {
         }
     }
 
-    // local-only: the sender self-syncs from its next /playback-info poll
+    // local-only control (tap-to-pause on the receiver's screen, or a TV-remote
+    // play/pause key): the source device isn't told about this, it's purely how the
+    // tablet plays back what it already received -- matches how a TV's own remote
+    // can pause without the source knowing. The sender still self-syncs: its next
+    // GET /playback-info poll sees rate=0.
     fun setPlaying(playing: Boolean) = mainHandler.post {
         player?.playWhenReady = playing
     }
@@ -117,6 +137,8 @@ class AirPlayVideoPlayer(private val context: Context) {
         player?.skipSilenceEnabled = enabled
     }
 
+    // local-only relative seek (TV remote left/right/rewind/fast-forward, or double
+    // tap), clamped to [0, duration] once the duration is known
     fun seekBy(deltaMs: Long) = mainHandler.post {
         val p = player ?: return@post
         var target = (p.currentPosition + deltaMs).coerceAtLeast(0)
@@ -132,7 +154,7 @@ class AirPlayVideoPlayer(private val context: Context) {
         player?.setVideoSurface(surface)
     }
 
-    // no-op if a newer surface already replaced this one
+    // no-op if a newer surface already replaced this one (surface lifecycle race)
     fun clearSurface(surface: Surface) = mainHandler.post {
         if (pendingSurface !== surface) return@post
         pendingSurface = null

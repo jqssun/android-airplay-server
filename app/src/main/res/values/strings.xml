@@ -17,8 +17,8 @@
 
     <!-- Overview -->
     <string name="server_stopped">Server stopped</string>
-    <string name="waiting_for_connection">Waiting for connection...</string>
-    <string name="waiting_for_playback">Press start on the sender...</string>
+    <string name="waiting_for_connection">Waiting for connection…</string>
+    <string name="connecting">Connecting…</string>
     <string name="error_starting_server">Error starting server</string>
     <string name="connected_count">%d connected</string>
     <string name="error_label">Error</string>
@@ -40,6 +40,10 @@
     <string name="cd_mute">Mute</string>
     <string name="cd_download">Download video</string>
     <string name="cd_cancel_download">Cancel download</string>
+
+    <!-- Dialogs: audio mode -->
+    <string name="dialog_audio_mode_title">Audio Mode</string>
+    <string name="dialog_audio_mode_text">Switching to Audio mode for track information and playback controls.</string>
 
     <!-- Video download -->
     <string name="download_saved">Saved to %1$s</string>
@@ -81,7 +85,9 @@
 
     <!-- Settings: Server -->
     <string name="setting_server_name">Server name</string>
+    <string name="setting_server_name_desc">Name shown to AirPlay clients; leave empty to use the device name</string>
     <string name="setting_server_port">Server port</string>
+    <string name="setting_server_port_desc">Port for the AirPlay server</string>
     <string name="setting_auto_start">Start server automatically</string>
     <string name="setting_auto_start_desc">Start the AirPlay server when the app launches</string>
     <string name="setting_boot_auto_start">Start server at boot</string>
@@ -102,6 +108,8 @@
     <string name="setting_auto_fullscreen_desc">Enter fullscreen when a client connects</string>
     <string name="setting_keep_screen_on">Keep screen on</string>
     <string name="setting_keep_screen_on_desc">Prevent sleeping while a client is connected</string>
+    <string name="setting_auto_audio_mode">Enter audio mode automatically</string>
+    <string name="setting_auto_audio_mode_desc">Skip the prompt when switching to audio mode</string>
     <string name="setting_advertise_video">Advertise AirPlay video support</string>
     <string name="setting_advertise_video_desc">When off, videos are cast as audio only streams</string>
     <string name="setting_advertise_audio">Advertise AirPlay audio support</string>
@@ -112,6 +120,8 @@
     <string name="setting_aac_desc">Offer AAC-ELD/AAC-LC in the mDNS record; used for screen mirroring audio</string>
     <string name="setting_launch_on_connect">Open this application on connect</string>
     <string name="setting_launch_on_connect_desc">Show the screen when a client connects</string>
+    <string name="setting_return_to_previous_app">Return to previous app after casting</string>
+    <string name="setting_return_to_previous_app_desc">When casting ends, switch back to the previously used app</string>
     <string name="setting_launch_on_connect_no_permission">Tap to grant Display over other apps permission</string>
     <string name="setting_resolution">Resolution</string>
     <string name="setting_resolution_desc">Video resolution advertised to clients</string>

@@ -43,7 +43,10 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     pthread_cond_init(&ctx->play_ready_cond, NULL);
     ctx->play_ready = 0;
     ctx->playback_position = 0.0;
-    /* -1.0 is the video finished sentinel, reserved for _video_stop */
+    /* NOT -1.0: raop.c's GET /playback-info handler treats duration==-1.0 as "video
+       finished, reset the session" -- and the client polls this speculatively before
+       any /play has happened, so a -1.0 default here tears down the session before it
+       starts. -1.0 is reserved for _video_stop, once a session has actually ended. */
     ctx->playback_duration = 0.0;
     ctx->playback_rate = 0.0f;
     ctx->playback_ready = 0;
@@ -93,7 +96,12 @@ void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double 
     ctx->playback_duration = duration;
     ctx->playback_rate = rate;
     ctx->playback_ready = ready;
-    if (ready && !ctx->play_ready) {
+    /* wake a play() hold-until-ready wait (see _video_play) as soon as the outcome
+       is known, not just on success: duration == -1.0 is the "stopped/finished"
+       sentinel, sent on a real stop, player error, or disconnect. Without this,
+       a session that fails before ever reporting ready would block the httpd
+       thread for the full timeout below instead of returning immediately. */
+    if (!ctx->play_ready && (ready || duration == -1.0)) {
         ctx->play_ready = 1;
         pthread_cond_signal(&ctx->play_ready_cond);
     }
@@ -128,7 +136,11 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
 
 static void _conn_init(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    /* fires for every connection including the player's own hls fetches: clear only a stale sentinel */
+    /* fires for every connection including the player's own hls fetches: clear only a
+       stale "finished" (-1.0) sentinel left by a previous AirPlay Video session, so a
+       new connection's speculative /playback-info poll (which can arrive before its
+       own /play) doesn't get misread as "already finished". Must not unconditionally
+       reset here, or an incidental reconnect mid-session would clobber live state. */
     pthread_mutex_lock(&ctx->playback_info_lock);
     if (ctx->playback_duration == -1.0) {
         ctx->playback_position = 0.0;
@@ -202,19 +214,34 @@ static void _video_stop(void *cls);
 static void _video_reset(void *cls, reset_type_t t) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     LOGI("video_reset %d", t);
+    /* an AirPlay Video (HLS) session ended without an explicit POST /stop */
     if (t == RESET_TYPE_HLS_SHUTDOWN || t == RESET_TYPE_HLS_EOS) {
         _video_stop(cls);
     }
     if (t == RESET_TYPE_HLS_CONN_CLOSED) {
-        /* abandoned only if paused and ready: rate alone is also 0 while buffering */
+        /* the connection that carried POST /play died with no /stop and no
+           replacement /play (iFit's 'end': /rate 0, then iOS closes the session's
+           connections ~60s later while the route's other connections stay open and
+           keep polling /playback-info). Only end the session if playback isn't
+           actively running: a sender vanishing mid-play (app killed) leaves a
+           direct-URL video that can and should keep playing to its natural end.
+           Checking ready as well as rate<=0 avoids misreading "still buffering"
+           (also rate 0) as abandonment. */
         pthread_mutex_lock(&ctx->playback_info_lock);
         int paused = ctx->playback_ready && ctx->playback_rate <= 0.0f;
+        float rate = ctx->playback_rate;
         pthread_mutex_unlock(&ctx->playback_info_lock);
         if (paused) {
             _video_stop(cls);
+        } else {
+            LOGI("play connection closed while playing/buffering (rate %.2f): leaving video running", rate);
         }
     }
     if (t == RESET_TYPE_HLS_SHUTDOWN && ctx->raop) {
+        /* mirrors uxplay.cpp's own handling of this reset type: without this, the
+           HLS/reverse-http/airplay sub-connections for that video are left open,
+           and our connection counter never returns to the count it had before
+           the video started. */
         raop_remove_hls_connections(ctx->raop);
     }
 }
@@ -347,7 +374,9 @@ static void _video_stop(void *cls) {
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_stop);
 }
 
-/* httpd thread: reads the kotlin-pushed snapshot, never calls into the player */
+/* Called synchronously from the native httpd thread (GET /playback-info). Must not
+   block on the app's main thread, so it only reads the snapshot Kotlin last pushed
+   via nativeUpdatePlaybackInfo, rather than querying the player directly. */
 static void _video_acquire_playback_info(void *cls, playback_info_t *info) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     pthread_mutex_lock(&ctx->playback_info_lock);

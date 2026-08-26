@@ -133,8 +133,8 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeStart(
         LOGE("raop_start_httpd failed: %d", ret);
         return -1;
     }
-    /* raop_start_httpd doesn't record the bound port; without this the hls
-       proxy urls are built with port 0 */
+    /* raop_start_httpd doesn't record the bound port on raop itself; without this,
+       AirPlay Video's local HLS proxy URLs are built with port 0 (see airplay_video_init). */
     raop_set_port(ctx->raop, port);
 
     LOGI("AirPlay server started on port %d", port);
@@ -299,7 +299,9 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetH265Enabled(
     }
 }
 
-/* hls plist gates raop.c's hls support; feature bits 0/4 advertise it over dns-sd */
+/* Without this, raop.c silently drops the client's AirPlay Video (HLS) connection
+   attempt (see raop.c's "-hls" gate), and without the matching DNS-SD feature bits
+   the client (iOS) never attempts that connection in the first place. */
 extern "C"
 JNIEXPORT void JNICALL
 Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetHlsEnabled(
@@ -343,6 +345,7 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetAudioEnabled(
     dnssd_set_airplay_features(ctx->dnssd, 9, enabled ? 1 : 0);
 }
 
+
 extern "C"
 JNIEXPORT void JNICALL
 Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetCodecs(
@@ -353,6 +356,8 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetCodecs(
     android_dnssd_set_codecs(ctx->dnssd, alac ? 1 : 0, aac ? 1 : 0);
 }
 
+/* Pushed periodically by the Kotlin AirPlay Video player so the native httpd thread
+   can answer GET /playback-info without a blocking round-trip into the player. */
 extern "C"
 JNIEXPORT void JNICALL
 Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeUpdatePlaybackInfo(

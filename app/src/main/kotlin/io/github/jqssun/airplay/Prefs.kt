@@ -1,6 +1,8 @@
 package io.github.jqssun.airplay
 
+import android.content.Context
 import android.media.MediaFormat
+import android.provider.Settings
 
 /** Centralized preference keys and defaults. */
 object Prefs {
@@ -8,6 +10,23 @@ object Prefs {
     const val AUTO = "auto"; const val ON = "on"; const val OFF = "off"
 
     const val SERVER_NAME = "server_name"; const val DEF_SERVER_NAME = "Android AirPlay"
+
+    /**
+     * Default advertised name when the user hasn't set one: the device name from
+     * Android Settings > About ("device_name" in Settings.Global -- the constant is
+     * API 25+, the row itself exists on API 24), falling back to [DEF_SERVER_NAME].
+     */
+    fun defaultServerName(context: Context): String =
+        runCatching { Settings.Global.getString(context.contentResolver, "device_name") }
+            .getOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: DEF_SERVER_NAME
+
+    /** The configured server name, or [defaultServerName] when unset/blank. */
+    fun serverName(context: Context): String {
+        val prefs = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
+        return prefs.getString(SERVER_NAME, null)?.takeIf { it.isNotBlank() }
+            ?: defaultServerName(context)
+    }
+
     const val FALLBACK_MAC_ADDRESS = "fallback_mac_address"
     const val SERVER_PORT = "server_port"; const val DEF_SERVER_PORT = 7000
     const val AUTO_START = "auto_start"; const val DEF_AUTO_START = true
@@ -45,5 +64,11 @@ object Prefs {
     const val KEEP_SCREEN_ON = "keep_screen_on"; const val DEF_KEEP_SCREEN_ON = true
     const val ADVERTISE_VIDEO = "advertise_video"; const val DEF_ADVERTISE_VIDEO = true
     const val ADVERTISE_AUDIO = "advertise_audio"; const val DEF_ADVERTISE_AUDIO = true
+    const val AUTO_AUDIO_MODE = "auto_audio_mode"; const val DEF_AUTO_AUDIO_MODE = true
     const val LAUNCH_ON_CONNECT = "launch_on_connect"; const val DEF_LAUNCH_ON_CONNECT = true
+    const val RETURN_TO_PREVIOUS_APP = "return_to_previous_app"; const val DEF_RETURN_TO_PREVIOUS_APP = true
+
+    // internal bookkeeping (not user-facing settings): lets the watchdog tell a
+    // deliberate stopServer() apart from the process simply having been killed
+    const val SERVER_SHOULD_RUN = "server_should_run"
 }

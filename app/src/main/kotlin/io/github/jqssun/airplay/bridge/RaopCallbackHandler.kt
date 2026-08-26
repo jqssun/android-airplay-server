@@ -16,7 +16,9 @@ interface RaopCallbackHandler {
     fun onProgress(start: Long, curr: Long, end: Long)
     fun onDacpId(dacpId: String, activeRemote: String)
     fun onMirrorRunning(running: Boolean)
-    // video (hls), distinct from mirroring and raop audio
+
+    // AirPlay Video: a separate HTTP/HLS protocol used by apps like YouTube's or
+    // Safari's native AirPlay button, distinct from Screen Mirroring and RAOP audio.
     fun onVideoPlay(location: String, startPositionSeconds: Float)
     fun onVideoScrub(positionSeconds: Float)
     fun onVideoRate(rate: Float)
