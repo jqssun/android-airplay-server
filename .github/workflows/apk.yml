@@ -47,8 +47,13 @@ jobs:
           echo ${{ secrets.STORE }} | base64 -d > upload.jks
           echo ${{ secrets.LOCAL }} | base64 -d > local.properties
           chmod +x ./gradlew;
-          ./gradlew assembleRelease bundleRelease --stacktrace
+          ./gradlew assembleRelease --stacktrace
           rm upload.jks local.properties
+
+      - name: Inspect APK outputs
+        run: |
+          echo "APK output files:"
+          find app/build/outputs -type f -print | sort
 
       - name: Publish (GitHub)
         uses: softprops/action-gh-release@v2
@@ -58,4 +63,3 @@ jobs:
           tag_name: v${{ env.version }}
           files: |
             ${{ env.main_project_module }}/build/outputs/apk/release/app-release.apk
-            ${{ env.main_project_module }}/build/outputs/bundle/release/app-release.aab

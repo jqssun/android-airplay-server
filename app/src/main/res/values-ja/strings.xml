@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AirPlay Server</string>
+
+    <!-- Notification -->
+    <string name="notification_channel">AirPlayサービス</string>
+    <string name="notification_title">AirPlayサーバー起動中</string>
+    <string name="notification_text">AirPlay接続を待機しています</string>
+    <string name="notification_pin_title">AirPlay PINが必要です</string>
+    <string name="notification_pin_text">PIN: %1$s</string>
+    <string name="stop_service">停止</string>
+
+    <!-- Tabs -->
+    <string name="tab_overview">概要</string>
+    <string name="tab_logs">ログ</string>
+    <string name="tab_settings">設定</string>
+
+    <!-- Overview -->
+    <string name="server_stopped">サーバーは停止しています</string>
+    <string name="waiting_for_connection">接続を待機しています…</string>
+    <string name="waiting_for_playback">送信側で再生を開始してください…</string>
+    <string name="error_starting_server">サーバーの起動に失敗しました</string>
+    <string name="connected_count">%d 台接続中</string>
+    <string name="error_label">エラー</string>
+    <string name="stopped_label">停止中</string>
+    <string name="btn_start">開始</string>
+    <string name="btn_stop">停止</string>
+    <string name="unknown_track">不明</string>
+
+    <!-- Content descriptions -->
+    <string name="cd_pip">ピクチャー・イン・ピクチャー</string>
+    <string name="cd_fullscreen">全画面表示</string>
+    <string name="cd_exit_fullscreen">全画面表示を終了</string>
+    <string name="cd_cover_art">アートワーク</string>
+    <string name="cd_play_pause">再生/一時停止</string>
+    <string name="cd_rewind">巻き戻し</string>
+    <string name="cd_fast_forward">早送り</string>
+    <string name="cd_volume_down">音量を下げる</string>
+    <string name="cd_volume_up">音量を上げる</string>
+    <string name="cd_mute">ミュート</string>
+    <string name="cd_download">動画をダウンロード</string>
+    <string name="cd_cancel_download">ダウンロードをキャンセル</string>
+
+    <!-- Video download -->
+    <string name="download_saved">%1$s に保存しました</string>
+    <string name="download_failed">ダウンロードに失敗しました</string>
+
+    <!-- Player gestures -->
+    <string name="gesture_seek_seconds">%1$d 秒</string>
+    <string name="seconds_short">%1$d秒</string>
+    <string name="select_playback_speed">再生速度</string>
+    <string name="cd_reset_speed">速度をリセット</string>
+    <string name="skip_silence">無音部分をスキップ</string>
+
+    <!-- Player controls -->
+    <string name="cd_back">戻る</string>
+    <string name="cd_copy_url">動画URLをコピー</string>
+    <string name="cd_rotate">画面を回転</string>
+    <string name="cd_lock_controls">操作をロック</string>
+    <string name="cd_unlock_controls">ロックを解除</string>
+    <string name="scale_best_fit">画面に合わせる</string>
+    <string name="scale_stretch">引き伸ばし</string>
+    <string name="scale_crop">切り抜き</string>
+    <string name="scale_hundred_percent">100%</string>
+
+    <!-- Dialogs -->
+    <string name="dialog_pin_title">AirPlay PIN</string>
+    <string name="btn_ok">OK</string>
+
+    <!-- Logs screen -->
+    <string name="btn_export">書き出し</string>
+    <string name="btn_clear">消去</string>
+    <string name="export_logs_chooser_title">ログを書き出す</string>
+
+    <!-- Settings sections -->
+    <string name="section_server">サーバー</string>
+    <string name="section_connection">接続</string>
+    <string name="section_display">表示</string>
+    <string name="section_decode">デコード</string>
+    <string name="section_developer">開発者向け</string>
+
+    <!-- Settings: Server -->
+    <string name="setting_server_name">サーバー名</string>
+    <string name="setting_server_port">サーバーポート</string>
+    <string name="setting_auto_start">サーバーを自動起動</string>
+    <string name="setting_auto_start_desc">アプリ起動時にAirPlayサーバーを開始します</string>
+    <string name="setting_boot_auto_start">起動時にサーバーを開始</string>
+    <string name="setting_boot_auto_start_desc">端末の起動時にAirPlayサーバーを開始します</string>
+    <string name="setting_run_in_background">バックグラウンドで実行</string>
+    <string name="setting_run_in_background_desc">アプリを離れてもサーバーを起動したままにします</string>
+
+    <!-- Settings: Connection -->
+    <string name="setting_require_pin">PINを要求（ベータ）</string>
+    <string name="setting_require_pin_desc">新しい接続のたびに4桁のPINを要求します</string>
+    <string name="setting_allow_new_conn">新規接続を許可</string>
+    <string name="setting_allow_new_conn_desc">新しいクライアントが接続すると現在の接続を切断します</string>
+
+    <!-- Settings: Display -->
+    <string name="setting_idle_preview">待機画面プレビュー</string>
+    <string name="setting_idle_preview_desc">接続待機中も映像サーフェスを表示します</string>
+    <string name="setting_auto_fullscreen">自動的に全画面表示</string>
+    <string name="setting_auto_fullscreen_desc">クライアントが接続したときに全画面表示にします</string>
+    <string name="setting_keep_screen_on">画面をスリープさせない</string>
+    <string name="setting_keep_screen_on_desc">クライアント接続中はスリープを防止します</string>
+    <string name="setting_advertise_video">AirPlay動画対応を通知</string>
+    <string name="setting_advertise_video_desc">オフにすると、動画は音声のみのストリームとしてキャストされます</string>
+    <string name="setting_advertise_audio">AirPlay音声対応を通知</string>
+    <string name="setting_advertise_audio_desc">オフにすると、この端末はミラーリング専用となり、メディアプレーヤーからは表示されなくなります</string>
+    <string name="setting_alac">ALACコーデックを通知</string>
+    <string name="setting_alac_desc">mDNSレコードでALACを提供します。音楽ストリーミングに使用されます</string>
+    <string name="setting_aac">AACコーデックを通知</string>
+    <string name="setting_aac_desc">mDNSレコードでAAC-ELD/AAC-LCを提供します。画面ミラーリングの音声に使用されます</string>
+    <string name="setting_launch_on_connect">接続時にこのアプリを開く</string>
+    <string name="setting_launch_on_connect_desc">クライアント接続時に画面を表示します</string>
+    <string name="setting_launch_on_connect_no_permission">タップして「他のアプリの上に表示」権限を許可</string>
+    <string name="setting_resolution">解像度</string>
+    <string name="setting_resolution_desc">クライアントに通知する動画の解像度</string>
+    <string name="setting_resolution_placeholder">[幅]x[高さ]</string>
+    <string name="setting_resolution_width">幅</string>
+    <string name="setting_resolution_height">高さ</string>
+    <string name="setting_max_fps">最大FPS</string>
+    <string name="setting_max_fps_desc">クライアントに通知する最大フレームレート</string>
+    <string name="setting_max_fps_placeholder">FPS</string>
+    <string name="setting_overscanned">オーバースキャン対応</string>
+    <string name="setting_overscanned_desc">全画面オーバースキャン表示用に画面端の余白を追加します</string>
+    <string name="chip_custom">カスタム</string>
+    <string name="chip_device_portrait">縦向き</string>
+    <string name="chip_device_landscape">横向き</string>
+
+    <!-- Settings: Decode -->
+    <string name="setting_h265">H.265（HEVC）</string>
+    <string name="setting_h265_desc">端末が対応していればH.265の動画デコードを有効にします</string>
+    <string name="setting_enforce_sdr">MediaFormat.KEY_COLOR_TRANSFER</string>
+    <string name="setting_enforce_sdr_desc">映像を限定SDRとしてタグ付けします。オフにするとHDRソースをそのまま通過させます</string>
+    <string name="setting_sw_alac">ソフトウェアALACデコーダーを強制使用</string>
+    <string name="setting_sw_alac_desc">ハードウェアデコーダーの代わりに常にソフトウェアALACデコーダーを使用します。音声遅延に影響する場合があります</string>
+
+    <!-- Settings: Developer -->
+    <string name="setting_developer_options">開発者向けオプション</string>
+    <string name="setting_developer_options_desc">上級者向けのオプションを表示します</string>
+    <string name="setting_key_allow_frame_drop">MediaFormat.KEY_ALLOW_FRAME_DROP</string>
+    <string name="setting_key_allow_frame_drop_desc">Android 10以降で、追従のため動画デコーダーが内部的にフレームを間引くことを許可します</string>
+    <string name="setting_realtime_decoder_priority">MediaFormat.KEY_PRIORITY</string>
+    <string name="setting_realtime_decoder_priority_desc">音声デコーダーにリアルタイムスケジューリングを要求します</string>
+    <string name="setting_operating_rate">MediaFormat.KEY_OPERATING_RATE</string>
+    <string name="setting_operating_rate_desc">デコーダーに最大動作レートを要求します</string>
+    <string name="chip_auto">自動</string>
+    <string name="chip_on">オン</string>
+    <string name="chip_off">オフ</string>
+    <string name="setting_low_latency">低遅延</string>
+    <string name="setting_low_latency_desc">出力に低遅延の音声デコードを使用します。消費電力とCPU負荷が増加します</string>
+    <string name="setting_scheduled_output_buffer_release">フレームペーシング調整</string>
+    <string name="setting_scheduled_output_buffer_release_desc">デコードした各フレームを、提示タイムスタンプに合ったVSYNCのタイミングに合わせてスケジュールします</string>
+    <string name="setting_audio_delay">音声遅延を上書き</string>
+    <string name="setting_audio_delay_desc">クライアントに通知する音声遅延を手動で設定します</string>
+    <string name="audio_delay_value">%dms</string>
+    <string name="setting_audio_auto_buffer">ソフトウェア音声バッファサイズを自動調整</string>
+    <string name="setting_audio_auto_buffer_desc">ネットワーク状況や端末性能に応じてソフトウェア音声バッファを自動調整します。スライダーでバッファが吸収できるジッター量を調整できます</string>
+    <string name="audio_adaptive_value">%1$d%%（%2$s）</string>
+    <string-array name="audio_adaptive_step_names">
+        <item>最小遅延</item>
+        <item>低遅延</item>
+        <item>バランス</item>
+        <item>安定性重視</item>
+        <item>最大安定性</item>
+    </string-array>
+    <string name="setting_audio_cushion_ms">ソフトウェア音声バッファ（ms）</string>
+    <string name="setting_audio_cushion_ms_desc">ネットワークやデコーダーのジッターを吸収するバッファです。短くすると低遅延に、長くすると途切れにくくなります</string>
+    <string name="setting_oboe_buffer_frames">ハードウェア出力バッファ（フレーム）</string>
+    <string name="setting_oboe_buffer_frames_desc">このアプリと音声デバイス間のストリームバッファで、CPUスケジューリングのジッターのみを吸収します。自動調整する場合は0のままにしてください</string>
+    <string name="setting_debug_overlay">デバッグオーバーレイを表示</string>
+    <string name="setting_debug_overlay_desc">映像上にストリーム統計（コーデック、FPS、ビットレート、ジッター、フレーム数、ドロップ数）を重ねて表示します</string>
+    <string name="setting_benchmark_log">デバッグログを有効化</string>
+    <string name="setting_benchmark_log_desc">ストリーム統計（コーデック、FPS、ビットレート、ジッター、フレーム数、ドロップ数）をlogcatに記録します</string>
+
+    <!-- Debug overlay -->
+    <string name="debug_section_video">映像</string>
+    <string name="debug_section_audio">音声</string>
+    <string name="debug_section_network">ネットワーク</string>
+    <string name="debug_video">%1$s %2$s</string>
+    <string name="debug_fps_bitrate">FPS: %1$d  ビットレート: %2$s</string>
+    <string name="debug_frames_drops">フレーム数: %1$d  ドロップ数: %2$d</string>
+    <string name="debug_jitter">ジッター: %1$s</string>
+    <string name="debug_audio">%1$s  音量: %2$d%%</string>
+    <string name="debug_audio_buffer">バッファ: %1$d ms（目標: %2$d ms）</string>
+    <string name="debug_audio_glitch">グリッチ: trim=%1$d drop=%2$d sil=%3$d ur=%4$d xrun=%5$d</string>
+    <string name="debug_audio_decode">デコード: %1$s</string>
+    <string name="debug_clients">クライアント数: %1$d</string>
+</resources>
