@@ -22,12 +22,20 @@ class AudioOutput;
 class OboeCallbacks : public oboe::AudioStreamDataCallback,
                       public oboe::AudioStreamErrorCallback {
 public:
-    OboeCallbacks(std::shared_ptr<TimelineBuffer> timeline, std::shared_ptr<LogSink> log)
-        : mTimeline(std::move(timeline)), mLog(std::move(log)) {}
+    OboeCallbacks(std::shared_ptr<TimelineBuffer> timeline, std::shared_ptr<LogSink> log,
+                  int outputLatencyMs)
+        : mTimeline(std::move(timeline)), mLog(std::move(log)),
+          mOutputLatencyNs((int64_t)outputLatencyMs * 1'000'000LL) {}
 
-    oboe::DataCallbackResult onAudioReady(oboe::AudioStream *, void *audioData,
+    oboe::DataCallbackResult onAudioReady(oboe::AudioStream *stream, void *audioData,
                                           int32_t numFrames) override {
-        mTimeline->read(static_cast<int16_t *>(audioData), numFrames);
+        // Only cached getters here; no timestamp query, lock or JNI on the RT thread.
+        // OpenSL ES provides no hardware timestamp: account for its configured
+        // queue minus the buffer currently being filled. HDMI/mixer delay is unknown.
+        const int queuedFrames = std::max(0, stream->getBufferSizeInFrames() - numFrames);
+        const int64_t delayNs = mOutputLatencyNs +
+            (int64_t)queuedFrames * NS_PER_SEC / stream->getSampleRate();
+        mTimeline->read(static_cast<int16_t *>(audioData), numFrames, monoNs(), delayNs);
         return oboe::DataCallbackResult::Continue;
     }
 
@@ -39,6 +47,7 @@ private:
     std::shared_ptr<TimelineBuffer> mTimeline;
     std::shared_ptr<LogSink> mLog;
     std::weak_ptr<AudioOutput> mOwner;
+    const int64_t mOutputLatencyNs;
 };
 
 /*
@@ -50,18 +59,18 @@ public:
     static std::shared_ptr<AudioOutput> create(int sampleRate, int channels, int oboeBufferFrames,
                                                bool lowLatency,
                                                std::shared_ptr<TimelineBuffer> timeline,
-                                               std::shared_ptr<LogSink> log) {
+                                               std::shared_ptr<LogSink> log, int outputLatencyMs) {
         auto out = std::make_shared<AudioOutput>(sampleRate, channels, oboeBufferFrames,
-                                                 lowLatency, std::move(timeline), std::move(log));
+                                                 lowLatency, std::move(timeline), std::move(log), outputLatencyMs);
         out->mCallbacks->mOwner = out;
         return out;
     }
 
     AudioOutput(int sampleRate, int channels, int oboeBufferFrames, bool lowLatency,
-                std::shared_ptr<TimelineBuffer> timeline, std::shared_ptr<LogSink> log)
+                std::shared_ptr<TimelineBuffer> timeline, std::shared_ptr<LogSink> log, int outputLatencyMs)
         : mSampleRate(sampleRate), mChannels(channels), mOboeBufferFrames(oboeBufferFrames),
           mLowLatency(lowLatency), mTimeline(std::move(timeline)), mLog(std::move(log)),
-          mCallbacks(std::make_shared<OboeCallbacks>(mTimeline, mLog)) {}
+          mCallbacks(std::make_shared<OboeCallbacks>(mTimeline, mLog, outputLatencyMs)) {}
 
     ~AudioOutput() { stop(); }
 

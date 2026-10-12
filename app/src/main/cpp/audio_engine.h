@@ -20,7 +20,7 @@ typedef struct LogSink LogSink;
  * needs them to size low-latency buffers; unused by AAudio backend. global, call before
  * creating engine.
  * see: https://github.com/google/oboe/blob/main/docs/GettingStarted.md#obtaining-optimal-latency */
-void audio_engine_set_default_stream_values(int sampleRate, int framesPerBurst);
+void audio_engine_set_default_stream_values(int sampleRate, int framesPerBurst, int outputLatencyMs);
 
 /* change engine config; any thread */
 bool audio_engine_configure(AudioEngine *engine, int cushionMs, int percentilePct,
@@ -35,6 +35,12 @@ bool audio_engine_start(AudioEngine *engine);
 
 /* pause playout, releases audio output devices while paused; idempotent */
 void audio_engine_pause(AudioEngine *engine);
+
+/* discard decoder/output queues, replacing the timeline; serialized with decode */
+void audio_engine_flush(AudioEngine *engine);
+
+/* estimated monotonic render time for shared NTP media PTS, or 0 if unavailable */
+int64_t audio_engine_render_time(AudioEngine *engine, int64_t pts_ns);
 
 /* refresh + copy packed debug struct into dst; false if engine NULL or dstLen too small */
 bool audio_engine_get_debug(AudioEngine *engine, void *dst, size_t dstLen);

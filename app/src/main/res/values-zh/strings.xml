@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AirPlay 投屏</string>
+
+    <!-- 通知 -->
+    <string name="notification_channel">AirPlay 投屏服务</string>
+    <string name="notification_title">AirPlay 投屏服务运行中</string>
+    <string name="notification_text">正在等待 AirPlay 连接</string>
+    <string name="notification_pin_title">请输入 AirPlay 配对码</string>
+    <string name="notification_pin_text">配对码：%1$s</string>
+    <string name="stop_service">停止</string>
+    <string name="media_previous">上一首</string>
+    <string name="media_play_pause">播放／暂停</string>
+    <string name="media_next">下一首</string>
+
+    <!-- 导航与首页 -->
+    <string name="tab_overview">首页</string>
+    <string name="tab_logs">日志</string>
+    <string name="tab_settings">设置</string>
+    <string name="server_stopped">投屏服务已停止</string>
+    <string name="waiting_for_connection">等待设备连接…</string>
+    <string name="waiting_for_playback">请在发送设备上开始播放…</string>
+    <string name="error_starting_server">投屏服务启动失败</string>
+    <string name="connected_count">已连接 %d 台设备</string>
+    <string name="error_label">错误</string>
+    <string name="stopped_label">已停止</string>
+    <string name="btn_start">启动</string>
+    <string name="btn_stop">停止</string>
+    <string name="unknown_track">未知曲目</string>
+
+    <!-- 操作与无障碍说明 -->
+    <string name="cd_pip">画中画</string>
+    <string name="cd_fullscreen">全屏</string>
+    <string name="cd_exit_fullscreen">退出全屏</string>
+    <string name="cd_cover_art">专辑封面</string>
+    <string name="cd_play_pause">播放／暂停</string>
+    <string name="cd_rewind">快退</string>
+    <string name="cd_fast_forward">快进</string>
+    <string name="cd_volume_down">降低音量</string>
+    <string name="cd_volume_up">提高音量</string>
+    <string name="cd_mute">静音</string>
+    <string name="cd_download">下载视频</string>
+    <string name="cd_cancel_download">取消下载</string>
+    <string name="download_saved">已保存到 %1$s</string>
+    <string name="download_failed">下载失败</string>
+    <string name="gesture_seek_seconds">%1$d 秒</string>
+    <string name="seconds_short">%1$d秒</string>
+    <string name="select_playback_speed">播放速度</string>
+    <string name="cd_reset_speed">恢复播放速度</string>
+    <string name="skip_silence">跳过静音片段</string>
+    <string name="cd_back">返回</string>
+    <string name="cd_copy_url">复制视频地址</string>
+    <string name="cd_rotate">旋转屏幕</string>
+    <string name="cd_lock_controls">锁定播放控件</string>
+    <string name="cd_unlock_controls">解锁播放控件</string>
+    <string name="scale_best_fit">适应画面</string>
+    <string name="scale_stretch">拉伸填满</string>
+    <string name="scale_crop">裁剪填满</string>
+    <string name="scale_hundred_percent">100%</string>
+    <string name="dialog_pin_title">AirPlay 配对码</string>
+    <string name="btn_ok">确定</string>
+    <string name="btn_export">导出</string>
+    <string name="btn_clear">清空</string>
+    <string name="export_logs_chooser_title">导出日志</string>
+
+    <!-- 设置分组与语言 -->
+    <string name="section_interface">界面</string>
+    <string name="setting_language">语言</string>
+    <string name="setting_language_desc">选择应用语言。“跟随系统”会自动匹配设备语言；不支持的语言使用英文。</string>
+    <string name="language_system">跟随系统</string>
+    <string name="language_chinese">中文（简体）</string>
+    <string name="language_english">English</string>
+    <string name="section_server">投屏服务</string>
+    <string name="section_connection">连接</string>
+    <string name="section_display">画面</string>
+    <string name="section_decode">解码</string>
+    <string name="section_developer">开发者</string>
+
+    <!-- 投屏服务 -->
+    <string name="setting_server_name">接收器名称</string>
+    <string name="setting_server_port">服务端口</string>
+    <string name="setting_auto_start">自动启动投屏服务</string>
+    <string name="setting_auto_start_desc">打开应用时启动 AirPlay 投屏服务</string>
+    <string name="setting_boot_auto_start">开机启动投屏服务</string>
+    <string name="setting_boot_auto_start_desc">设备开机时启动 AirPlay 投屏服务</string>
+    <string name="setting_run_in_background">后台运行</string>
+    <string name="setting_run_in_background_desc">离开应用后继续运行投屏服务</string>
+
+    <!-- 连接 -->
+    <string name="setting_require_pin">需要配对码（测试版）</string>
+    <string name="setting_require_pin_desc">每次新连接都需要输入 4 位配对码</string>
+    <string name="setting_allow_new_conn">允许新设备连接</string>
+    <string name="setting_allow_new_conn_desc">新设备连接时断开当前设备</string>
+
+    <!-- 画面 -->
+    <string name="setting_idle_preview">显示待机预览</string>
+    <string name="setting_idle_preview_desc">等待连接时显示视频区域</string>
+    <string name="setting_auto_fullscreen">自动进入全屏</string>
+    <string name="setting_auto_fullscreen_desc">设备连接后自动全屏显示</string>
+    <string name="setting_keep_screen_on">保持屏幕常亮</string>
+    <string name="setting_keep_screen_on_desc">设备连接期间防止屏幕休眠</string>
+    <string name="setting_advertise_video">声明支持 AirPlay 视频</string>
+    <string name="setting_advertise_video_desc">关闭后，视频投放只接收音频</string>
+    <string name="setting_advertise_audio">声明支持 AirPlay 音频</string>
+    <string name="setting_advertise_audio_desc">关闭后仅支持屏幕镜像，媒体播放器中将不显示此接收器</string>
+    <string name="setting_alac">声明支持 ALAC 音频</string>
+    <string name="setting_alac_desc">在设备发现信息中提供 ALAC 支持，用于音乐播放</string>
+    <string name="setting_aac">声明支持 AAC 音频</string>
+    <string name="setting_aac_desc">在设备发现信息中提供 AAC-ELD／AAC-LC 支持，用于屏幕镜像音频</string>
+    <string name="setting_launch_on_connect">连接时打开应用</string>
+    <string name="setting_launch_on_connect_desc">设备连接时显示投屏界面</string>
+    <string name="setting_launch_on_connect_no_permission">点击授予“显示在其他应用上层”权限</string>
+    <string name="setting_resolution">分辨率</string>
+    <string name="setting_resolution_desc">向发送设备报告的视频分辨率</string>
+    <string name="setting_resolution_placeholder">[宽]x[高]</string>
+    <string name="setting_resolution_width">宽度</string>
+    <string name="setting_resolution_height">高度</string>
+    <string name="setting_max_fps">最高帧率</string>
+    <string name="setting_max_fps_desc">向发送设备报告的最高帧率</string>
+    <string name="setting_max_fps_placeholder">帧／秒</string>
+    <string name="setting_overscanned">过扫描补偿</string>
+    <string name="setting_overscanned_desc">为启用全屏过扫描的显示设备添加像素边界</string>
+    <string name="chip_custom">自定义</string>
+    <string name="chip_device_portrait">竖屏</string>
+    <string name="chip_device_landscape">横屏</string>
+
+    <!-- 解码 -->
+    <string name="setting_h265">H.265（HEVC）</string>
+    <string name="setting_h265_desc">允许兼容的发送设备使用 H.265；实际编码以解码信息为准</string>
+    <string name="setting_enforce_sdr">强制 SDR 输出</string>
+    <string name="setting_enforce_sdr_desc">将视频标记为有限范围 SDR；关闭后允许 HDR 视频直通</string>
+    <string name="setting_sw_alac">强制使用 ALAC 软件解码</string>
+    <string name="setting_sw_alac_desc">始终使用软件解码器替代硬件解码器，可能影响音频延迟</string>
+
+    <!-- 开发者设置 -->
+    <string name="setting_developer_options">开发者选项</string>
+    <string name="setting_developer_options_desc">显示面向高级用户的设置</string>
+    <string name="setting_key_allow_frame_drop">允许解码器丢帧</string>
+    <string name="setting_key_allow_frame_drop_desc">Android 10 及以上允许视频解码器内部丢帧，以跟上播放进度</string>
+    <string name="setting_realtime_decoder_priority">实时解码优先级</string>
+    <string name="setting_realtime_decoder_priority_desc">为音频解码器请求实时调度</string>
+    <string name="setting_operating_rate">解码运行速率</string>
+    <string name="setting_operating_rate_desc">向解码器请求最高运行速率</string>
+    <string name="chip_auto">自动</string>
+    <string name="chip_on">开启</string>
+    <string name="chip_off">关闭</string>
+    <string name="setting_low_latency">低延迟</string>
+    <string name="setting_low_latency_desc">使用低延迟音频解码输出，会增加功耗与 CPU 占用</string>
+    <string name="setting_scheduled_output_buffer_release">按时间戳呈现画面</string>
+    <string name="setting_scheduled_output_buffer_release_desc">将解码帧安排到与其播放时间戳匹配的屏幕刷新时刻</string>
+    <string name="setting_audio_delay">覆盖音频延迟</string>
+    <string name="setting_audio_delay_desc">自定义向发送设备报告的音频延迟</string>
+    <string name="audio_delay_value">%d毫秒</string>
+    <string name="setting_audio_auto_buffer">自动调整软件音频缓冲</string>
+    <string name="setting_audio_auto_buffer_desc">根据网络和设备性能自动调整缓冲；滑块控制可吸收的抖动程度</string>
+    <string name="audio_adaptive_value">%1$d%%（%2$s）</string>
+    <string-array name="audio_adaptive_step_names">
+        <item>最低延迟</item>
+        <item>较低延迟</item>
+        <item>均衡</item>
+        <item>较稳定</item>
+        <item>最稳定</item>
+    </string-array>
+    <string name="setting_audio_cushion_ms">软件音频缓冲（毫秒）</string>
+    <string name="setting_audio_cushion_ms_desc">吸收网络与解码抖动；缓冲越短延迟越低，越长则越不容易卡顿</string>
+    <string name="setting_oboe_buffer_frames">硬件输出缓冲（帧）</string>
+    <string name="setting_oboe_buffer_frames_desc">应用与音频设备之间的缓冲，仅用于吸收 CPU 调度抖动；设为 0 时自动调整。</string>
+    <string name="setting_debug_overlay">显示调试信息</string>
+    <string name="setting_debug_overlay_desc">在画面上显示编码、帧率、码率、抖动、帧数和丢帧统计</string>
+    <string name="setting_benchmark_log">启用调试日志</string>
+    <string name="setting_benchmark_log_desc">将编码、帧率、码率、抖动、帧数和丢帧统计写入系统日志</string>
+
+    <!-- 调试信息 -->
+    <string name="debug_section_video">视频</string>
+    <string name="debug_section_audio">音频</string>
+    <string name="debug_section_network">网络</string>
+    <string name="debug_video">%1$s %2$s</string>
+    <string name="debug_fps_bitrate">帧率：%1$d  码率：%2$s</string>
+    <string name="debug_frames_drops">帧数：%1$d  丢帧：%2$d</string>
+    <string name="debug_jitter">抖动：%1$s</string>
+    <string name="debug_audio">%1$s  音量：%2$d%%</string>
+    <string name="debug_audio_buffer">缓冲：%1$d 毫秒（目标：%2$d 毫秒）</string>
+    <string name="debug_audio_glitch">异常：裁剪=%1$d 丢弃=%2$d 静音=%3$d 欠载=%4$d 中断=%5$d</string>
+    <string name="debug_audio_decode">解码：%1$s</string>
+    <string name="debug_decode_idle">积压=%1$d  失败=%2$d</string>
+    <string name="debug_decode_timing">平均／最高：%1$.1f／%2$.1f 毫秒  积压=%3$d  失败=%4$d</string>
+    <string name="debug_clients">连接设备：%1$d</string>
+</resources>

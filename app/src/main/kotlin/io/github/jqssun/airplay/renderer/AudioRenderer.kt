@@ -85,6 +85,10 @@ class AudioRenderer {
         if (serverHandle != 0L) NativeBridge.nativeServerAudioFormat(serverHandle, ct, spf)
     }
 
+    @Synchronized
+    fun renderTime(ptsNs: Long): Long =
+        if (serverHandle == 0L) 0L else NativeBridge.nativeServerAudioRenderTime(serverHandle, ptsNs)
+
     companion object {
         // must be >= native sizeof(AudioDebugData) (38 B)
         private const val DEBUG_BUF_BYTES = 64

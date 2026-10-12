@@ -17,6 +17,7 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import io.github.jqssun.airplay.R
+import io.github.jqssun.airplay.AppLanguage
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -58,8 +59,8 @@ class VideoDownloader(private val context: Context) {
                         val path = _publish(file)
                         file.delete()
                         _toast(
-                            if (path != null) context.getString(R.string.download_saved, path)
-                            else context.getString(R.string.download_failed)
+                            if (path != null) AppLanguage.localizedContext(context).getString(R.string.download_saved, path)
+                            else AppLanguage.localizedContext(context).getString(R.string.download_failed)
                         )
                     }
                 }
@@ -67,7 +68,7 @@ class VideoDownloader(private val context: Context) {
                     Log.w(TAG, "export failed", exception)
                     _reset()
                     file.delete()
-                    _toast(context.getString(R.string.download_failed))
+                    _toast(AppLanguage.localizedContext(context).getString(R.string.download_failed))
                 }
             })
             .build()

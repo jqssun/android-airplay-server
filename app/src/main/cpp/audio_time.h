@@ -12,4 +12,13 @@ static inline int64_t monoNs() {
     return (int64_t)ts.tv_sec * NS_PER_SEC + ts.tv_nsec;
 }
 
+// Compare sender PTS advancement with elapsed receive time. Silence/pause often
+// stops AAC packets entirely, so PTS advancement by itself is not a clock jump.
+static inline bool ptsDiscontinuity(int64_t ptsNs, int64_t previousPtsNs,
+                                    int64_t nowNs, int64_t previousArrivalNs) {
+    if (ptsNs <= 0 || previousPtsNs <= 0 || previousArrivalNs <= 0) return false;
+    const int64_t shiftNs = (ptsNs - previousPtsNs) - (nowNs - previousArrivalNs);
+    return shiftNs < -750'000'000LL || shiftNs > 750'000'000LL;
+}
+
 #endif  // AUDIO_TIME_H

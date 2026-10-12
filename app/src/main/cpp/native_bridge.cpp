@@ -367,8 +367,8 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeUpdatePlaybackInfo(
 extern "C"
 JNIEXPORT void JNICALL
 Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetDefaultStreamValues(
-        JNIEnv *env, jobject thiz, jint sampleRate, jint framesPerBurst) {
-    audio_engine_set_default_stream_values(sampleRate, framesPerBurst);
+        JNIEnv *env, jobject thiz, jint sampleRate, jint framesPerBurst, jint outputLatencyMs) {
+    audio_engine_set_default_stream_values(sampleRate, framesPerBurst, outputLatencyMs);
 }
 
 extern "C"
@@ -419,4 +419,12 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeServerAudioDebug(
     jlong cap = env->GetDirectBufferCapacity(buf);
     if (!addr || cap <= 0) return JNI_FALSE;
     return audio_engine_get_debug(ctx->cb_ctx.audio_engine, addr, (size_t)cap) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jlong JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeServerAudioRenderTime(
+        JNIEnv *, jobject, jlong handle, jlong ptsNs) {
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    return ctx ? audio_engine_render_time(ctx->cb_ctx.audio_engine, ptsNs) : 0;
 }

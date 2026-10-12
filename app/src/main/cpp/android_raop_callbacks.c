@@ -51,6 +51,8 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     jclass cls = (*env)->GetObjectClass(env, callback_obj);
     ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZ)V");
     ctx->on_audio_format = (*env)->GetMethodID(env, cls, "onAudioFormat", "(IIZ)V");
+    ctx->on_audio_flush = (*env)->GetMethodID(env, cls, "onAudioFlush", "()V");
+    ctx->on_video_flush = (*env)->GetMethodID(env, cls, "onVideoFlush", "()V");
     ctx->on_video_size = (*env)->GetMethodID(env, cls, "onVideoSize", "(FFFF)V");
     ctx->on_volume_change = (*env)->GetMethodID(env, cls, "onVolumeChange", "(F)V");
     ctx->on_client_volume = (*env)->GetMethodID(env, cls, "onClientVolume", "()F");
@@ -218,7 +220,14 @@ static void _video_reset(void *cls, reset_type_t t) {
         raop_remove_hls_connections(ctx->raop);
     }
 }
-static void _audio_flush(void *cls) { LOGI("audio_flush"); }
+static void _audio_flush(void *cls) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    LOGI("audio_flush");
+    audio_engine_flush(ctx->audio_engine);
+    // Native locks have been released before crossing into the video renderer.
+    JNIEnv *env = _get_env(ctx);
+    if (env) (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_audio_flush);
+}
 
 static void _audio_stop_coverart_rendering(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
@@ -227,7 +236,12 @@ static void _audio_stop_coverart_rendering(void *cls) {
     if (!env) return;
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_audio_teardown);
 }
-static void _video_flush(void *cls) { LOGI("video_flush"); }
+static void _video_flush(void *cls) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    LOGI("video_flush");
+    JNIEnv *env = _get_env(ctx);
+    if (env) (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_flush);
+}
 static double _audio_set_client_volume(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);

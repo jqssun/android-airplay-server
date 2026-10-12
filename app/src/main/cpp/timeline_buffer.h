@@ -10,6 +10,7 @@
 #include <string>
 
 #include "audio_time.h"
+#include "playout_clock.h"
 
 /*
  * lock-free SPSC ring of int16 samples (interleaved frames); positions are
@@ -21,13 +22,17 @@ public:
         : mCapacity(capacitySamples), mBuf(new int16_t[capacitySamples]) {}
 
     size_t available() const {  // samples readable
-        return mWrite.load(std::memory_order_acquire) - mRead.load(std::memory_order_acquire);
+        const uint64_t r = mRead.load(std::memory_order_acquire);
+        return (size_t)(mWrite.load(std::memory_order_acquire) - r);
     }
+
+    uint64_t readPosition() const { return mRead.load(std::memory_order_relaxed); }
+    uint64_t writePosition() const { return mWrite.load(std::memory_order_relaxed); }
 
     // producer: push up to n samples, drops what doesn't fit
     size_t write(const int16_t *src, size_t n) {
-        const size_t w = mWrite.load(std::memory_order_relaxed);
-        const size_t r = mRead.load(std::memory_order_acquire);
+        const uint64_t w = mWrite.load(std::memory_order_relaxed);
+        const uint64_t r = mRead.load(std::memory_order_acquire);
         const size_t freeSpace = mCapacity - (w - r);
         if (n > freeSpace) n = freeSpace;
         const size_t wi = w % mCapacity;
@@ -40,8 +45,8 @@ public:
 
     // consumer: pop up to n samples
     size_t read(int16_t *dst, size_t n) {
-        const size_t r = mRead.load(std::memory_order_relaxed);
-        const size_t w = mWrite.load(std::memory_order_acquire);
+        const uint64_t r = mRead.load(std::memory_order_relaxed);
+        const uint64_t w = mWrite.load(std::memory_order_acquire);
         const size_t avail = w - r;
         if (n > avail) n = avail;
         const size_t ri = r % mCapacity;
@@ -54,8 +59,8 @@ public:
 
     // consumer: discard up to n oldest samples
     void skip(size_t n) {
-        const size_t r = mRead.load(std::memory_order_relaxed);
-        const size_t w = mWrite.load(std::memory_order_acquire);
+        const uint64_t r = mRead.load(std::memory_order_relaxed);
+        const uint64_t w = mWrite.load(std::memory_order_acquire);
         const size_t avail = w - r;
         if (n > avail) n = avail;
         mRead.store(r + n, std::memory_order_release);
@@ -64,8 +69,8 @@ public:
 private:
     const size_t mCapacity;
     std::unique_ptr<int16_t[]> mBuf;
-    std::atomic<size_t> mWrite{0};
-    std::atomic<size_t> mRead{0};
+    std::atomic<uint64_t> mWrite{0};
+    std::atomic<uint64_t> mRead{0};
 };
 
 /*
@@ -206,9 +211,11 @@ private:
 class TimelineBuffer {
 public:
     // cushion policy lives in mTracker; timeline reads mTracker.target() live
-    TimelineBuffer(int sampleRate, int channels, int staticCushionMs, int percentilePct)
+    TimelineBuffer(int sampleRate, int channels, int staticCushionMs, int percentilePct,
+                   bool traceSignal = false)
         : mSampleRate(sampleRate),
           mChannels(channels),
+          mTraceSignal(traceSignal),
           mTracker(sampleRate, channels, staticCushionMs, percentilePct),
           // ring can't be reallocated mid-stream: size for worst-case backlog, i.e. cap
           // of largest reachable cushion + one throttle window of overshoot (trims are
@@ -220,9 +227,17 @@ public:
     // producer: push samples
     void write(const int16_t *pcm, size_t samples, int64_t ptsNs) {
         if (samples == 0) return;
+        const uint64_t active = mTraceSignal ? activeSamples(pcm, samples) : 0;
+        if (mTraceSignal) {
+            mDecodedBuffers.fetch_add(1, std::memory_order_relaxed);
+            mDecodedActive.fetch_add(active, std::memory_order_relaxed);
+        }
         // pts 0 = sender clock not NTP synced yet
         if (ptsNs == 0) {
-            mRing.write(pcm, samples);
+            const size_t written = mRing.write(pcm, samples);
+            if (mTraceSignal) mAcceptedActive.fetch_add(
+                written == samples ? active : activeSamples(pcm, written), std::memory_order_relaxed);
+            mPcmTail.publish(0, 0);
             return;
         }
         const int64_t durNs = samples * NS_PER_SEC / mChannels / mSampleRate;
@@ -254,15 +269,20 @@ public:
             mMetrics.countDrop();
             return;
         }
-        mRing.write(pcm, samples);
+        const size_t written = mRing.write(pcm, samples);
+        if (mTraceSignal) mAcceptedActive.fetch_add(
+            written == samples ? active : activeSamples(pcm, written), std::memory_order_relaxed);
+        if (written > 0) {
+            mPcmTail.publish(ptsNs + written * NS_PER_SEC / mChannels / mSampleRate,
+                             (int64_t)mRing.writePosition());
+        }
         mExpectedPtsNs = ptsNs + durNs;
     }
 
     // consumer: pop frames*channels samples into out, silence-padded on underrun
-    void read(int16_t *out, int32_t frames) {
+    void read(int16_t *out, int32_t frames, int64_t now = monoNs(), int64_t outputDelayNs = 0) {
         const size_t need = (size_t)frames * mChannels;
         const size_t tuned = mTracker.target();
-        const int64_t now = monoNs();
 
         // bound latency: cap tracks tuned cushion live so a calmed link sheds latency
         // without an underrun. each trim costs a glitch, so be conservative: trim only
@@ -299,13 +319,25 @@ public:
             // never true, so we'd otherwise underrun on every empty read between sounds
             if (buffered == 0 || (buffered < tuned && !starved)) {
                 memset(out, 0, need * sizeof(int16_t));
+                // Do not refresh during silence. Retain the last mapping briefly
+                // so video arriving after a short sound can still synchronize.
                 return;
             }
             mPriming = false;
             mPrimeSilenceFrames = 0;
         }
 
+        const int64_t readPosition = (int64_t)mRing.readPosition();
         const size_t got = mRing.read(out, need);
+        if (mTraceSignal) mOutputActive.fetch_add(activeSamples(out, got), std::memory_order_relaxed);
+        TimestampAnchor::Snapshot tail{};
+        if (got > 0 && mPcmTail.snapshot(tail)) {
+            const int64_t firstPts = tail.ptsNs +
+                (readPosition - tail.reference) * NS_PER_SEC / mChannels / mSampleRate;
+            mPlayoutClock.publish(firstPts, now + outputDelayNs);
+        } else if (got > 0) {
+            mPlayoutClock.invalidate();
+        }
         if (got < need) {
             memset(out + got, 0, (need - got) * sizeof(int16_t));
             mPriming = true;
@@ -323,11 +355,24 @@ public:
     // must not run concurrently with read()
     void reprime() { mPriming = true; }
 
+    int64_t renderTime(int64_t ptsNs, int64_t nowNs) const {
+        return mPlayoutClock.renderTime(ptsNs, nowNs);
+    }
+
     // drop buffered audio + rebuild cushion, so resume after pause doesn't play stale
-    // tail; only while output callback is stopped (skip() is consumer-side)
+    // tail; requires BOTH producer and output callback stopped. Live engine resets
+    // replace the whole timeline so a late Oboe callback retains the old object.
     void flushAndReprime() {
         mRing.skip(mRing.available());
         mPriming = true;
+        mPrimeSilenceFrames = 0;
+        mLastTrimBlockNs = 0;
+        mAboveCapSinceNs = 0;
+        mUnderran.store(false);
+        mExpectedPtsNs = 0;
+        mTracker.reanchor();
+        mPcmTail.publish(0, 0);
+        mPlayoutClock.invalidate();
     }
 
     // debug snapshot: backlog + tuned cushion (ms) + counters; reads only atomics, any thread
@@ -344,7 +389,23 @@ public:
         return d;
     }
 
+    // Diagnostics only: no logging, locks or JNI in the PCM callback. These
+    // cumulative counters let the normal debug poll locate missing short sounds.
+    struct SignalDebug { uint64_t decodedBuffers, decodedActive, acceptedActive, outputActive; };
+    SignalDebug signalDebug() const {
+        const uint64_t accepted = mAcceptedActive.load(std::memory_order_relaxed);
+        return {mDecodedBuffers.load(std::memory_order_relaxed),
+                mDecodedActive.load(std::memory_order_relaxed), accepted,
+                mOutputActive.load(std::memory_order_relaxed)};
+    }
+
 private:
+
+    static uint64_t activeSamples(const int16_t *pcm, size_t samples) {
+        uint64_t count = 0;
+        for (size_t i = 0; i < samples; ++i) if (pcm[i] > 128 || pcm[i] < -128) ++count;
+        return count;
+    }
 
     // latency ceiling for cushion: 2x, but never below TRIM_FLOOR_MS so tiny cushion
     // still gets slack before a trim (trim costs a glitch)
@@ -372,6 +433,7 @@ private:
 
     const int mSampleRate;
     const int mChannels;
+    const bool mTraceSignal;
     DelayTracker mTracker;               // owns cushion policy; read live each read()
     SpscRing mRing;
     TimelineMetrics mMetrics;
@@ -382,6 +444,9 @@ private:
     std::atomic<bool> mUnderran{false};  // consumer->producer: underrun happened
 
     int64_t mExpectedPtsNs = 0;          // presentation time expected at write head
+    TimestampAnchor mPcmTail;           // producer: PTS and absolute sample position
+    AudioPlayoutClock mPlayoutClock;    // consumer: PCM -> monotonic output mapping
+    std::atomic<uint64_t> mDecodedBuffers{0}, mDecodedActive{0}, mAcceptedActive{0}, mOutputActive{0};
 };
 
 #endif  // TIMELINE_BUFFER_H

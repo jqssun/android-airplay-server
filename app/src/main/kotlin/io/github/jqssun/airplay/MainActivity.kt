@@ -12,7 +12,7 @@ import android.os.Bundle
 import android.os.IBinder
 import android.util.Rational
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,7 +32,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
     private val viewModel: MainViewModel by viewModels()
     private var service: AirPlayService? = null
@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
             svc.logCallback = logCallback
             svc.pinCallback = pinCallback
             viewModel.bindService(svc)
+            svc.refreshLanguage()
             if (viewModel.autoStart.value && svc.serverState.value == AirPlayService.ServerState.STOPPED) {
                 viewModel.startServer()
             }

@@ -8,6 +8,7 @@ hilt-navigation = "1.2.0"
 lifecycle = "2.8.7"
 activity-compose = "1.9.3"
 core-ktx = "1.15.0"
+appcompat = "1.7.1"
 datastore = "1.1.1"
 coroutines = "1.9.0"
 media3 = "1.11.0-beta01"
@@ -15,6 +16,7 @@ oboe = "1.9.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity-compose" }
 androidx-lifecycle-runtime = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
 androidx-lifecycle-service = { group = "androidx.lifecycle", name = "lifecycle-service", version.ref = "lifecycle" }

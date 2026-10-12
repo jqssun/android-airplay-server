@@ -9,6 +9,9 @@
     <string name="notification_pin_title">AirPlay PIN Required</string>
     <string name="notification_pin_text">PIN: %1$s</string>
     <string name="stop_service">Stop</string>
+    <string name="media_previous">Previous</string>
+    <string name="media_play_pause">Play/Pause</string>
+    <string name="media_next">Next</string>
 
     <!-- Tabs -->
     <string name="tab_overview">Overview</string>
@@ -73,6 +76,12 @@
     <string name="export_logs_chooser_title">Export logs</string>
 
     <!-- Settings sections -->
+    <string name="section_interface">Interface</string>
+    <string name="setting_language">Language</string>
+    <string name="setting_language_desc">Choose the app language. Follow system matches the device language automatically; unsupported languages use English.</string>
+    <string name="language_system">Follow system</string>
+    <string name="language_chinese">中文（简体）</string>
+    <string name="language_english">English</string>
     <string name="section_server">Server</string>
     <string name="section_connection">Connection</string>
     <string name="section_display">Display</string>
@@ -129,7 +138,7 @@
 
     <!-- Settings: Decode -->
     <string name="setting_h265">H.265 (HEVC)</string>
-    <string name="setting_h265_desc">Enable H.265 video decoding if device supports it</string>
+    <string name="setting_h265_desc">Allow compatible senders to use H.265; check decoder information for the active codec</string>
     <string name="setting_enforce_sdr">MediaFormat.KEY_COLOR_TRANSFER</string>
     <string name="setting_enforce_sdr_desc">Tag video as limited SDR; disable to allow HDR sources to pass through</string>
     <string name="setting_sw_alac">Force software ALAC decoder</string>
@@ -185,5 +194,7 @@
     <string name="debug_audio_buffer">Buffer: %1$d ms (tgt: %2$d ms)</string>
     <string name="debug_audio_glitch">Glitch: trim=%1$d drop=%2$d sil=%3$d ur=%4$d xrun=%5$d</string>
     <string name="debug_audio_decode">Decode: %1$s</string>
+    <string name="debug_decode_idle">held=%1$d errs=%2$d</string>
+    <string name="debug_decode_timing">mean/max %1$.1f/%2$.1f ms held=%3$d errs=%4$d</string>
     <string name="debug_clients">Clients: %1$d</string>
 </resources>

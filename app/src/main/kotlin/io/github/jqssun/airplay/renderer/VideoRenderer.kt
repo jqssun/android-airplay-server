@@ -4,11 +4,14 @@ import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.Handler
+import android.os.HandlerThread
+import io.github.jqssun.airplay.BuildConfig
 import android.util.Log
 import android.view.Surface
 import io.github.jqssun.airplay.renderer.DecoderSelector.Companion.videoCaps
 
-class VideoRenderer(ctx: Context) {
+class VideoRenderer(ctx: Context, private val audioRenderTime: (Long) -> Long = { 0L }) {
 
     private val lock = Object()
     private val pipeline = VideoPipeline()
@@ -22,6 +25,27 @@ class VideoRenderer(ctx: Context) {
     private var videoWidth = 0
     private var videoHeight = 0
     private var firstFrameQueued = false
+    // Independent H10 experiment: decoder -> SurfaceView, avoiding the latest-image GL blit.
+    private var decoderSurface: Surface? = null
+    @Volatile private var directOutput = false
+    private val renderThread = if (BuildConfig.H10_DIRECT_SURFACE)
+        HandlerThread("H10FrameRendered").apply { start() } else null
+    private val renderHandler = renderThread?.let { Handler(it.looper) }
+    @Volatile private var renderGeneration = 0L
+    private var renderedCount = 0L
+    private var renderWindowStartNs = 0L
+    private var renderWindowFrames = 0L
+    private var lastRenderedPtsUs = Long.MIN_VALUE
+    private var outputDrainRunning = false
+    private var outputDrainThread: Thread? = null
+    private var lastDirectTargetNs = 0L
+    private var lastDirectPtsUs = Long.MIN_VALUE
+    // AirPlayService constructs this renderer before Android attaches its Context.
+    // Keep the experimental lead independent of preferences during construction.
+    private val directLeadNs = if (BuildConfig.H10_DIRECT_SURFACE) 25_000_000L else 0L
+    private var directDecodedFrames = 0L
+    private var directLastReportNs = 0L
+    private var directLastReportFrames = 0L
 
     // stats
     @Volatile var fps = 0; private set
@@ -46,6 +70,11 @@ class VideoRenderer(ctx: Context) {
     // anchors that map decoder PTS (us) to System.nanoTime() for scheduled rendering
     private var _ptsBaseUs = Long.MIN_VALUE
     private var _wallBaseNs = 0L
+    private var _lastOutputPtsUs = Long.MIN_VALUE
+    private var _firstInputAtNs = 0L
+    private var _audioClockFrames = 0L
+    private var _lateOutputFrames = 0L
+    private var _audioWaitUs = 0L
 
     fun setResolution(w: Int, h: Int) {
         videoWidth = w
@@ -56,12 +85,45 @@ class VideoRenderer(ctx: Context) {
     // doesn't restart codec; decoder renders into pipeline's own persistent surface
     fun setSurface(surface: Surface) = synchronized(lock) {
         displaySurface = surface
-        pipeline.setDisplaySurface(surface)
+        if (BuildConfig.H10_DIRECT_SURFACE) {
+            if (codec != null && decoderSurface !== surface && surface.isValid) {
+                try {
+                    codec!!.setOutputSurface(surface)
+                    decoderSurface = surface
+                    directOutput = true
+                    pipeline.setDisplaySurface(null)
+                    Log.i(TAG, "H10_DISPLAY switched decoder directly to SurfaceView")
+                } catch (e: Exception) {
+                    // Keep the persistent texture fallback alive if the vendor rejects a switch.
+                    Log.w(TAG, "H10_DISPLAY surface switch rejected", e)
+                    if (!directOutput) pipeline.setDisplaySurface(surface)
+                    else {
+                        stopCodec()
+                        Log.w(TAG, "H10_DISPLAY waiting for next keyframe after surface replacement")
+                    }
+                }
+            }
+        } else pipeline.setDisplaySurface(surface)
     }
 
     fun clearSurface(surface: Surface) = synchronized(lock) {
         if (displaySurface !== surface) return@synchronized
         displaySurface = null
+        if (BuildConfig.H10_DIRECT_SURFACE && codec != null && directOutput) {
+            pipeline.start()
+            val parking = pipeline.inputSurface
+            try {
+                if (parking != null) {
+                    codec!!.setOutputSurface(parking)
+                    decoderSurface = parking
+                    directOutput = false
+                    Log.i(TAG, "H10_DISPLAY decoder parked during surface replacement")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "H10_DISPLAY parking failed; waiting for next keyframe", e)
+                stopCodec()
+            }
+        }
         pipeline.setDisplaySurface(null)
     }
 
@@ -87,10 +149,24 @@ class VideoRenderer(ctx: Context) {
 
     fun stopSession() = synchronized(lock) { stopCodec() }
 
+    fun resetTiming(reason: String) = synchronized(lock) {
+        _ptsBaseUs = Long.MIN_VALUE
+        _wallBaseNs = 0L
+        _lastOutputPtsUs = Long.MIN_VALUE
+        Log.i(TAG, "MVP_SYNC video timing reset: $reason")
+    }
+
+    fun flush() = synchronized(lock) {
+        // A protocol video FLUSH requires a fresh reference/key frame.
+        stopCodec()
+        Log.i(TAG, "MVP_SYNC video decoder flushed; waiting for keyframe")
+    }
+
     private fun _resetStats() {
         fps = 0; bitrateBps = 0; frameCount = 0; codecName = ""
         droppedFrames = 0; framePacingJitterUs = 0
         _framesThisSec = 0; _bytesThisSec = 0
+        _audioClockFrames = 0; _lateOutputFrames = 0; _audioWaitUs = 0
     }
 
     private fun _updateStats(size: Int) {
@@ -113,7 +189,8 @@ class VideoRenderer(ctx: Context) {
         val msg = "fps=$fps bitrate=${bitrateBps / 1000}kbps " +
             "jitter=${framePacingJitterUs}us frames=$frameCount " +
             "dropped=$droppedFrames codec=$codecName " +
-            "res=${videoWidth}x${videoHeight}"
+            "res=${videoWidth}x${videoHeight} " +
+            "audioClockFrames=$_audioClockFrames audioWaitUs=$_audioWaitUs lateOutputFrames=$_lateOutputFrames"
         Log.i(BENCH_TAG, msg)
         benchmarkLogCallback?.invoke(msg)
     }
@@ -153,6 +230,7 @@ class VideoRenderer(ctx: Context) {
                 val buf = c.getInputBuffer(idx) ?: return
                 buf.clear()
                 buf.put(data)
+                if (!firstFrameQueued) _firstInputAtNs = System.nanoTime()
                 c.queueInputBuffer(idx, 0, data.size, ntpTimeNs / 1000, 0)
                 firstFrameQueued = true
                 return
@@ -184,9 +262,15 @@ class VideoRenderer(ctx: Context) {
     }
 
     private fun startCodec(h265: Boolean) {
-        pipeline.start()
-        pipeline.setVideoSize(videoWidth, videoHeight)
-        val s = pipeline.inputSurface ?: return
+        val direct = if (BuildConfig.H10_DIRECT_SURFACE) displaySurface?.takeIf { it.isValid } else null
+        val s = direct ?: run {
+            pipeline.start()
+            pipeline.setVideoSize(videoWidth, videoHeight)
+            pipeline.setDisplaySurface(displaySurface)
+            pipeline.inputSurface ?: return
+        }
+        directOutput = direct != null
+        decoderSurface = s
         currentH265 = h265
         val mime = if (h265) DecoderSelector.HEVC else DecoderSelector.AVC
         val info = (if (h265) hevcDecoder else avcDecoder) ?: error("no decoder selected for $mime")
@@ -246,14 +330,61 @@ class VideoRenderer(ctx: Context) {
         }
         codec = c
         codecName = (if (h265) "H.265" else "H.264") + " (${c.name})"
+        if (BuildConfig.H10_DIRECT_SURFACE) {
+            if (outputDrainThread == null) {
+                outputDrainRunning = true
+                outputDrainThread = Thread({
+                    while (true) {
+                        synchronized(lock) {
+                            if (!outputDrainRunning) return@Thread
+                            try { drainOutput() } catch (e: Exception) {
+                                Log.w(TAG, "H10_DISPLAY output drain failed", e)
+                                stopCodec()
+                            }
+                        }
+                        Thread.sleep(2)
+                    }
+                }, "H10OutputDrain").apply { start() }
+            }
+            val generation = ++renderGeneration
+            renderedCount = 0L
+            renderWindowStartNs = 0L
+            renderWindowFrames = 0L
+            lastRenderedPtsUs = Long.MIN_VALUE
+            c.setOnFrameRenderedListener({ _, ptsUs, renderNs ->
+                // Use codec's render timestamps, not delayed/batched callback delivery time.
+                if (generation == renderGeneration && ptsUs != Long.MAX_VALUE && ptsUs != lastRenderedPtsUs) {
+                    lastRenderedPtsUs = ptsUs
+                    renderedCount++
+                    if (renderWindowStartNs == 0L) renderWindowStartNs = renderNs
+                    else renderWindowFrames++
+                    val elapsed = renderNs - renderWindowStartNs
+                    if (elapsed >= 2_000_000_000L) {
+                        val rate = renderWindowFrames * 1e9 / elapsed
+                        Log.i(TAG, "H10_DISPLAY rendered=$renderedCount fps=$rate direct=$directOutput ptsUs=$ptsUs renderNs=$renderNs")
+                        renderWindowStartNs = renderNs
+                        renderWindowFrames = 0L
+                    }
+                }
+            }, renderHandler)
+            Log.i(TAG, "H10_DISPLAY output=${if (directOutput) "direct SurfaceView" else "GL fallback"} leadMs=${directLeadNs / 1_000_000}")
+        }
     }
 
     private fun stopCodec() {
+        renderGeneration++
+        lastDirectTargetNs = 0L
+        lastDirectPtsUs = Long.MIN_VALUE
+        directDecodedFrames = 0L
+        directLastReportNs = 0L
+        directLastReportFrames = 0L
         _frameIntervalIdx = 0
         _frameIntervalCount = 0
         _lastOutputFrameNs = 0L
         _ptsBaseUs = Long.MIN_VALUE
         _wallBaseNs = 0L
+        _lastOutputPtsUs = Long.MIN_VALUE
+        _firstInputAtNs = 0L
         codec?.let {
             try {
                 it.stop()
@@ -261,6 +392,8 @@ class VideoRenderer(ctx: Context) {
             } catch (_: Exception) {}
         }
         codec = null
+        decoderSurface = null
+        directOutput = false
     }
 
     private fun drainOutput() {
@@ -271,15 +404,66 @@ class VideoRenderer(ctx: Context) {
             if (idx < 0) break
             _recordOutputFrameTime()
             if (scheduledOutputBufferRelease) {
-                // schedule frame at VSYNC matching its NTP presentation time
+                // Audio and video share UxPlay's local NTP PTS (Unix clock), which
+                // must be mapped into System.nanoTime(), never used directly.
                 val ptsUs = info.presentationTimeUs
-                if (_ptsBaseUs == Long.MIN_VALUE) {
+                val now = System.nanoTime()
+                val firstOutput = _ptsBaseUs == Long.MIN_VALUE
+                val jump = _lastOutputPtsUs != Long.MIN_VALUE &&
+                    (ptsUs < _lastOutputPtsUs - 750_000L || ptsUs > _lastOutputPtsUs + 750_000L)
+                if (firstOutput || jump) {
                     _ptsBaseUs = ptsUs
-                    _wallBaseNs = System.nanoTime()
+                    _wallBaseNs = now
+                    if (_firstInputAtNs > 0L) {
+                        Log.i(TAG, "MVP_SYNC video firstOutput startupMs=${(now - _firstInputAtNs) / 1_000_000}")
+                        _firstInputAtNs = 0L
+                    }
                 }
-                c.releaseOutputBuffer(idx, _wallBaseNs + (ptsUs - _ptsBaseUs) * 1000L)
+                _lastOutputPtsUs = ptsUs
+                val audioTime = audioRenderTime(ptsUs * 1000L)
+                val target = if (audioTime > 0L) {
+                    _audioClockFrames++
+                    _audioWaitUs = (audioTime - now) / 1000L
+                    // OpenSL ES + HDMI has only an estimated audio clock. Count
+                    // late output but display it immediately: discarding all frames
+                    // on a stable hardware offset would erase short flashes/video.
+                    if (now - audioTime > 80_000_000L) {
+                        _lateOutputFrames++
+                    }
+                    // Keep the silent-video fallback anchored to the last audio
+                    // estimate, rather than jumping back to the original first frame.
+                    _ptsBaseUs = ptsUs
+                    _wallBaseNs = audioTime
+                    audioTime
+                } else {
+                    (_wallBaseNs + (ptsUs - _ptsBaseUs) * 1000L).coerceAtMost(now + 250_000_000L)
+                }
+                var renderTarget = target.coerceAtLeast(now)
+                if (BuildConfig.H10_DIRECT_SURFACE && directOutput && target <= now) {
+                    // Preserve source cadence when audio's estimated timestamp is already
+                    // behind decode completion. A small, bounded lead lets burst arrivals
+                    // span separate display refreshes instead of overwriting each other.
+                    val deltaUs = ptsUs - lastDirectPtsUs
+                    renderTarget = if (lastDirectTargetNs > 0 && deltaUs in 1..100_000)
+                        (lastDirectTargetNs + deltaUs * 1000).coerceIn(now + 8_000_000L, now + 50_000_000L)
+                    else now + directLeadNs
+                }
+                lastDirectTargetNs = renderTarget
+                lastDirectPtsUs = ptsUs
+                c.releaseOutputBuffer(idx, renderTarget)
+                if (BuildConfig.H10_DIRECT_SURFACE) {
+                    directDecodedFrames++
+                    if (directLastReportNs == 0L) directLastReportNs = now
+                    val elapsed = now - directLastReportNs
+                    if (elapsed >= 2_000_000_000L) {
+                        val rate = (directDecodedFrames - directLastReportFrames) * 1e9 / elapsed
+                        Log.i(TAG, "H10_OUTPUT released=$directDecodedFrames fps=$rate holdUs=${(renderTarget-now)/1000} direct=$directOutput")
+                        directLastReportNs = now
+                        directLastReportFrames = directDecodedFrames
+                    }
+                }
             } else {
-                c.releaseOutputBuffer(idx, true)
+                c.releaseOutputBuffer(idx, System.nanoTime())
             }
         }
     }
@@ -287,6 +471,8 @@ class VideoRenderer(ctx: Context) {
     fun release() = synchronized(lock) {
         stopCodec()
         pipeline.release()
+        outputDrainRunning = false
+        renderThread?.quitSafely()
         _resetStats()
     }
 

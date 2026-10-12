@@ -10,3 +10,4 @@
 .cxx/
 
 *.jks
+/tests/*-armv7
