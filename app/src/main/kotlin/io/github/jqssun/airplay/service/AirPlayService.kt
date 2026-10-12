@@ -32,6 +32,7 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import androidx.media.app.NotificationCompat as MediaNotificationCompat
 import io.github.jqssun.airplay.MainActivity
+import io.github.jqssun.airplay.AppLanguage
 import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.realDisplaySize
@@ -75,8 +76,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private var foregroundStarted = false
     private var lastOrientation = Configuration.ORIENTATION_UNDEFINED
 
-    val videoRenderer = VideoRenderer(this)
     val audioRenderer = AudioRenderer()
+    val videoRenderer = VideoRenderer(this, audioRenderer::renderTime)
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val airPlayVideoPlayer by lazy { AirPlayVideoPlayer(this) }
     val videoDownloader by lazy { VideoDownloader(this) }
@@ -361,9 +362,18 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         // rate / burst size itself; feed it AudioManager values so low-latency buffer
         // sizing works there
         // see: https://github.com/google/oboe/blob/main/docs/GettingStarted.md#obtaining-optimal-latency
+        // API 24 exposes mixer/HAL latency through AudioSystem. Newer Android may
+        // restrict this hidden method: absence falls back to queue-only estimation.
+        val outputLatencyMs = runCatching {
+            Class.forName("android.media.AudioSystem")
+                .getDeclaredMethod("getOutputLatency", Int::class.javaPrimitiveType)
+                .invoke(null, AudioManager.STREAM_MUSIC) as Int
+        }.getOrDefault(0).coerceIn(0, 500)
+        log("MVP_SYNC system audio outputLatencyMs=$outputLatencyMs (speaker timing remains estimated)")
         NativeBridge.nativeSetDefaultStreamValues(
             audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull() ?: 0,
-            audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull() ?: 0
+            audioManager.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER)?.toIntOrNull() ?: 0,
+            outputLatencyMs
         )
         nativeHandle = NativeBridge.nativeInit(this, hwAddr, effectiveName, keyFile, nohold, requirePin)
         if (nativeHandle == 0L) {
@@ -462,6 +472,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        refreshLanguage()
         if (newConfig.orientation == lastOrientation) return
         lastOrientation = newConfig.orientation
         if (nativeHandle == 0L || _serverState.value != ServerState.RUNNING) return
@@ -600,6 +611,16 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     override fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
         videoRenderer.feedFrame(data, ntpTimeNs, isH265)
+    }
+
+    override fun onAudioFlush() {
+        // A RAOP audio FLUSH need not include a video keyframe. Reset only the
+        // scheduling anchor; flushing H.264 here would freeze until reconnection.
+        videoRenderer.resetTiming("audio FLUSH")
+    }
+
+    override fun onVideoFlush() {
+        videoRenderer.flush()
     }
 
     override fun onVideoSessionPoll() {
@@ -1003,7 +1024,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             CHANNEL_ID,
-            getString(R.string.notification_channel),
+            AppLanguage.localizedContext(this).getString(R.string.notification_channel),
             NotificationManager.IMPORTANCE_LOW
         )
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
@@ -1032,6 +1053,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     private fun _buildMediaNotification(): Notification {
+        val strings = AppLanguage.localizedContext(this)
         val intent = Intent(this, MainActivity::class.java)
         val pi = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
         val info = _trackInfo.value
@@ -1052,18 +1074,18 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
                         .setShowActionsInCompactView(0, 1, 2)
                 )
                 // transport action buttons
-                builder.addAction(android.R.drawable.ic_media_previous, "Prev", _mediaAction(ACTION_PREV))
-                builder.addAction(android.R.drawable.ic_media_pause, "Pause", _mediaAction(ACTION_PLAY_PAUSE))
-                builder.addAction(android.R.drawable.ic_media_next, "Next", _mediaAction(ACTION_NEXT))
+                builder.addAction(android.R.drawable.ic_media_previous, strings.getString(R.string.media_previous), _mediaAction(ACTION_PREV))
+                builder.addAction(android.R.drawable.ic_media_pause, strings.getString(R.string.media_play_pause), _mediaAction(ACTION_PLAY_PAUSE))
+                builder.addAction(android.R.drawable.ic_media_next, strings.getString(R.string.media_next), _mediaAction(ACTION_NEXT))
             }
         } else {
             if (_lastPin != null) {
                 // passive handoff only: do not launch/reorder the activity during pin auth
-                builder.setContentTitle(getString(R.string.notification_pin_title))
-                    .setContentText(getString(R.string.notification_pin_text, _lastPin))
+                builder.setContentTitle(strings.getString(R.string.notification_pin_title))
+                    .setContentText(strings.getString(R.string.notification_pin_text, _lastPin))
             } else {
-                builder.setContentTitle(getString(R.string.notification_title))
-                    .setContentText(getString(R.string.notification_text))
+                builder.setContentTitle(strings.getString(R.string.notification_title))
+                    .setContentText(strings.getString(R.string.notification_text))
             }
         }
         return builder.build()
@@ -1089,6 +1111,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+    }
+
+    fun refreshLanguage() {
+        createNotificationChannel()
+        _updateMediaNotification()
     }
 
     private fun _updateMediaNotification() {

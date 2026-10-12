@@ -34,7 +34,7 @@ object NativeBridge {
     external fun nativeGetRaopServiceName(handle: Long): String?
     external fun nativeGetServerName(handle: Long): String?
 
-    external fun nativeSetDefaultStreamValues(sampleRate: Int, framesPerBurst: Int)
+    external fun nativeSetDefaultStreamValues(sampleRate: Int, framesPerBurst: Int, outputLatencyMs: Int)
     external fun nativeServerAudioConfigure(handle: Long, cushionMs: Int, percentilePct: Int,
                                             oboeBufferFrames: Int, forceSwAlac: Boolean,
                                             realtimePriority: Boolean, lowLatency: Boolean,
@@ -42,6 +42,7 @@ object NativeBridge {
     external fun nativeServerAudioStart(handle: Long): Boolean
     external fun nativeServerAudioStop(handle: Long)
     external fun nativeServerAudioFormat(handle: Long, ct: Int, spf: Int)
+    external fun nativeServerAudioRenderTime(handle: Long, ptsNs: Long): Long
     // fills direct buffer with packed debug snapshot; false if audio isn't running
     external fun nativeServerAudioDebug(handle: Long, buf: java.nio.ByteBuffer): Boolean
 }

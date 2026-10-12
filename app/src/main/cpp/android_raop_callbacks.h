@@ -16,6 +16,8 @@ typedef struct {
     raop_t *raop;
     jmethodID on_video_data;
     jmethodID on_audio_format;
+    jmethodID on_audio_flush;
+    jmethodID on_video_flush;
     jmethodID on_video_size;
     jmethodID on_volume_change;
     jmethodID on_client_volume;

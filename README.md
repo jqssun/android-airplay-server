@@ -68,3 +68,8 @@ Check out the [CI](https://github.com/jqssun/android-airplay-server/blob/main/.g
 ---
 
 Disclaimer: This project is not affiliated with Apple Inc.
+
+## HiMedia H10 mirroring profile
+
+See [the H10 profile notes](docs/H10.md) for the independently packaged ARMv7 build,
+regression tests, device observations, and limits of the frame-rate measurements.

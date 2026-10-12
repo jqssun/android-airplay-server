@@ -5,6 +5,7 @@ import android.opengl.EGLConfig
 import android.opengl.EGLContext
 import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
+import android.opengl.EGLExt
 import android.view.Surface
 
 class EglCore : AutoCloseable {
@@ -13,9 +14,12 @@ class EglCore : AutoCloseable {
     private val config: EGLConfig
     private val context: EGLContext
     private val pbuffer: EGLSurface
+    val supportsPresentationTime: Boolean
 
     init {
         EGL14.eglInitialize(display, IntArray(2), 0, IntArray(2), 1)
+        supportsPresentationTime = EGL14.eglQueryString(display, EGL14.EGL_EXTENSIONS)
+            ?.split(' ')?.contains("EGL_ANDROID_presentation_time") == true
         val attribs = intArrayOf(
             EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
             EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT or EGL14.EGL_PBUFFER_BIT,
@@ -42,7 +46,10 @@ class EglCore : AutoCloseable {
 
     fun destroySurface(surface: EGLSurface) = EGL14.eglDestroySurface(display, surface)
 
-    fun swap(surface: EGLSurface) = EGL14.eglSwapBuffers(display, surface)
+    fun swap(surface: EGLSurface, presentationNs: Long = System.nanoTime()): Boolean {
+        if (supportsPresentationTime) EGLExt.eglPresentationTimeANDROID(display, surface, presentationNs)
+        return EGL14.eglSwapBuffers(display, surface)
+    }
 
     fun query(surface: EGLSurface, what: Int): Int {
         val v = IntArray(1)

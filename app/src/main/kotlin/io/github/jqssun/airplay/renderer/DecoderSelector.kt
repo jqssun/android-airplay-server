@@ -10,6 +10,7 @@ import android.media.MediaFormat
 import android.opengl.GLES20
 import android.os.Build
 import android.util.Log
+import io.github.jqssun.airplay.BuildConfig
 
 // moonlight-android MediaCodecHelper
 class DecoderSelector(private val ctx: Context) {
@@ -64,14 +65,26 @@ class DecoderSelector(private val ctx: Context) {
 
     fun hevc(avc: MediaCodecInfo?, w: Int, h: Int, fps: Int): MediaCodecInfo? {
         val info = _probableSafe(HEVC, -1) ?: return null
+        if (_h10Hevc(info.name)) {
+            val supported = runCatching { _canMeet(info.videoCaps(HEVC), w, h, fps) }
+                .getOrDefault(false)
+            Log.i(TAG, "H10_HEVC decoder=${info.name} requested=${w}x${h}@$fps supported=$supported")
+            return info.takeIf { supported }
+        }
         if (_hevcWhitelisted(info)) return info
         Log.i(TAG, "hevc decoder not whitelisted: ${info.name}")
         val avcCaps = avc?.videoCaps(AVC) ?: return null
         return info.takeIf { !_canMeet(avcCaps, w, h, fps) && _canMeet(info.videoCaps(HEVC), w, h, fps) }
     }
 
-    fun software(mime: String, w: Int, h: Int): MediaCodecInfo? =
-        MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.firstOrNull { info ->
+    fun software(mime: String, w: Int, h: Int): MediaCodecInfo? {
+        // A software HEVC fallback on this ARMv7 box would hide failure of the
+        // hardware adaptation and add severe latency. H.264 retains its fallback.
+        if (mime == HEVC && _h10Hevc(H10HevcPolicy.DECODER)) {
+            Log.w(TAG, "H10_HEVC hardware decoder failed; software HEVC fallback disabled")
+            return null
+        }
+        return MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.firstOrNull { info ->
             !info.isEncoder && info.supportsMime(mime) &&
                 (if (Build.VERSION.SDK_INT >= 29) info.isSoftwareOnly
                 else info.name.lowercase().let {
@@ -79,6 +92,10 @@ class DecoderSelector(private val ctx: Context) {
                         (!it.startsWith("omx.") && !it.startsWith("c2."))
                 })
         }?.takeIf { _portraitSafe(w, h, it.videoCaps(mime)::isSizeSupported) }
+    }
+
+    private fun _h10Hevc(decoder: String) = BuildConfig.H10_HEVC_MVP &&
+        H10HevcPolicy.accepts(Build.MODEL, Build.HARDWARE, Build.VERSION.SDK_INT, decoder)
 
     fun adaptive(info: MediaCodecInfo, mime: String) = !_inList(noAdaptive, info.name) &&
         runCatching { info.getCapabilitiesForType(mime).isFeatureSupported(CodecCapabilities.FEATURE_AdaptivePlayback) }

@@ -25,6 +25,7 @@ extern "C" {
 }
 
 #include "audio_time.h"
+#include "codec_packet_input.h"
 #include "log_sink.h"
 #include "timeline_buffer.h"
 
@@ -54,6 +55,12 @@ public:
 
     // # of operations currently in flight
     void setHeld(size_t n) { mHeld.store(n, std::memory_order_relaxed); }
+
+    // Only after the previous decoder/drain thread has been joined.
+    void reset() {
+        mN = 0; mSumNs = 0; mMinNs = 0; mMaxNs = 0;
+        mMeanUs.store(0); mMaxUs.store(0); mHeld.store(0);
+    }
 
     void setEnableLogging(bool on) { mLogging.store(on, std::memory_order_relaxed); }
 
@@ -96,6 +103,10 @@ struct LatencyProbe {
     // call before feeding frame into MediaCodec
     void record(int64_t ptsUs, int64_t queueNs) {
         const uint64_t w = mWrite.load(std::memory_order_relaxed);
+        // MediaCodecDecoder protects producer and consumer with mProbeLock.
+        // Expire lost outputs before overwriting their ring slot.
+        const uint64_t r = mRead.load(std::memory_order_relaxed);
+        if (w - r >= CAP) mRead.store(w - CAP + 1, std::memory_order_relaxed);
         mBuf[w % CAP] = {ptsUs, queueNs};
         mWrite.store(w + 1, std::memory_order_release);
     }
@@ -178,17 +189,38 @@ public:
     }
 
     bool decode(const uint8_t *data, size_t len, int64_t ptsNs) override {
-        ssize_t ii = AMediaCodec_dequeueInputBuffer(mCodec, 5000);
-        if (ii < 0) return false;
-        size_t cap = 0;
-        uint8_t *in = AMediaCodec_getInputBuffer(mCodec, (size_t)ii, &cap);
-        if (!in) return false;
-        const size_t n = len < cap ? len : cap;
-        memcpy(in, data, n);
-        mProbe.record((int64_t)(ptsNs / 1000), monoNs());
-        // still queue packets that are too large, but truncate them and report as error
-        return AMediaCodec_queueInputBuffer(mCodec, (size_t)ii, 0, n, (uint64_t)(ptsNs / 1000), 0) ==
-                   AMEDIA_OK && n == len;
+        struct Adapter {
+            MediaCodecDecoder &owner;
+            int64_t dequeue(int64_t waitUs) { return AMediaCodec_dequeueInputBuffer(owner.mCodec, waitUs); }
+            uint8_t *buffer(size_t slot, size_t &cap) {
+                return AMediaCodec_getInputBuffer(owner.mCodec, slot, &cap);
+            }
+            int64_t cancel(size_t slot, int64_t ptsUs) {
+                return AMediaCodec_queueInputBuffer(owner.mCodec, slot, 0, 0, ptsUs, 0);
+            }
+            int64_t queue(size_t slot, size_t n, int64_t ptsUs) {
+                // Publishing after a successful queue must precede drain-side match.
+                // A short mutex covers queue + record, never the input wait.
+                std::lock_guard<std::mutex> guard(owner.mProbeLock);
+                const auto at = monoNs();
+                const auto status = AMediaCodec_queueInputBuffer(owner.mCodec, slot, 0, n, ptsUs, 0);
+                if (status == AMEDIA_OK) owner.mProbe.record(ptsUs, at);
+                return status;
+            }
+        } adapter{*this};
+        const auto result = queueCodecPacket(adapter, data, len, ptsNs / 1000);
+        mInputs.fetch_add(1, std::memory_order_relaxed);
+        if (result.retries && result.ok()) mRecovered.fetch_add(1, std::memory_order_relaxed);
+        if (!result.ok()) {
+            const auto count = mInputErrors.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (count <= 8 || count % 100 == 0) {
+                __android_log_print(ANDROID_LOG_WARN, LOG_SINK_TAG,
+                    "H10_AUDIO input-failure stage=%s code=%lld len=%zu cap=%zu retries=%d errors=%llu",
+                    packetInputStageName(result.stage), (long long)result.code, len,
+                    result.capacity, result.retries, (unsigned long long)count);
+            }
+        }
+        return result.ok();
     }
 
 private:
@@ -198,19 +230,55 @@ private:
         AMediaCodecBufferInfo info;
         while (mDrainRun.load(std::memory_order_relaxed)) {
             ssize_t oi = AMediaCodec_dequeueOutputBuffer(mCodec, &info, DRAIN_TIMEOUT_US);
-            if (oi < 0) continue;  // timeout / format / buffers changed
+            if (oi == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
+                if (AMediaFormat *format = AMediaCodec_getOutputFormat(mCodec)) {
+                    __android_log_print(ANDROID_LOG_INFO, LOG_SINK_TAG,
+                        "MVP_AUDIO decoder output format: %s", AMediaFormat_toString(format));
+                    AMediaFormat_delete(format);
+                }
+            }
+            if (oi < 0) {
+                if (oi != AMEDIACODEC_INFO_TRY_AGAIN_LATER &&
+                    oi != AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED &&
+                    oi != AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) {
+                    const auto count = ++mOutputErrors;
+                    if (count <= 8 || count % 100 == 0)
+                        __android_log_print(ANDROID_LOG_WARN, LOG_SINK_TAG,
+                            "H10_AUDIO output-dequeue code=%zd errors=%llu", oi, (unsigned long long)count);
+                }
+                continue;
+            }
             size_t osz = 0;
             uint8_t *out = AMediaCodec_getOutputBuffer(mCodec, (size_t)oi, &osz);
-            if (out && info.size > 0) {
+            const bool valid = out && info.offset >= 0 && info.size >= 0 &&
+                (size_t)info.offset <= osz && (size_t)info.size <= osz - (size_t)info.offset &&
+                info.offset % sizeof(int16_t) == 0 && info.size % sizeof(int16_t) == 0;
+            if (valid && info.size > 0) {
                 mTimeline.write((const int16_t *)(out + info.offset),
                                 (size_t)info.size / sizeof(int16_t),  // bytes -> samples
                                 (int64_t)info.presentationTimeUs * 1000);
             }
+            if (!valid) {
+                const auto count = ++mOutputErrors;
+                if (count <= 8 || count % 100 == 0)
+                    __android_log_print(ANDROID_LOG_WARN, LOG_SINK_TAG,
+                        "H10_AUDIO invalid-output offset=%d size=%d cap=%zu errors=%llu",
+                        info.offset, info.size, osz, (unsigned long long)count);
+            }
             const int64_t nowNs = monoNs();
             AMediaCodec_releaseOutputBuffer(mCodec, (size_t)oi, false);
-            const int64_t lat = mProbe.match((int64_t)info.presentationTimeUs, nowNs);
-            if (lat >= 0) mLat.record(lat);
-            mLat.setHeld(mProbe.inFlight());
+            {
+                std::lock_guard<std::mutex> guard(mProbeLock);
+                const int64_t lat = mProbe.match((int64_t)info.presentationTimeUs, nowNs);
+                if (lat >= 0) mLat.record(lat);
+                mLat.setHeld(mProbe.inFlight());
+            }
+            if (++mOutputs % 400 == 0)
+                __android_log_print(ANDROID_LOG_INFO, LOG_SINK_TAG,
+                    "H10_AUDIO inputs=%llu outputs=%llu recovered=%llu inputErrors=%llu outputErrors=%llu",
+                    (unsigned long long)mInputs.load(), (unsigned long long)mOutputs,
+                    (unsigned long long)mRecovered.load(), (unsigned long long)mInputErrors.load(),
+                    (unsigned long long)mOutputErrors);
         }
     }
 
@@ -218,6 +286,9 @@ private:
     TimelineBuffer &mTimeline;            // not owned
     LatencyReporter &mLat;                // not owned
     LatencyProbe mProbe;
+    std::mutex mProbeLock;
+    std::atomic<uint64_t> mInputs{0}, mRecovered{0}, mInputErrors{0};
+    uint64_t mOutputs = 0, mOutputErrors = 0; // drain thread only
     std::thread mDrainThread;
     std::atomic<bool> mDrainRun{false};   // drain thread stop signal
 };

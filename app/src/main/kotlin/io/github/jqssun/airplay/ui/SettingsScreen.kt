@@ -15,9 +15,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
@@ -27,6 +30,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.github.jqssun.airplay.Prefs
+import io.github.jqssun.airplay.AppLanguage
 import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 import androidx.compose.ui.res.stringArrayResource
@@ -35,6 +39,9 @@ import kotlin.math.roundToInt
 
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
+    var language by remember { mutableStateOf(AppLanguage.current()) }
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     val serverName by viewModel.serverName.collectAsState()
     val h265Enabled by viewModel.h265Enabled.collectAsState()
     val enforceSdr by viewModel.enforceSdr.collectAsState()
@@ -76,6 +83,26 @@ fun SettingsScreen(viewModel: MainViewModel) {
             .verticalScroll(rememberScrollState())
             .padding(vertical = 8.dp)
     ) {
+        SectionHeader(stringResource(R.string.section_interface))
+
+        SettingChips(
+            title = stringResource(R.string.setting_language),
+            description = stringResource(R.string.setting_language_desc),
+            value = language,
+            options = listOf(
+                AppLanguage.SYSTEM to stringResource(R.string.language_system),
+                AppLanguage.CHINESE to stringResource(R.string.language_chinese),
+                AppLanguage.ENGLISH to stringResource(R.string.language_english)
+            ),
+            requestSelectedFocus = true,
+            onValueChange = {
+                focusManager.clearFocus(force = true)
+                keyboard?.hide()
+                language = it
+                AppLanguage.select(it)
+            }
+        )
+
         SectionHeader(stringResource(R.string.section_server))
 
         SettingTextField(
@@ -606,15 +633,23 @@ private fun ChipRow(
     value: String,
     options: List<Pair<String, String>>,
     onSelect: (String) -> Unit,
+    requestSelectedFocus: Boolean = false,
     trailing: @Composable () -> Unit = {}
 ) {
+    val requester = remember { FocusRequester() }
+    val tv = isTv()
+    if (requestSelectedFocus && tv) {
+        LaunchedEffect(value) { requester.requestFocusUntilLanded() }
+    }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         options.forEach { (key, label) ->
             FilterChip(
                 selected = value == key,
                 onClick = { onSelect(key) },
                 label = { Text(label) },
-                modifier = Modifier.dpadFocus()
+                modifier = Modifier
+                    .thenIf(requestSelectedFocus && tv && value == key) { focusRequester(requester) }
+                    .dpadFocus()
             )
         }
         trailing()
@@ -627,6 +662,7 @@ private fun SettingChips(
     description: String,
     value: String,
     options: List<Pair<String, String>>,
+    requestSelectedFocus: Boolean = false,
     onValueChange: (String) -> Unit
 ) {
     ListItem(
@@ -635,7 +671,7 @@ private fun SettingChips(
             Column {
                 Text(description)
                 Spacer(Modifier.height(8.dp))
-                ChipRow(value, options, onValueChange)
+                ChipRow(value, options, onValueChange, requestSelectedFocus = requestSelectedFocus)
             }
         }
     )

@@ -1,0 +1,140 @@
+diff --git a/lib/raop_buffer.c b/lib/raop_buffer.c
+index d0ed368..b6307a0 100644
+--- a/lib/raop_buffer.c
++++ b/lib/raop_buffer.c
+@@ -172,11 +172,11 @@ raop_buffer_enqueue(raop_buffer_t *raop_buffer, unsigned char *data, unsigned sh
+     if (datalen < 12 || datalen > RAOP_PACKET_LEN) {
+         return -1;
+     }
+-    /* before time is synchronized, some empty data packets are sent */
+-    if (datalen == 12 || (datalen == 16 && !memcmp(&data[12], empty_packet_marker, 4))) {
+-        return 0;
+-    }
+-    int payload_size = datalen - 12;
++    /* Empty RTP is received silence, not a missing packet. Keep its sequence
++     * number so the next short sound cannot stall behind hundreds of holes. */
++    int empty_packet = datalen == 12 ||
++        (datalen == 16 && !memcmp(&data[12], empty_packet_marker, 4));
++    int payload_size = empty_packet ? 0 : datalen - 12;
+ 
+     /* Get correct seqnum for the packet */
+     unsigned short seqnum = 0;
+@@ -208,8 +208,12 @@ raop_buffer_enqueue(raop_buffer_t *raop_buffer, unsigned char *data, unsigned sh
+     entry->rtp_timestamp = byteutils_get_int_be(data, 4);
+     entry->filled = 1;
+ 
+-    entry->payload_data = malloc(payload_size);
+-    raop_buffer_decrypt(raop_buffer, data, entry->payload_data, payload_size, &entry->payload_size);
++    entry->payload_data = NULL;
++    entry->payload_size = 0;
++    if (payload_size) {
++        entry->payload_data = malloc(payload_size);
++        raop_buffer_decrypt(raop_buffer, data, entry->payload_data, payload_size, &entry->payload_size);
++    }
+     assert((int) entry->payload_size <= payload_size);
+ 
+     /* Update the raop_buffer seqnums */
+@@ -228,42 +232,44 @@ void *
+ raop_buffer_dequeue(raop_buffer_t *raop_buffer, unsigned int *length, uint32_t *rtp_timestamp, unsigned short *seqnum, int no_resend) {
+     assert(raop_buffer);
+ 
+-    /* Calculate number of entries in the current buffer */
+-    short entry_count = seqnum_cmp(raop_buffer->last_seqnum, raop_buffer->first_seqnum)+1;
++    /* Consume all received empty slots before returning real media. In a stream
++     * without retransmits, skip missing slots too; returning NULL at the first
++     * hole would make the caller stop draining while later media is already ready. */
++    while (1) {
++        /* Calculate number of entries in the current buffer */
++        short entry_count = seqnum_cmp(raop_buffer->last_seqnum, raop_buffer->first_seqnum)+1;
+ 
+-    /* Cannot dequeue from empty buffer */
+-    if (raop_buffer->is_empty || entry_count <= 0) {
+-        return NULL;
+-    }
++        /* Cannot dequeue from empty buffer */
++        if (raop_buffer->is_empty || entry_count <= 0) {
++            return NULL;
++        }
+ 
+-    /* Get the first buffer entry for inspection */
+-    raop_buffer_entry_t *entry = &raop_buffer->entries[raop_buffer->first_seqnum % RAOP_BUFFER_LENGTH];
+-    if (no_resend) {
+-        /* If we do no resends, always return the first entry */
+-    } else if (!entry->filled) {
+-        /* Check how much we have space left in the buffer */
+-        if (entry_count < RAOP_BUFFER_LENGTH) {
+-            /* Return nothing and hope resend gets on time */
++        /* Get the first buffer entry for inspection */
++        raop_buffer_entry_t *entry = &raop_buffer->entries[raop_buffer->first_seqnum % RAOP_BUFFER_LENGTH];
++        if (!no_resend && !entry->filled && entry_count < RAOP_BUFFER_LENGTH) {
++            /* Real missing packets still wait for retransmission. */
+             return NULL;
+         }
+-        /* Risk of buffer overrun, return empty buffer */
+-    }
+ 
+-    /* Update buffer and validate entry */
+-    raop_buffer->first_seqnum += 1;
+-    if (!entry->filled) {
+-        return NULL;
+-    }
+-    entry->filled = 0;
++        /* Update buffer and validate entry */
++        raop_buffer->first_seqnum += 1;
++        if (!entry->filled) {
++            continue;
++        }
++        entry->filled = 0;
++        if (!entry->payload_size) {
++            continue;
++        }
+ 
+-    /* Return entry payload buffer */
+-    *rtp_timestamp = entry->rtp_timestamp;
+-    *seqnum = entry->seqnum;
+-    *length = entry->payload_size;
+-    entry->payload_size = 0;
+-    void* data = entry->payload_data;
+-    entry->payload_data = NULL;
+-    return data;
++        /* Return entry payload buffer */
++        *rtp_timestamp = entry->rtp_timestamp;
++        *seqnum = entry->seqnum;
++        *length = entry->payload_size;
++        entry->payload_size = 0;
++        void* data = entry->payload_data;
++        entry->payload_data = NULL;
++        return data;
++    }
+ }
+ 
+ void raop_buffer_handle_resends(raop_buffer_t *raop_buffer, raop_resend_cb_t resend_cb, void *opaque) {
+diff --git a/lib/raop_rtp.c b/lib/raop_rtp.c
+index 35d42df..d466572 100644
+--- a/lib/raop_rtp.c
++++ b/lib/raop_rtp.c
+@@ -387,9 +387,6 @@ raop_rtp_thread_udp(void *arg)
+     bool got_remote_control_saddr = false;
+     uint64_t video_arrival_offset = 0;
+ 
+-    /* initial audio stream has no data */    
+-    unsigned char no_data_marker[] = {0x00, 0x68, 0x34, 0x00 };
+-
+     assert(raop_rtp);
+     bool logger_debug = (logger_get_level(raop_rtp->logger) >= LOGGER_DEBUG);
+     bool logger_debug_data = (logger_get_level(raop_rtp->logger) >= LOGGER_DEBUG_DATA);
+@@ -587,11 +584,9 @@ raop_rtp_thread_udp(void *arg)
+                  raop_rtp->initial_sync = true;
+             }	    
+ 
+-            if (packetlen == 12 ||(packetlen == 16 && memcmp(packet + 12, no_data_marker, 4) == 0)) {
+-                /* this is a "no data" packet */
+-	        /* the first such packet could be used to provide the initial rtptime and seqnum formerly given in the RECORD request */
+-                continue;
+-            }
++            /* Empty audio packets still carry advancing RTP sequence numbers.
++             * Let the queue consume them as silence instead of treating them as
++             * packet loss that blocks the next burst behind a missing sequence. */
+ 	    
+             if (raop_rtp->ct == 2 && packetlen == 44)  continue;   /* ignore the ALAC packets with format information only. */
+ 

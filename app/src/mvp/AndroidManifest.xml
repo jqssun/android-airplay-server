@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <receiver android:name="io.github.jqssun.airplay.BootReceiver"
+            android:enabled="false" tools:replace="android:enabled" />
+    </application>
+</manifest>

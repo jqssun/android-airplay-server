@@ -32,6 +32,8 @@ class VideoPipeline {
     private var uTexMatrix = 0
     private val texMatrix = FloatArray(16)
     private var hasFrame = false
+    private var framePresentationNs = 0L
+    private var _displayFrames = 0L
 
     private var surfaceTexture: SurfaceTexture? = null
     var inputSurface: Surface? = null; private set
@@ -74,6 +76,7 @@ class VideoPipeline {
     private fun _loop() {
         try {
             egl = EglCore()
+            Log.i(TAG, "MVP_SYNC EGL presentation time supported=${egl?.supportsPresentationTime}")
             _initGl()
         } catch (e: Exception) {
             Log.e(TAG, "GL init failed", e)
@@ -141,6 +144,7 @@ class VideoPipeline {
         egl.makeCurrent(window)
         st.updateTexImage()
         st.getTransformMatrix(texMatrix)
+        framePresentationNs = st.timestamp
         hasFrame = true
         _render()
     }
@@ -159,7 +163,15 @@ class VideoPipeline {
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         GLES20.glDisableVertexAttribArray(aPos)
         GLES20.glDisableVertexAttribArray(aTex)
-        egl?.swap(window)
+        val now = System.nanoTime()
+        // MediaCodec sets the SurfaceTexture timestamp, but the GL blit creates a
+        // NEW buffer. Preserve the monotonic render time all the way to SurfaceFlinger.
+        val target = if (framePresentationNs in (now - 500_000_000L)..(now + 300_000_000L))
+            framePresentationNs.coerceAtLeast(now) else now
+        egl?.swap(window, target)
+        if (++_displayFrames % 120L == 0L) {
+            Log.i(TAG, "MVP_SYNC display submitted=$_displayFrames holdUs=${(target - now) / 1000L} eglTime=${egl?.supportsPresentationTime}")
+        }
     }
 
     private fun _initGl() {

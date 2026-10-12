@@ -34,8 +34,12 @@ android {
         applicationId = "io.github.jqssun.airplay"
         minSdk = 24
         targetSdk = 36
-        versionCode = 31
+        versionCode = 32
         versionName = "0.0.31"
+        buildConfigField("boolean", "MIRROR_SYNC_MVP", "false")
+        buildConfigField("boolean", "H10_HEVC_MVP", "false")
+        buildConfigField("int", "H10_HEVC_MAX_FPS", "30")
+        buildConfigField("boolean", "H10_DIRECT_SURFACE", "false")
 
         externalNativeBuild {
             cmake {
@@ -61,7 +65,39 @@ android {
             signingConfigs.findByName("release")?.let { signingConfig = it }
             ndk { abiFilters += allAbis }
         }
+        create("mvp") {
+            initWith(getByName("debug"))
+            matchingFallbacks += "debug"
+            applicationIdSuffix = ".mvp"
+            versionNameSuffix = "-mvp3-l10n1"
+            buildConfigField("boolean", "MIRROR_SYNC_MVP", "true")
+            ndk {
+                abiFilters.clear()
+                abiFilters += "armeabi-v7a"
+            }
+        }
+        create("mvpHevc") {
+            initWith(getByName("mvp"))
+            matchingFallbacks += "mvp"
+            applicationIdSuffix = ".mvphevc"
+            versionNameSuffix = "-mvp3-l10n1-h10hevc1"
+            buildConfigField("boolean", "H10_HEVC_MVP", "true")
+        }
+        create("mvpHevc60") {
+            initWith(getByName("mvpHevc"))
+            matchingFallbacks += "mvpHevc"
+            applicationIdSuffix = ".mvphevc60"
+            versionNameSuffix = "-mvp3-l10n1-h10hevc60v1"
+            buildConfigField("int", "H10_HEVC_MAX_FPS", "60")
+        }
         // debuggable build with HWASan (arm64) + UBSan in native code
+        create("mvpH10Display60") {
+            initWith(getByName("mvpHevc60"))
+            matchingFallbacks += listOf("mvpHevc60", "mvpHevc", "mvp")
+            applicationIdSuffix = ".mvph10display60"
+            versionNameSuffix = "-mvp3-l10n1-h10display60v2"
+            buildConfigField("boolean", "H10_DIRECT_SURFACE", "true")
+        }
         create("sanitize") {
             initWith(getByName("debug"))
             matchingFallbacks += "debug"
@@ -92,6 +128,7 @@ android {
     buildFeatures {
         compose = true
         prefab = true
+        buildConfig = true
     }
 }
 
@@ -123,6 +160,7 @@ tasks.withType<Zip>().configureEach {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.appcompat)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.androidx.lifecycle.service)

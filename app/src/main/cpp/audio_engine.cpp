@@ -18,6 +18,8 @@
 #include "log_sink.h"
 #include "timeline_buffer.h"
 
+static std::atomic<int> sOutputLatencyMs{0};
+
 /*
  * debug metrics copied out to Java each overlay poll (see copyDebug). MUST BE PACKED,
  * including nested structs: Java reader (AudioRenderer.audioDebug) mirrors this exact
@@ -70,16 +72,17 @@ struct AudioEngine {
     }
 
     bool start() {
+        std::lock_guard<std::mutex> decodeLock(mDecodeLock);
         std::lock_guard<std::mutex> lk(mRebuildLock);
         mRunning = true;
         if (mOutput && !mOutputActive) {
-            mTimeline->flushAndReprime();
-            mOutputActive = mOutput->start();
+            resetPipelineLocked("start/resume");
         }
         return mOutputActive;
     }
 
     void pause() {
+        std::lock_guard<std::mutex> decodeLock(mDecodeLock);
         std::lock_guard<std::mutex> lk(mRebuildLock);
         mRunning = false;
         if (mOutput && mOutputActive) {
@@ -90,9 +93,23 @@ struct AudioEngine {
 
     // touches decoder: must not run concurrently with decode()
     void stop() {
+        std::lock_guard<std::mutex> decodeLock(mDecodeLock);
+        std::lock_guard<std::mutex> lk(mRebuildLock);
         if (mOutput) mOutput->stop();
         mOutputActive = false;
         mDecoder = {};
+    }
+
+    void flush() {
+        std::lock_guard<std::mutex> decodeLock(mDecodeLock);
+        std::lock_guard<std::mutex> lk(mRebuildLock);
+        if (mApplied) resetPipelineLocked("RAOP FLUSH");
+    }
+
+    int64_t renderTime(int64_t ptsNs) {
+        std::unique_lock<std::mutex> lk(mRebuildLock, std::try_to_lock);
+        if (!lk.owns_lock() || !mTimeline || !mOutputActive) return 0;
+        return mTimeline->renderTime(ptsNs, monoNs());
     }
 
     void onFormat(int ct, int spf) {
@@ -111,6 +128,20 @@ struct AudioEngine {
                 mDebug.decode = mDecLatency.debugInfo();
                 mDebug.output = mOutput->debugInfo();
                 mDebug.decodeErrors = mDecodeErrors.load(std::memory_order_relaxed);
+                const int64_t now = monoNs();
+                if (mApplied->benchmarkLog && now - mLastSignalLogNs >= NS_PER_SEC) {
+                    mLastSignalLogNs = now;
+                    const auto signal = mTimeline->signalDebug();
+                    __android_log_print(ANDROID_LOG_INFO, LOG_SINK_TAG,
+                        "MVP_AUDIO reset=%u in=%llu decoded=%llu activeDecoded=%llu activeQueued=%llu activeOutput=%llu drop=%u underrun=%u backlogMs=%u errors=%d",
+                        mResetCount, (unsigned long long)mInputPackets.load(),
+                        (unsigned long long)signal.decodedBuffers,
+                        (unsigned long long)signal.decodedActive,
+                        (unsigned long long)signal.acceptedActive,
+                        (unsigned long long)signal.outputActive,
+                        mDebug.timeline.metrics.drops, mDebug.timeline.metrics.underruns,
+                        mDebug.timeline.backlogMs, mDebug.decodeErrors);
+                }
             }
         }
         memcpy(dst, &mDebug, sizeof(mDebug));
@@ -119,16 +150,21 @@ struct AudioEngine {
 
     // touches decoder: must not run concurrently with stop()
     void decode(const uint8_t *data, size_t len, int ct, int64_t ptsNs) {
+        std::lock_guard<std::mutex> decodeLock(mDecodeLock);
         if (!mTimeline) return;
+        mInputPackets.fetch_add(1, std::memory_order_relaxed);
         if (mPending.load(std::memory_order_relaxed)) {
             if (AudioConfig *raw = mPending.exchange(nullptr, std::memory_order_acquire)) {
                 std::unique_ptr<AudioConfig> c(raw);
                 mDecoder = {};
+                mDecLatency.reset();
                 std::lock_guard<std::mutex> lk(mRebuildLock);
                 if (mOutputActive) mOutput->stop();
                 mOutput.reset();
                 initInternals(*c);
                 mOutputActive = mRunning ? mOutput->start() : false;
+                mLastInputPtsNs = 0;
+                mLastInputMonoNs = 0;
             }
         }
 
@@ -136,6 +172,16 @@ struct AudioEngine {
         const CodecFormat wantConfig = ci >= 0 ? mQueued[ci].load(std::memory_order_acquire) : CodecFormat{};
         // transient codec-service failure does not mute entire session
         const bool changed = ct != mDecoder.ct || wantConfig != mDecoder.format;
+        const int64_t inputMonoNs = monoNs();
+        // A sender may stop sending AAC during silence. A 2s PTS step after 2s
+        // without packets is normal, not a seek. Reopening OpenSL ES in that case
+        // repeatedly pays the device's hardware warmup and can lose short sounds.
+        const bool discontinuity = ptsDiscontinuity(ptsNs, mLastInputPtsNs,
+                                                    inputMonoNs, mLastInputMonoNs);
+        if (discontinuity || (changed && mDecoder.ct != -1)) {
+            std::lock_guard<std::mutex> lk(mRebuildLock);
+            resetPipelineLocked(discontinuity ? "PTS discontinuity" : "codec switch");
+        }
         if (changed || (!mDecoder.decoder && monoNs() >= mRetryAtNs)) {
             mDecoder = {}; // release old decoder first to free resources
             mDecoder = {ct, wantConfig,
@@ -148,9 +194,30 @@ struct AudioEngine {
         }
         if (mDecoder.decoder && !mDecoder.decoder->decode(data, len, ptsNs))
             mDecodeErrors.fetch_add(1, std::memory_order_relaxed);
+        mLastInputPtsNs = ptsNs;
+        mLastInputMonoNs = inputMonoNs;
     }
 
 private:
+    // Caller holds mDecodeLock then mRebuildLock. Join the decoder writer first;
+    // old Oboe callbacks keep their own shared_ptr to the old timeline. They can
+    // never write/read the new queue or publish the new session's clock.
+    void resetPipelineLocked(const char *reason) {
+        const AudioConfig cfg = *mApplied;
+        mDecoder = {};
+        mDecLatency.reset();
+        if (mOutput) mOutput->stop();
+        mOutputActive = false;
+        mOutput.reset();
+        initInternals(cfg);
+        mLastInputPtsNs = 0;
+        mLastInputMonoNs = 0;
+        mRetryAtNs = 0;
+        mOutputActive = mRunning ? mOutput->start() : false;
+        mLog->info("MVP_SYNC audio reset=%u reason=%s output=%d", ++mResetCount,
+                   reason, mOutputActive ? 1 : 0);
+    }
+
     static int ctIndex(int ct) {
         switch (ct) {
             case CT_ALAC:    return 0;
@@ -163,9 +230,10 @@ private:
     void initInternals(const AudioConfig &cfg) {
         mDecLatency.setEnableLogging(cfg.benchmarkLog);
         mTimeline = std::make_shared<TimelineBuffer>(mSampleRate, mChannels,
-                                                     cfg.staticCushionMs, cfg.percentilePct);
+                                                     cfg.staticCushionMs, cfg.percentilePct,
+                                                     cfg.benchmarkLog);
         mOutput = AudioOutput::create(mSampleRate, mChannels, cfg.oboeBufferFrames,
-                                      cfg.lowLatency, mTimeline, mLog);
+                                      cfg.lowLatency, mTimeline, mLog, sOutputLatencyMs.load());
         mApplied = std::make_unique<AudioConfig>(cfg);
     }
 
@@ -179,6 +247,7 @@ private:
     // teardown stop() requires caller to guarantee no in-flight or future decode() calls
 
     std::mutex mRebuildLock;
+    std::mutex mDecodeLock;  // lock order: decode -> rebuild; never on audio callback
     std::shared_ptr<TimelineBuffer> mTimeline; // guarded by mRebuildLock
     std::shared_ptr<AudioOutput> mOutput;      // guarded by mRebuildLock
     bool mRunning = false;                     // requested output state, guarded by mRebuildLock
@@ -195,6 +264,11 @@ private:
     CreatedDecoder mDecoder;
     static constexpr int64_t DECODER_RETRY_NS = 1'000'000'000LL;
     int64_t mRetryAtNs = 0;  // earliest retry of failed decoder
+    int64_t mLastInputPtsNs = 0;
+    int64_t mLastInputMonoNs = 0;
+    uint32_t mResetCount = 0;
+    std::atomic<uint64_t> mInputPackets{0};
+    int64_t mLastSignalLogNs = 0; // synchronized Java debug poll, under rebuild lock
 
     // wanted config per codec, keyed by ctIndex
     static constexpr int NUM_CT = 3;
@@ -216,10 +290,11 @@ AudioEngine *audio_engine_create(std::shared_ptr<LogSink> log, int sampleRate, i
 
 extern "C" {
 
-void audio_engine_set_default_stream_values(int sampleRate, int framesPerBurst) {
+void audio_engine_set_default_stream_values(int sampleRate, int framesPerBurst, int outputLatencyMs) {
     // configures oboe's OpenSL ES backend for pre-AAudio devices
     if (sampleRate > 0) oboe::DefaultStreamValues::SampleRate = sampleRate;
     if (framesPerBurst > 0) oboe::DefaultStreamValues::FramesPerBurst = framesPerBurst;
+    sOutputLatencyMs.store(std::clamp(outputLatencyMs, 0, 500));
 }
 
 bool audio_engine_configure(AudioEngine *engine, int cushionMs, int percentilePct,
@@ -240,6 +315,14 @@ bool audio_engine_start(AudioEngine *engine) {
 
 void audio_engine_pause(AudioEngine *engine) {
     if (engine) engine->pause();
+}
+
+void audio_engine_flush(AudioEngine *engine) {
+    if (engine) engine->flush();
+}
+
+int64_t audio_engine_render_time(AudioEngine *engine, int64_t pts_ns) {
+    return engine ? engine->renderTime(pts_ns) : 0;
 }
 
 bool audio_engine_get_debug(AudioEngine *engine, void *dst, size_t dstLen) {

@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.rounded.BrightnessHigh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +48,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.github.jqssun.airplay.R
+import io.github.jqssun.airplay.BuildConfig
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import io.github.jqssun.airplay.ui.gestures.BrightnessState
 import io.github.jqssun.airplay.ui.gestures.DoubleTapIndicator
@@ -90,7 +92,30 @@ fun MainScreen(
     onSurfaceDestroyed: (android.view.Surface) -> Unit,
     onPip: () -> Unit = {}
 ) {
-    var tab by remember { mutableStateOf(Tab.OVERVIEW) }
+    if (BuildConfig.H10_DIRECT_SURFACE) {
+        val aspect by viewModel.videoAspect.collectAsState()
+        // One AndroidView stays attached across preview/fullscreen/tab/PiP changes.
+        // HiSilicon cannot change between SurfaceTexture and overlay usage at runtime.
+        Box(Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                VideoSurfaceView(onSurfaceAvailable, onSurfaceDestroyed, aspect)
+            }
+            MainScreenContent(viewModel, isInPip, onSurfaceAvailable, onSurfaceDestroyed, onPip,
+                persistentVideo = { Spacer(Modifier.fillMaxSize()) })
+        }
+    } else MainScreenContent(viewModel, isInPip, onSurfaceAvailable, onSurfaceDestroyed, onPip)
+}
+
+@Composable
+private fun MainScreenContent(
+    viewModel: MainViewModel,
+    isInPip: Boolean,
+    onSurfaceAvailable: (android.view.Surface) -> Unit,
+    onSurfaceDestroyed: (android.view.Surface) -> Unit,
+    onPip: () -> Unit,
+    persistentVideo: (@Composable () -> Unit)? = null
+) {
+    var tab by rememberSaveable { mutableStateOf(Tab.OVERVIEW) }
     var fullscreen by remember { mutableStateOf(false) }
     val pin by viewModel.pinCode.collectAsState()
     val connections by viewModel.connectionCount.collectAsState()
@@ -101,7 +126,7 @@ fun MainScreen(
     val autoFullscreen by viewModel.autoFullscreen.collectAsState()
 
     // don't use movableContentOf: moving AndroidView across subcomposition boundaries makes it crash on reparent
-    val video: @Composable () -> Unit = {
+    val video: @Composable () -> Unit = persistentVideo ?: {
         val aspect by viewModel.videoAspect.collectAsState()
         VideoSurfaceView(
             onSurfaceAvailable = onSurfaceAvailable,
@@ -772,7 +797,7 @@ private fun FullscreenVideo(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(if (BuildConfig.H10_DIRECT_SURFACE) Color.Transparent else Color.Black)
             .pointerInput(Unit) { detectTapGestures { tapTick++ } },
         contentAlignment = Alignment.Center
     ) {
@@ -1028,14 +1053,13 @@ private fun debugOverlaySections(context: Context, info: DebugInfo): List<DebugS
         info.audio?.let { a ->
             add(context.getString(R.string.debug_audio_buffer, a.backlogMs, a.tunedCushionMs))
             add(context.getString(R.string.debug_audio_glitch, a.trims, a.drops, a.silences, a.underruns, a.xrun))
-            add(context.getString(R.string.debug_audio_decode, formatDecode(a.decodeMeanUs, a.decodeMaxUs, a.decodeHeld, a.decodeErrors)))
+            add(context.getString(R.string.debug_audio_decode, formatDecode(context, a.decodeMeanUs, a.decodeMaxUs, a.decodeHeld, a.decodeErrors)))
         }
     }.takeIf { it.isNotEmpty() }?.let { add(DebugSection(context.getString(R.string.debug_section_audio), it)) }
 
     add(DebugSection(context.getString(R.string.debug_section_network), listOf(context.getString(R.string.debug_clients, info.connections))))
 }
 
-// "mean/max ms held=N", or "held=N" before first latency window lands
-private fun formatDecode(meanUs: Int, maxUs: Int, held: Int, errors: Int): String =
-    (if (meanUs == 0) "held=$held"
-    else "%.1f/%.1f ms held=%d".format(meanUs / 1000.0, maxUs / 1000.0, held)) + " errs=$errors"
+private fun formatDecode(context: Context, meanUs: Int, maxUs: Int, held: Int, errors: Int): String =
+    if (meanUs == 0) context.getString(R.string.debug_decode_idle, held, errors)
+    else context.getString(R.string.debug_decode_timing, meanUs / 1000.0, maxUs / 1000.0, held, errors)
