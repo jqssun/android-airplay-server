@@ -54,6 +54,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val autoStart by viewModel.autoStart.collectAsState()
     val bootAutoStart by viewModel.bootAutoStart.collectAsState()
     val runInBackground by viewModel.runInBackground.collectAsState()
+    val returnOnDisconnect by viewModel.returnOnDisconnect.collectAsState()
     val serverPort by viewModel.serverPort.collectAsState()
     val audioLatencyMs by viewModel.audioLatencyMs.collectAsState()
     val forceSwAlac by viewModel.forceSwAlac.collectAsState()
@@ -103,6 +104,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
             description = stringResource(R.string.setting_run_in_background_desc),
             checked = runInBackground,
             onCheckedChange = { viewModel.setRunInBackground(it) }
+        )
+
+        SettingSwitch(
+            title = stringResource(R.string.setting_return_on_disconnect),
+            description = stringResource(R.string.setting_return_on_disconnect_desc),
+            checked = returnOnDisconnect,
+            onCheckedChange = { viewModel.setReturnOnDisconnect(it) }
         )
 
         SectionHeader(stringResource(R.string.section_connection))

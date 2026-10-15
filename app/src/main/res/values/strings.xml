@@ -88,6 +88,8 @@
     <string name="setting_boot_auto_start_desc">Start the AirPlay server when the device starts</string>
     <string name="setting_run_in_background">Run in background</string>
     <string name="setting_run_in_background_desc">Keep the server running after leaving the app</string>
+    <string name="setting_return_on_disconnect">Return to previous app on disconnect</string>
+    <string name="setting_return_on_disconnect_desc">Leave the AirPlay screen when the last client disconnects</string>
 
     <!-- Settings: Connection -->
     <string name="setting_require_pin">Require PIN (Beta)</string>
