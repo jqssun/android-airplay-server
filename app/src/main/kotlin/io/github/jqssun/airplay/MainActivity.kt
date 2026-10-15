@@ -92,6 +92,27 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        // Hand the screen back to whatever was in front before the session started (launcher,
+        // streaming app, anything) once the last client disconnects, when the user has asked for
+        // it. moveTaskToBack keeps this activity and the bound service alive, so the receiver
+        // stays live and the next connection brings the task forward again through the existing
+        // REORDER_TO_FRONT path in AirPlayService.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                var hadClients = false
+                combine(viewModel.returnOnDisconnect, viewModel.connectionCount) { enabled, conns ->
+                    enabled to conns
+                }.collect { (enabled, conns) ->
+                    if (conns > 0) {
+                        hadClients = true
+                    } else if (hadClients) {
+                        hadClients = false
+                        if (enabled) moveTaskToBack(true)
+                    }
+                }
+            }
+        }
+
         // auto-enter pre-declared in pip params
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             lifecycleScope.launch {

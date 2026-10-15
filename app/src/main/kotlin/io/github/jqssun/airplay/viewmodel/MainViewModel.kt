@@ -120,6 +120,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _runInBackground = MutableStateFlow(prefs.getBoolean(Prefs.RUN_IN_BACKGROUND, Prefs.DEF_RUN_IN_BACKGROUND))
     val runInBackground: StateFlow<Boolean> = _runInBackground.asStateFlow()
 
+    private val _returnOnDisconnect = MutableStateFlow(prefs.getBoolean(Prefs.RETURN_ON_DISCONNECT, Prefs.DEF_RETURN_ON_DISCONNECT))
+    val returnOnDisconnect: StateFlow<Boolean> = _returnOnDisconnect.asStateFlow()
+
     private val _h265Enabled = MutableStateFlow(prefs.getBoolean(Prefs.H265_ENABLED, Prefs.DEF_H265_ENABLED))
     val h265Enabled: StateFlow<Boolean> = _h265Enabled.asStateFlow()
 
@@ -364,6 +367,7 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     fun setAutoStart(v: Boolean) { _autoStart.value = v; prefs.edit().putBoolean(Prefs.AUTO_START, v).apply() }
     fun setBootAutoStart(v: Boolean) { _bootAutoStart.value = v; prefs.edit().putBoolean(Prefs.BOOT_AUTO_START, v).apply() }
     fun setRunInBackground(v: Boolean) { _runInBackground.value = v; prefs.edit().putBoolean(Prefs.RUN_IN_BACKGROUND, v).apply() }
+    fun setReturnOnDisconnect(v: Boolean) { _returnOnDisconnect.value = v; prefs.edit().putBoolean(Prefs.RETURN_ON_DISCONNECT, v).apply() }
     fun setH265Enabled(v: Boolean) { _h265Enabled.value = v; prefs.edit().putBoolean(Prefs.H265_ENABLED, v).apply(); _applyByServerRestart() }
     fun setEnforceSdr(v: Boolean) { _enforceSdr.value = v; prefs.edit().putBoolean(Prefs.ENFORCE_SDR, v).apply(); _applyByServerRestart() }
     fun setKeyAllowFrameDrop(v: Boolean) {
