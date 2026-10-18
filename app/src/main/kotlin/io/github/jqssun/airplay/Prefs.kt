@@ -98,6 +98,8 @@ object Prefs {
     val REQUIRE_PIN = bool("require_pin", false, restart = true)
     val ALLOW_NEW_CONN = bool("allow_new_conn", true, restart = true)
     val AUDIO_LATENCY_MS = int("audio_latency_ms", -1, -1..1000, restart = true)
+    // holds back airplay video (hls) frames to match sound that arrives late downstream, e.g. hdmi arc soundbars
+    val VIDEO_AV_OFFSET_MS = int("video_av_offset_ms", 0, 0..1000)
     val DEBUG_ENABLED = bool("debug_enabled", false)
     val DEVELOPER_OPTIONS = bool("developer_options", false)
     val BENCHMARK_LOG = bool("benchmark_log", false, restart = true)

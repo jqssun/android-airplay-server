@@ -30,6 +30,7 @@ A fully featured free and open-source implementation of AirPlay for Android that
 - Optional PIN authentication
 - Video resolution, overscan, and frame rate control
 - Audio latency control and support for software decoder fallback
+- Video lip sync offset for soundbars and AV receivers that delay audio (e.g. over HDMI ARC)
 - Debug overlay with real-time statistics (FPS, bitrate, codec, resolution, frame count, audio volume, etc.)
 - Android native media session integration with notification controls
 - Wired secondary display for macOS/iPadOS devices over USB tethering
