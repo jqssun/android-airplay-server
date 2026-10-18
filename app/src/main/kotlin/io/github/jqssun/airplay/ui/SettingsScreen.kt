@@ -33,6 +33,8 @@ import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import kotlin.math.roundToInt
 
+private const val VIDEO_AV_OFFSET_STEP_MS = 10
+
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
     val serverName by viewModel.pref(Prefs.SERVER_NAME).collectAsState()
@@ -58,6 +60,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val runInBackground by viewModel.pref(Prefs.RUN_IN_BACKGROUND).collectAsState()
     val serverPort by viewModel.pref(Prefs.SERVER_PORT).collectAsState()
     val audioLatencyMs by viewModel.pref(Prefs.AUDIO_LATENCY_MS).collectAsState()
+    val videoAvOffsetMs by viewModel.pref(Prefs.VIDEO_AV_OFFSET_MS).collectAsState()
     val forceSwAlac by viewModel.pref(Prefs.FORCE_SW_ALAC).collectAsState()
     val forceSwAac by viewModel.pref(Prefs.FORCE_SW_AAC).collectAsState()
     val debugEnabled by viewModel.pref(Prefs.DEBUG_ENABLED).collectAsState()
@@ -198,6 +201,29 @@ fun SettingsScreen(viewModel: MainViewModel) {
             description = stringResource(R.string.setting_overscanned_desc),
             checked = overscanned,
             onCheckedChange = { viewModel.set(Prefs.OVERSCANNED, it) }
+        )
+
+        val maxOffset = Prefs.VIDEO_AV_OFFSET_MS.range.last
+        var offsetVal by remember(videoAvOffsetMs) { mutableFloatStateOf(videoAvOffsetMs.toFloat()) }
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.setting_video_av_offset)) },
+            supportingContent = {
+                Column {
+                    Text(stringResource(R.string.setting_video_av_offset_desc))
+                    Slider(
+                        value = offsetVal,
+                        onValueChange = { offsetVal = it },
+                        onValueChangeFinished = { viewModel.set(Prefs.VIDEO_AV_OFFSET_MS, offsetVal.roundToInt()) },
+                        valueRange = 0f..maxOffset.toFloat(),
+                        steps = maxOffset / VIDEO_AV_OFFSET_STEP_MS - 1,
+                        modifier = Modifier.dpadFocus().dpadAdjust(
+                            onLeft = { viewModel.set(Prefs.VIDEO_AV_OFFSET_MS, (videoAvOffsetMs - VIDEO_AV_OFFSET_STEP_MS).coerceIn(0, maxOffset)) },
+                            onRight = { viewModel.set(Prefs.VIDEO_AV_OFFSET_MS, (videoAvOffsetMs + VIDEO_AV_OFFSET_STEP_MS).coerceIn(0, maxOffset)) }
+                        )
+                    )
+                }
+            },
+            trailingContent = { Text(stringResource(R.string.audio_delay_value, offsetVal.roundToInt())) }
         )
 
         SectionHeader(stringResource(R.string.section_decode))

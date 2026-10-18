@@ -12,7 +12,11 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.VideoSize
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.ForwardingAudioSink
 
 // rate is 0 while buffering; speed is the configured rate regardless of pause state
 // native reads the effective rate, overlay reads playWhenReady + speed + skipSilence
@@ -33,6 +37,9 @@ class AirPlayVideoPlayer(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var player: ExoPlayer? = null
     private var pendingSurface: Surface? = null
+
+    // lip sync: how far to hold frames back behind the audio clock; read live, so changes apply mid-playback
+    @Volatile var avOffsetMs: Int = 0
 
     var onPlaybackInfo: ((PlaybackSnapshot) -> Unit)? = null
     var onVideoSize: ((width: Int, height: Int, aspect: Float) -> Unit)? = null
@@ -71,7 +78,7 @@ class AirPlayVideoPlayer(private val context: Context) {
     fun play(location: String, startPositionSeconds: Float) = mainHandler.post {
         // recycling must not report the stopped sentinel: senders poll right after /play
         _stopInternal(reportStopped = false)
-        val p = ExoPlayer.Builder(context).build().also {
+        val p = ExoPlayer.Builder(context, _renderersFactory()).build().also {
             it.addListener(_listener)
             pendingSurface?.let { s -> it.setVideoSurface(s) }
         }
@@ -178,8 +185,29 @@ class AirPlayVideoPlayer(private val context: Context) {
         )
     }
 
+    // video frames are released against the audio clock, so reporting audio as behind holds the picture back
+    @androidx.annotation.OptIn(UnstableApi::class)
+    private fun _renderersFactory() = object : DefaultRenderersFactory(context) {
+        override fun buildAudioSink(
+            context: Context,
+            enableFloatOutput: Boolean,
+            enableAudioTrackPlaybackParams: Boolean,
+        ): AudioSink? = super.buildAudioSink(context, enableFloatOutput, enableAudioTrackPlaybackParams)
+            ?.let { OffsetAudioSink(it) { avOffsetMs * 1000L } }
+    }
+
     companion object {
         private const val TAG = "AirPlayVideoPlayer"
         private const val REPORT_INTERVAL_MS = 250L
+    }
+}
+
+// only shifts the reported position; the renderer clamps backward steps, so raising the offset mid-play
+// holds the picture until audio catches up and lowering it drops frames to catch up
+@UnstableApi
+private class OffsetAudioSink(sink: AudioSink, private val offsetUs: () -> Long) : ForwardingAudioSink(sink) {
+    override fun getCurrentPositionUs(sourceEnded: Boolean): Long {
+        val positionUs = super.getCurrentPositionUs(sourceEnded)
+        return if (positionUs == AudioSink.CURRENT_POSITION_NOT_SET) positionUs else positionUs - offsetUs()
     }
 }

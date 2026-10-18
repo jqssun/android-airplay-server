@@ -36,6 +36,7 @@ import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.changes
 import io.github.jqssun.airplay.get
+import io.github.jqssun.airplay.observe
 import io.github.jqssun.airplay.hasLocalNetwork
 import io.github.jqssun.airplay.realDisplaySize
 import io.github.jqssun.airplay.audio.DacpController
@@ -333,6 +334,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             prefs.audioConfigFlow()
                 .debounce(AUDIO_CONFIG_DEBOUNCE_MS)
                 .collect { audioRenderer.updateConfig(it) }
+        }
+        lifecycleScope.launch {
+            prefs.observe { this[Prefs.VIDEO_AV_OFFSET_MS] }
+                .collect { airPlayVideoPlayer.avOffsetMs = it }
         }
         lifecycleScope.launch {
             prefs.changes()
