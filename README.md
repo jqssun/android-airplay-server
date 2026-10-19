@@ -27,6 +27,7 @@ A fully featured free and open-source implementation of AirPlay for Android that
 - Music playback with track information, cover art, and remote controls
 - Support for Android TV with directional pad navigation and seeking controls
 - Support for Picture-in-Picture, automatic resolution and mode switching
+- Optional return to the previous app when the last sender disconnects
 - Optional PIN authentication
 - Video resolution, overscan, and frame rate control
 - Audio latency control and support for software decoder fallback

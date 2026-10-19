@@ -113,5 +113,6 @@ object Prefs {
     val ADVERTISE_MIRRORING = bool("advertise_mirroring", true, restart = true)
     val ADVERTISE_AUDIO = bool("advertise_audio", true, restart = true)
     val LAUNCH_ON_CONNECT = bool("launch_on_connect", true)
+    val RETURN_ON_DISCONNECT = bool("return_on_disconnect", true)
     val USB_ONLY = bool("usb_only", false, restart = true)
 }

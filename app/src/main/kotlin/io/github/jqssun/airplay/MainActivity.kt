@@ -9,7 +9,11 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
 import android.util.Rational
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -38,6 +42,13 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private var service: AirPlayService? = null
     val isInPip = mutableStateOf(false)
+    // receiver-launched session, not a manual open
+    private var sessionSummoned = false
+    private var summonPending = false
+    private var wasStopped = false
+    private var returnPending = false
+    private var returnDeadline = 0L
+    private val retreatHandler = Handler(Looper.getMainLooper())
     private val logCallback: (String) -> Unit = { viewModel.addLog(it) }
     private val pinCallback: (String?) -> Unit = { viewModel.showPin(it) }
 
@@ -64,6 +75,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val summoned = intent?.getBooleanExtra(AirPlayService.EXTRA_SESSION_SUMMON, false) == true
+        sessionSummoned = summoned
+        summonPending = summoned
+        Log.i(SUMMON_TAG, "create: summon=$summoned")
+        savedInstanceState?.let { state ->
+            sessionSummoned = state.getBoolean(STATE_SESSION_SUMMONED, sessionSummoned)
+            if (state.getBoolean(STATE_RETURN_PENDING, false) && sessionSummoned) {
+                val remaining = (state.getLong(STATE_RETURN_DEADLINE, 0L) - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+                Log.i(SUMMON_TAG, "restore: returning in ${remaining}ms")
+                _armReturn(remaining)
+            }
+        }
 
         val missing = buildList {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !_granted(Manifest.permission.POST_NOTIFICATIONS)) {
@@ -95,6 +118,20 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                var previous: Int? = null
+                viewModel.connectionCount.collect { count ->
+                    val was = previous
+                    previous = count
+                    when {
+                        was != null && was > 0 && count == 0 -> _scheduleReturnToPrevious()
+                        count > 0 -> _cancelReturnToPrevious("new sender inside grace, staying")
+                    }
+                }
+            }
+        }
+
         // auto-enter pre-declared in pip params
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             lifecycleScope.launch {
@@ -122,6 +159,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val summoned = intent.getBooleanExtra(AirPlayService.EXTRA_SESSION_SUMMON, false)
+        Log.i(SUMMON_TAG, "new intent: summon=$summoned")
+        if (summoned) {
+            sessionSummoned = true
+            summonPending = true
+        }
+    }
+
     private fun _granted(permission: String) =
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
@@ -136,6 +184,45 @@ class MainActivity : ComponentActivity() {
         if (service?.serverState?.value == AirPlayService.ServerState.RUNNING) {
             startService(Intent(this, AirPlayService::class.java))
         }
+    }
+
+    private fun _scheduleReturnToPrevious() {
+        if (!sessionSummoned) {
+            Log.i(SUMMON_TAG, "session ended: not summoned, staying")
+            return
+        }
+        if (!viewModel.pref(Prefs.RETURN_ON_DISCONNECT).value) {
+            Log.i(SUMMON_TAG, "session ended: setting off, staying")
+            return
+        }
+        Log.i(SUMMON_TAG, "session ended: returning in ${SESSION_END_RETURN_GRACE_MS}ms")
+        _armReturn(SESSION_END_RETURN_GRACE_MS)
+    }
+
+    private fun _armReturn(delayMs: Long) {
+        retreatHandler.removeCallbacksAndMessages(null)
+        returnPending = true
+        returnDeadline = SystemClock.elapsedRealtime() + delayMs
+        retreatHandler.postDelayed({
+            val ready = returnPending && sessionSummoned && !isFinishing && !isDestroyed &&
+                viewModel.connectionCount.value == 0 &&
+                viewModel.pref(Prefs.RETURN_ON_DISCONNECT).value
+            if (ready) {
+                returnPending = false
+                returnDeadline = 0L
+                sessionSummoned = false
+                Log.i(SUMMON_TAG, "moving task to back")
+                moveTaskToBack(true)
+            }
+        }, delayMs)
+    }
+
+    private fun _cancelReturnToPrevious(reason: String) {
+        if (!returnPending) return
+        returnPending = false
+        returnDeadline = 0L
+        Log.i(SUMMON_TAG, reason)
+        retreatHandler.removeCallbacksAndMessages(null)
     }
 
     private fun _syncLocalNetwork(requested: Boolean = false) {
@@ -159,6 +246,25 @@ class MainActivity : ComponentActivity() {
         } else {
             permissions.launch(arrayOf(Manifest.permission.ACCESS_LOCAL_NETWORK))
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        isOnScreen = true
+        Log.i(SUMMON_TAG, "resume: summonPending=$summonPending sessionSummoned=$sessionSummoned wasStopped=$wasStopped")
+        // a manual resume clears a stale summon
+        if (!summonPending && wasStopped) {
+            sessionSummoned = false
+            _cancelReturnToPrevious("manual open inside grace, staying")
+        }
+        summonPending = false
+        wasStopped = false
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isOnScreen = false
+        summonPending = false
     }
 
     override fun onStart() {
@@ -199,6 +305,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        wasStopped = true
         // never stop mid-session
         if (!viewModel.pref(Prefs.RUN_IN_BACKGROUND).value && !isChangingConfigurations &&
             viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&
@@ -207,12 +314,30 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(STATE_SESSION_SUMMONED, sessionSummoned)
+        outState.putBoolean(STATE_RETURN_PENDING, returnPending)
+        outState.putLong(STATE_RETURN_DEADLINE, returnDeadline)
+    }
+
     override fun onDestroy() {
         service?.let {
             if (it.logCallback === logCallback) it.logCallback = null
             if (it.pinCallback === pinCallback) it.pinCallback = null
         }
         unbindService(connection)
+        retreatHandler.removeCallbacksAndMessages(null)
         super.onDestroy()
+    }
+
+    companion object {
+        // hold off so a quick stop/play does not flash the screen below
+        private const val SESSION_END_RETURN_GRACE_MS = 2_000L
+        private const val STATE_SESSION_SUMMONED = "session_summoned"
+        private const val STATE_RETURN_PENDING = "return_pending"
+        private const val STATE_RETURN_DEADLINE = "return_deadline"
+        private const val SUMMON_TAG = "AirPlaySummon"
+        @Volatile var isOnScreen = false
     }
 }
