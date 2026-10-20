@@ -5,6 +5,10 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.annotation.OptIn as AndroidxOptIn
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
@@ -516,6 +520,13 @@ fun MainScreen(
             onPip = onPip
         )
     } else {
+        // TV remotes: Back from anywhere in a tab jumps to the tab bar (reachable otherwise only by
+        // scrolling to the very bottom); Back on the tab bar itself behaves as before.
+        val tabFocus = remember { Tab.entries.associateWith { FocusRequester() } }
+        var navHasFocus by remember { mutableStateOf(false) }
+        BackHandler(enabled = !navHasFocus) {
+            runCatching { tabFocus.getValue(tab).requestFocus() }
+        }
         Scaffold(
             bottomBar = {
                 Column {
@@ -524,14 +535,14 @@ fun MainScreen(
                         visible = audioOnly && connections > 0 && tab != Tab.OVERVIEW,
                         onClick = { tab = Tab.OVERVIEW }
                     )
-                    NavigationBar {
+                    NavigationBar(modifier = Modifier.onFocusChanged { navHasFocus = it.hasFocus }) {
                         Tab.entries.forEach { t ->
                             NavigationBarItem(
                                 selected = tab == t,
                                 onClick = { tab = t },
                                 icon = { Icon(t.icon, null) },
                                 label = { Text(stringResource(t.labelRes)) },
-                                modifier = Modifier.dpadFocus()
+                                modifier = Modifier.dpadFocus().focusRequester(tabFocus.getValue(t))
                             )
                         }
                     }
