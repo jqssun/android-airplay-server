@@ -17,8 +17,13 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -109,7 +114,20 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            AirPlayTheme {
+            val theme by viewModel.pref(Prefs.THEME).collectAsState()
+            val dark = when (theme) {
+                Prefs.LIGHT -> false
+                Prefs.DARK -> true
+                else -> isSystemInDarkTheme()
+            }
+            // enableEdgeToEdge only tracks the system setting, so keep bar icons in step with the override
+            LaunchedEffect(dark) {
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !dark
+                    isAppearanceLightNavigationBars = !dark
+                }
+            }
+            AirPlayTheme(darkTheme = dark) {
                 MainScreen(
                     viewModel = viewModel,
                     isInPip = isInPip.value,

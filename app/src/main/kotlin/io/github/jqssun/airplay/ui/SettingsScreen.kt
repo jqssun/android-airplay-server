@@ -52,6 +52,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val launchOnConnect by viewModel.pref(Prefs.LAUNCH_ON_CONNECT).collectAsState()
     val maxFps by viewModel.pref(Prefs.MAX_FPS).collectAsState()
     val overscanned by viewModel.pref(Prefs.OVERSCANNED).collectAsState()
+    val theme by viewModel.pref(Prefs.THEME).collectAsState()
     val requirePin by viewModel.pref(Prefs.REQUIRE_PIN).collectAsState()
     val allowNewConn by viewModel.pref(Prefs.ALLOW_NEW_CONN).collectAsState()
     val usbOnly by viewModel.pref(Prefs.USB_ONLY).collectAsState()
@@ -207,6 +208,18 @@ fun SettingsScreen(viewModel: MainViewModel) {
             description = stringResource(R.string.setting_overscanned_desc),
             checked = overscanned,
             onCheckedChange = { viewModel.set(Prefs.OVERSCANNED, it) }
+        )
+
+        SettingChips(
+            title = stringResource(R.string.setting_theme),
+            description = stringResource(R.string.setting_theme_desc),
+            value = theme,
+            options = listOf(
+                Prefs.AUTO to stringResource(R.string.chip_system),
+                Prefs.LIGHT to stringResource(R.string.chip_light),
+                Prefs.DARK to stringResource(R.string.chip_dark),
+            ),
+            onValueChange = { viewModel.set(Prefs.THEME, it) }
         )
 
         SectionHeader(stringResource(R.string.section_decode))
