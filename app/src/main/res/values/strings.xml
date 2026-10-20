@@ -85,6 +85,7 @@
 
     <!-- Settings: Server -->
     <string name="setting_server_name">Server name</string>
+    <string name="setting_server_name_desc">Leave empty to use the device name</string>
     <string name="setting_server_port">Server port</string>
     <string name="setting_auto_start">Start server automatically</string>
     <string name="setting_auto_start_desc">Start the AirPlay server when the app launches</string>

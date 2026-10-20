@@ -50,6 +50,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.R
+import io.github.jqssun.airplay.deviceName
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import io.github.jqssun.airplay.ui.gestures.BrightnessState
 import io.github.jqssun.airplay.ui.gestures.DoubleTapIndicator
@@ -603,6 +604,8 @@ private fun OverviewContent(
     val grant = state != ServerState.RUNNING && localNetwork != LocalNetworkAccess.GRANTED
     val connections by viewModel.connectionCount.collectAsState()
     val serverName by viewModel.pref(Prefs.SERVER_NAME).collectAsState()
+    val ctx = LocalContext.current
+    val defaultName = remember { ctx.deviceName() }
     val videoResolution by viewModel.videoResolution.collectAsState()
     val idlePreview by viewModel.pref(Prefs.IDLE_PREVIEW).collectAsState()
     val mirroringActive by viewModel.mirroringActive.collectAsState()
@@ -719,7 +722,7 @@ private fun OverviewContent(
                 ) {
                     Column {
                         Text(
-                            text = serverName,
+                            text = serverName.ifBlank { defaultName },
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
