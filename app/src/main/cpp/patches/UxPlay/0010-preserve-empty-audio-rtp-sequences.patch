@@ -1,0 +1,64 @@
+Backport FDH2/UxPlay ec203121355220dd90278a369eeabb0b8ba4f14a:
+"send no-data audio packets to buffer (preserve seqnum sequence)".
+Keep the pinned revision and its 256-packet buffer. Adapt the decrypt-return
+assertion to this revision; preserve the upstream marker-size guard.
+
+diff --git a/lib/raop_buffer.c b/lib/raop_buffer.c
+--- a/lib/raop_buffer.c
++++ b/lib/raop_buffer.c
+@@ -173,7 +173,7 @@
+         return -1;
+     }
+     /* before time is synchronized, some empty data packets are sent */
+-    if (datalen == 12 || (datalen == 16 && !memcmp(&data[12], empty_packet_marker, 4))) {
++    if (datalen == 12) {
+         return 0;
+     }
+     int payload_size = datalen - 12;
+@@ -209,9 +209,14 @@
+     entry->filled = 1;
+ 
+     entry->payload_data = malloc(payload_size);
+-    int decrypt_ret = raop_buffer_decrypt(raop_buffer, data, entry->payload_data, payload_size, &entry->payload_size);
+-    assert(decrypt_ret >= 0);
+-    assert((int) entry->payload_size <= payload_size);
++    if (datalen == 16 && !memcmp(&data[12], empty_packet_marker, 4)) {
++        memcpy(entry->payload_data, &data[12], payload_size);
++        entry->payload_size = payload_size;
++    } else {
++        int decrypt_ret = raop_buffer_decrypt(raop_buffer, data, entry->payload_data, payload_size, &entry->payload_size);
++        assert(decrypt_ret >= 0);
++        assert((int) entry->payload_size <= payload_size);
++    }
+ 
+     /* Update the raop_buffer seqnums */
+     if (raop_buffer->is_empty) {
+diff --git a/lib/raop_rtp.c b/lib/raop_rtp.c
+--- a/lib/raop_rtp.c
++++ b/lib/raop_rtp.c
+@@ -588,10 +588,10 @@
+                  raop_rtp->initial_sync = true;
+             }	    
+ 
+-            if (packetlen == 12 ||(packetlen == 16 && memcmp(packet + 12, no_data_marker, 4) == 0)) {
+-                /* this is a "no data" packet */
+-	        /* the first such packet could be used to provide the initial rtptime and seqnum formerly given in the RECORD request */
+-                continue;
++            /* Older clients may omit the four-byte no-data marker. */
++            if (packetlen == 12) {
++                memcpy(packet + 12, no_data_marker, 4);
++                packetlen = 16;
+             }
+ 	    
+             if (raop_rtp->ct == 2 && packetlen == 44)  continue;   /* ignore the ALAC packets with format information only. */
+@@ -610,6 +610,10 @@
+                 uint32_t rtp_timestamp = 0;
+ 
+                 while ((payload = raop_buffer_dequeue(raop_rtp->buffer, &payload_size, &rtp_timestamp, &seqnum, no_resend))) {
++                    if (payload_size == 4 && !memcmp(payload, no_data_marker, 4)) {
++                        free(payload);
++                        continue;
++                    }
+                     audio_decode_struct audio_data; 
+                     audio_data.rtp_time = rtp_timestamp;
+                     audio_data.seqnum = seqnum;
