@@ -624,6 +624,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onDestroy() {
+        _releaseAudioFocus()
         stopServer()
         dacpPlayer.release()
         mediaReceiver?.let {
@@ -793,10 +794,46 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _clientVolDir = 0
     }
 
+    private var _audioFocus: Any? = null
+
+    /** Asks other players (Spotify, YouTube Music...) to pause while a sender is connected. */
+    private fun _takeAudioFocus() {
+        if (!prefs[Prefs.PAUSE_OTHER_AUDIO] || _audioFocus != null) return
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            val req = android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build()
+                )
+                .setOnAudioFocusChangeListener({ }, _mainHandler)
+                .build()
+            if (audioManager.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) _audioFocus = req
+        } else {
+            val l = AudioManager.OnAudioFocusChangeListener { }
+            @Suppress("DEPRECATION")
+            if (audioManager.requestAudioFocus(l, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+                == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) _audioFocus = l
+        }
+    }
+
+    private fun _releaseAudioFocus() {
+        val f = _audioFocus ?: return
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O && f is android.media.AudioFocusRequest) {
+            audioManager.abandonAudioFocusRequest(f)
+        } else if (f is AudioManager.OnAudioFocusChangeListener) {
+            @Suppress("DEPRECATION")
+            audioManager.abandonAudioFocus(f)
+        }
+        _audioFocus = null
+    }
+
     override fun onConnectionInit() {
         val firstConnection = _connectionCount.value == 0
         _connectionCount.value++
         log("Sender connected (${_connectionCount.value})")
+        if (firstConnection) _mainHandler.post { _takeAudioFocus() }
         if (firstConnection && shouldLaunchOnConnect()) launchMainActivity()
     }
 
@@ -827,6 +864,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             mediaSession?.isActive = false
             _refreshDacpPlayer()
             _updateMediaNotification()
+            _mainHandler.post { _releaseAudioFocus() }
         }
         log("Sender disconnected (${_connectionCount.value})")
     }

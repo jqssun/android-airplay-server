@@ -91,6 +91,8 @@
     <string name="setting_boot_auto_start">Start server at boot</string>
     <string name="setting_boot_auto_start_desc">Start the AirPlay server when the device starts</string>
     <string name="setting_run_in_background">Run in background</string>
+    <string name="setting_pause_other_audio">Pause other apps on connect</string>
+    <string name="setting_pause_other_audio_desc">Pauses Spotify and other players while a sender is connected</string>
     <string name="setting_run_in_background_desc">Keep the server running after leaving the app</string>
 
     <!-- Settings: Connection -->

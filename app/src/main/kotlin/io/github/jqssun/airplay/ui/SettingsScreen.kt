@@ -58,6 +58,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val autoStart by viewModel.pref(Prefs.AUTO_START).collectAsState()
     val bootAutoStart by viewModel.pref(Prefs.BOOT_AUTO_START).collectAsState()
     val runInBackground by viewModel.pref(Prefs.RUN_IN_BACKGROUND).collectAsState()
+    val pauseOtherAudio by viewModel.pref(Prefs.PAUSE_OTHER_AUDIO).collectAsState()
     val serverPort by viewModel.pref(Prefs.SERVER_PORT).collectAsState()
     val audioLatencyMs by viewModel.pref(Prefs.AUDIO_LATENCY_MS).collectAsState()
     val forceSwAlac by viewModel.pref(Prefs.FORCE_SW_ALAC).collectAsState()
@@ -114,6 +115,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
             description = stringResource(R.string.setting_run_in_background_desc),
             checked = runInBackground,
             onCheckedChange = { viewModel.set(Prefs.RUN_IN_BACKGROUND, it) }
+        )
+
+        SettingSwitch(
+            title = stringResource(R.string.setting_pause_other_audio),
+            description = stringResource(R.string.setting_pause_other_audio_desc),
+            checked = pauseOtherAudio,
+            onCheckedChange = { viewModel.set(Prefs.PAUSE_OTHER_AUDIO, it) }
         )
 
         SectionHeader(stringResource(R.string.section_connection))
