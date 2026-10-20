@@ -33,6 +33,7 @@ class AirPlayVideoPlayer(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var player: ExoPlayer? = null
     private var pendingSurface: Surface? = null
+    private var _retriedWithH264 = false
     private var clientGain = 1f
 
     var onPlaybackInfo: ((PlaybackSnapshot) -> Unit)? = null
@@ -49,7 +50,19 @@ class AirPlayVideoPlayer(private val context: Context) {
 
     private val _listener = object : Player.Listener {
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-            Log.w(TAG, "playback error", error)
+            Log.w(TAG, "playback error (${error.errorCodeName})", error)
+            // Decoder errors (4xxx): many streams offer HEVC at high frame rates that TV box decoders
+            // reject, next to H.264 variants they play fine. Retry once preferring H.264 before giving up.
+            val p = player
+            if (p != null && !_retriedWithH264 && error.errorCode in 4000..4999) {
+                _retriedWithH264 = true
+                Log.i(TAG, "retrying with H.264 preferred")
+                p.trackSelectionParameters = p.trackSelectionParameters.buildUpon()
+                    .setPreferredVideoMimeTypes(androidx.media3.common.MimeTypes.VIDEO_H264)
+                    .build()
+                p.prepare()
+                return
+            }
             onEnded?.invoke()
         }
         override fun onPlaybackStateChanged(state: Int) {
@@ -72,7 +85,11 @@ class AirPlayVideoPlayer(private val context: Context) {
     fun play(location: String, startPositionSeconds: Float) = mainHandler.post {
         // recycling must not report the stopped sentinel: senders poll right after /play
         _stopInternal(reportStopped = false)
-        val p = ExoPlayer.Builder(context).build().also {
+        _retriedWithH264 = false
+        // Decoder fallback: if the preferred decoder fails to start, try the next one for the format.
+        @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+        val renderers = androidx.media3.exoplayer.DefaultRenderersFactory(context).setEnableDecoderFallback(true)
+        val p = ExoPlayer.Builder(context, renderers).build().also {
             it.addListener(_listener)
             pendingSurface?.let { s -> it.setVideoSurface(s) }
             it.volume = clientGain
