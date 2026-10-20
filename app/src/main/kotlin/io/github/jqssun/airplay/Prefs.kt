@@ -55,6 +55,7 @@ object Prefs {
     const val NAME = "settings"
     const val AUTO = "auto"; const val ON = "on"; const val OFF = "off"
     const val PORTRAIT = "portrait"; const val LANDSCAPE = "landscape"
+    const val LIGHT = "light"; const val DARK = "dark"
     const val FALLBACK_MAC_ADDRESS = "fallback_mac_address"
     val ADAPTIVE_PERCENTILES = intArrayOf(80, 85, 90, 95, 99)
     private val SIZE = Regex("[1-9]\\d{0,4}x[1-9]\\d{0,4}")
@@ -100,6 +101,8 @@ object Prefs {
     val RESOLUTION = str("resolution", AUTO, restart = true) { it in setOf(AUTO, PORTRAIT, LANDSCAPE) || SIZE.matches(it) }
     val MAX_FPS = int("max_fps", 60, 1..Int.MAX_VALUE, restart = true)
     val OVERSCANNED = bool("overscanned", false, restart = true)
+    // auto follows the system; manual override for devices that never report dark mode (e.g. Fire OS)
+    val THEME = str("theme", AUTO) { it in setOf(AUTO, LIGHT, DARK) }
     val REQUIRE_PIN = bool("require_pin", false, restart = true)
     val ALLOW_NEW_CONN = bool("allow_new_conn", true, restart = true)
     val AUDIO_LATENCY_MS = int("audio_latency_ms", -1, -1..1000, restart = true)

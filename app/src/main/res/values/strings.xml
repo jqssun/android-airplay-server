@@ -104,6 +104,8 @@
     <string name="setting_idle_preview_desc">Show video surface while waiting for a connection</string>
     <string name="setting_auto_fullscreen">Enter fullscreen automatically</string>
     <string name="setting_auto_fullscreen_desc">Enter fullscreen when a sender connects</string>
+    <string name="setting_theme">Theme</string>
+    <string name="setting_theme_desc">System follows the device dark mode setting</string>
     <string name="setting_keep_screen_on">Keep screen on</string>
     <string name="setting_keep_screen_on_desc">Prevent sleeping while a sender is connected</string>
     <string name="setting_advertise_video">Advertise AirPlay video support</string>
@@ -137,6 +139,9 @@
     <string name="chip_custom">Custom</string>
     <string name="chip_device_portrait">Portrait</string>
     <string name="chip_device_landscape">Landscape</string>
+    <string name="chip_system">System</string>
+    <string name="chip_light">Light</string>
+    <string name="chip_dark">Dark</string>
 
     <!-- Settings: Decode -->
     <string name="setting_h265">H.265 (HEVC)</string>
