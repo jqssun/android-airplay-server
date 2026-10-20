@@ -30,6 +30,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.appSettingsIntent
+import io.github.jqssun.airplay.deviceName
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
@@ -92,7 +93,9 @@ fun SettingsScreen(viewModel: MainViewModel) {
         SettingTextField(
             label = stringResource(R.string.setting_server_name),
             value = serverName,
-            onCommit = { viewModel.set(Prefs.SERVER_NAME, it) }
+            onCommit = { viewModel.set(Prefs.SERVER_NAME, it) },
+            description = stringResource(R.string.setting_server_name_desc),
+            placeholder = LocalContext.current.deviceName()
         )
 
         SettingTextField(
@@ -567,7 +570,8 @@ private fun SettingTextField(
     value: String,
     onCommit: (String) -> Unit,
     description: String? = null,
-    range: IntRange? = null
+    range: IntRange? = null,
+    placeholder: String? = null
 ) {
     var text by remember(value) { mutableStateOf(value) }
     val valid = range == null || text.toIntOrNull()?.let { it in range } == true
@@ -578,6 +582,7 @@ private fun SettingTextField(
         value = text,
         onValueChange = { text = if (range == null) it else it.filter { c -> c.isDigit() }.take(6) },
         label = { Text(label) },
+        placeholder = placeholder?.let { { Text(it) } },
         supportingText = description?.let { { Text(it) } },
         singleLine = true,
         isError = !valid,
