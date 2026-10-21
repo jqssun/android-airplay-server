@@ -124,6 +124,14 @@ requests (as XML) and the connection setup. The interesting part is the
 `/info` response, which contains the `displays` array the extended desktop is
 built from.
 
+A helper script sets the receiver up and collects the interesting log lines:
+
+```bash
+tools/verify-screen-extension.sh install   # build, install and configure
+tools/verify-screen-extension.sh watch     # follow the log
+tools/verify-screen-extension.sh status    # the panel's display mode
+```
+
 ## Known limitations
 
 - **FairPlay DRM** is not supported, so protected content is not shown.
