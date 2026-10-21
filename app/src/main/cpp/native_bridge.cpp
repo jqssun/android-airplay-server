@@ -40,6 +40,9 @@ static void _log_callback(void *cls, int level, const char *msg) {
     else if (level == LOGGER_WARNING) prio = ANDROID_LOG_WARN;
     else if (level <= LOGGER_INFO) prio = ANDROID_LOG_INFO;
     __android_log_print(prio, TAG, "%s", msg);
+    /* the protocol diagnostics are only interesting in the app's log window */
+    server_ctx_t *ctx = (server_ctx_t *) cls;
+    if (ctx && ctx->log) ctx->log->raw(prio, msg);
 }
 
 extern "C"
@@ -69,7 +72,7 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
     ctx->cb_ctx.raop = ctx->raop;
 
     raop_set_log_level(ctx->raop, LOGGER_ERR);
-    raop_set_log_callback(ctx->raop, _log_callback, NULL);
+    raop_set_log_callback(ctx->raop, _log_callback, ctx);
 
     const char *keyfile_c = env->GetStringUTFChars(keyFile, NULL);
     const char *name_c = env->GetStringUTFChars(name, NULL);

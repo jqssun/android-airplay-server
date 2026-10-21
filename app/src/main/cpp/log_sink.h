@@ -47,6 +47,26 @@ public:
         va_list ap; va_start(ap, fmt); vemit(ANDROID_LOG_ERROR, fmt, ap); va_end(ap);
     }
 
+    // a message that is not formatted and not truncated, used for the
+    // protocol diagnostics (they are longer than the usual log lines)
+    void raw(int prio, const char *msg) {
+        if (!msg) return;
+        __android_log_print(prio, LOG_SINK_TAG, "%s", msg);
+        if (!mVm || !mObj || !mMethod) return;
+
+        JNIEnv *env = nullptr;
+        bool attached = false;
+        if (mVm->GetEnv((void **)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+            if (mVm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
+            attached = true;
+        }
+        jstring s = env->NewStringUTF(msg);
+        env->CallVoidMethod(mObj, mMethod, s);
+        if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+        env->DeleteLocalRef(s);
+        if (attached) mVm->DetachCurrentThread();
+    }
+
 private:
     void vemit(int prio, const char *fmt, va_list ap) {
         char buf[256];
