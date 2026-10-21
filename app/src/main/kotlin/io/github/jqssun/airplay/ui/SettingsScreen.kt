@@ -596,11 +596,21 @@ private fun SettingResolution(
     var width by remember(value) { mutableStateOf(if (isPreset) "" else parts[0]) }
     var height by remember(value) { mutableStateOf(if (isPreset) "" else parts.getOrElse(1) { "" }) }
     val widthFocus = remember { FocusRequester() }
+    val heightFocus = remember { FocusRequester() }
 
     fun cancel() {
         editing = false
         width = if (isPreset) "" else parts[0]
         height = if (isPreset) "" else parts.getOrElse(1) { "" }
+    }
+
+    fun commit() {
+        val w = width.toIntOrNull()
+        val h = height.toIntOrNull()
+        if (w != null && w > 0 && h != null && h > 0) {
+            onValueChange("${w}x${h}")
+            editing = false
+        }
     }
 
     ListItem(
@@ -650,11 +660,18 @@ private fun SettingResolution(
                                 .weight(1f)
                                 .focusRequester(widthFocus)
                                 .onPreviewKeyEvent { event ->
-                                    if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
-                                        cancel()
-                                        true
-                                    } else {
-                                        false
+                                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                    when (event.key) {
+                                        Key.Escape -> {
+                                            cancel()
+                                            true
+                                        }
+                                        // the ok button moves on to the height
+                                        Key.Enter, Key.NumPadEnter -> {
+                                            runCatching { heightFocus.requestFocus() }
+                                            true
+                                        }
+                                        else -> false
                                     }
                                 }
                         )
@@ -667,22 +684,23 @@ private fun SettingResolution(
                                 keyboardType = KeyboardType.Number,
                                 imeAction = ImeAction.Done
                             ),
-                            keyboardActions = doneAndHide {
-                                val w = width.toIntOrNull()
-                                val h = height.toIntOrNull()
-                                if (w != null && w > 0 && h != null && h > 0) {
-                                    onValueChange("${w}x${h}")
-                                    editing = false
-                                }
-                            },
+                            keyboardActions = doneAndHide { commit() },
                             modifier = Modifier
                                 .weight(1f)
+                                .focusRequester(heightFocus)
                                 .onPreviewKeyEvent { event ->
-                                    if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
-                                        cancel()
-                                        true
-                                    } else {
-                                        false
+                                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                    when (event.key) {
+                                        Key.Escape -> {
+                                            cancel()
+                                            true
+                                        }
+                                        // the ok button applies the value
+                                        Key.Enter, Key.NumPadEnter -> {
+                                            commit()
+                                            true
+                                        }
+                                        else -> false
                                     }
                                 }
                         )
@@ -755,12 +773,22 @@ private fun SettingChipField(
                             .fillMaxWidth()
                             .focusRequester(fieldFocus)
                             .onPreviewKeyEvent { event ->
-                                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
-                                    editing = false
-                                    text = ""
-                                    true
-                                } else {
-                                    false
+                                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                when (event.key) {
+                                    Key.Escape -> {
+                                        editing = false
+                                        text = ""
+                                        true
+                                    }
+                                    // the ok button of the remote applies the value
+                                    Key.Enter, Key.NumPadEnter -> {
+                                        if (text.isNotBlank()) {
+                                            onValueChange(text)
+                                            editing = false
+                                        }
+                                        true
+                                    }
+                                    else -> false
                                 }
                             }
                     )

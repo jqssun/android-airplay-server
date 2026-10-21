@@ -99,11 +99,19 @@ fun EditableValue(
                 .padding(bottom = 8.dp)
                 .focusRequester(fieldFocus)
                 .onPreviewKeyEvent { event ->
-                    if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
-                        close(commit = false)
-                        true
-                    } else {
-                        false
+                    if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                    when (event.key) {
+                        // escape leaves the editor without changing anything
+                        Key.Escape -> {
+                            close(commit = false)
+                            true
+                        }
+                        // the ok button of the remote applies the value
+                        Key.Enter, Key.NumPadEnter -> {
+                            close(commit = true)
+                            true
+                        }
+                        else -> false
                     }
                 }
         )
