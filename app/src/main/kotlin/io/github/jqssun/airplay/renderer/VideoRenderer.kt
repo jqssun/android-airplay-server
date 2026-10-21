@@ -310,6 +310,11 @@ class VideoRenderer(ctx: Context) {
         }
     }
 
+    // a new session starts with its own geometry and its own keyframes
+    fun resetSession() = synchronized(lock) {
+        stopCodec()
+    }
+
     fun release() = synchronized(lock) {
         stopCodec()
         pipeline.release()

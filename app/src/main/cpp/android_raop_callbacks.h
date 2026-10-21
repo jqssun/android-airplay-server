@@ -10,6 +10,9 @@
 extern "C" {
 #endif
 
+/* number of mirroring sessions that can be active at the same time */
+#define MAX_VIDEO_SESSIONS 4
+
 typedef struct {
     JavaVM *jvm;
     jobject callback_obj;
@@ -59,6 +62,16 @@ typedef struct {
     int frame_buffer_count;
     int frame_buffer_capacity;
     int frame_buffer_next;
+    /* video sessions: every mirroring connection has its own ntp and thread,
+       the sender can run a mirror and an extended display at the same time,
+       so the frames have to be told apart */
+    struct {
+        uintptr_t ntp;
+        pthread_t thread;
+        int id;
+        int64_t last_frame_ms;
+    } video_sessions[MAX_VIDEO_SESSIONS];
+    int video_session_count;
 } android_callback_ctx_t;
 
 void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject callback_obj);

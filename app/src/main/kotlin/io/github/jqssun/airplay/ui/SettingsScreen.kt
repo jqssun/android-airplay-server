@@ -55,6 +55,11 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val requirePin by viewModel.pref(Prefs.REQUIRE_PIN).collectAsState()
     val allowNewConn by viewModel.pref(Prefs.ALLOW_NEW_CONN).collectAsState()
     val usbOnly by viewModel.pref(Prefs.USB_ONLY).collectAsState()
+    val separateDisplay by viewModel.pref(Prefs.SEPARATE_DISPLAY).collectAsState()
+    val fitAspect by viewModel.pref(Prefs.FIT_ASPECT).collectAsState()
+    val displayPhysicalWidth by viewModel.pref(Prefs.DISPLAY_PHYSICAL_WIDTH_MM).collectAsState()
+    val displayPhysicalHeight by viewModel.pref(Prefs.DISPLAY_PHYSICAL_HEIGHT_MM).collectAsState()
+    val verboseProtocolLog by viewModel.pref(Prefs.VERBOSE_PROTOCOL_LOG).collectAsState()
     val autoStart by viewModel.pref(Prefs.AUTO_START).collectAsState()
     val bootAutoStart by viewModel.pref(Prefs.BOOT_AUTO_START).collectAsState()
     val runInBackground by viewModel.pref(Prefs.RUN_IN_BACKGROUND).collectAsState()
@@ -209,6 +214,56 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onCheckedChange = { viewModel.set(Prefs.OVERSCANNED, it) }
         )
 
+        SectionHeader(stringResource(R.string.section_screen_extension))
+
+        SettingSwitch(
+            title = stringResource(R.string.setting_separate_display),
+            description = stringResource(R.string.setting_separate_display_desc),
+            checked = separateDisplay,
+            onCheckedChange = { viewModel.set(Prefs.SEPARATE_DISPLAY, it) }
+        )
+
+        SettingSwitch(
+            title = stringResource(R.string.setting_fit_aspect),
+            description = stringResource(R.string.setting_fit_aspect_desc),
+            checked = fitAspect,
+            onCheckedChange = { viewModel.set(Prefs.FIT_ASPECT, it) }
+        )
+
+        ListItem(
+            headlineContent = { Text(stringResource(R.string.setting_display_physical_desc)) },
+            supportingContent = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = displayPhysicalWidth.toString(),
+                        onValueChange = {
+                            viewModel.set(Prefs.DISPLAY_PHYSICAL_WIDTH_MM, it.toIntOrNull() ?: 0)
+                        },
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.setting_display_physical_width)) },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Next
+                        ),
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = displayPhysicalHeight.toString(),
+                        onValueChange = {
+                            viewModel.set(Prefs.DISPLAY_PHYSICAL_HEIGHT_MM, it.toIntOrNull() ?: 0)
+                        },
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.setting_display_physical_height)) },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Done
+                        ),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        )
+
         SectionHeader(stringResource(R.string.section_decode))
 
         SettingChips(
@@ -290,6 +345,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 description = stringResource(R.string.setting_advertise_audio_desc),
                 checked = advertiseAudio,
                 onCheckedChange = { viewModel.set(Prefs.ADVERTISE_AUDIO, it) }
+            )
+
+            SettingSwitch(
+                title = stringResource(R.string.setting_verbose_protocol_log),
+                description = stringResource(R.string.setting_verbose_protocol_log_desc),
+                checked = verboseProtocolLog,
+                onCheckedChange = { viewModel.set(Prefs.VERBOSE_PROTOCOL_LOG, it) }
             )
 
             SettingSwitch(

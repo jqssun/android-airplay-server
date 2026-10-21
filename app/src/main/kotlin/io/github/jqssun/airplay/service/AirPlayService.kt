@@ -679,14 +679,50 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     // RaopCallbackHandler (called from native threads)
 
-    override fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
+    override fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean, session: Int) {
+        if (!_selectSession(session)) return
         videoRenderer.feedFrame(data, ntpTimeNs, isH265)
     }
 
-    override fun onVideoDataBuffer(index: Int, size: Int, ntpTimeNs: Long, isH265: Boolean) {
+    override fun onVideoDataBuffer(index: Int, size: Int, ntpTimeNs: Long, isH265: Boolean, session: Int) {
         val buf = _frameBuffers?.getOrNull(index) ?: return
+        if (!_selectSession(session)) return
         videoRenderer.feedFrameBuffer(buf, size, ntpTimeNs, isH265)
     }
+
+    /* The sender can run a mirror and an extended display at the same time,
+       each in its own session. Only one of them can be shown, so the session
+       that delivers the newest frame wins; the others are dropped instead of
+       corrupting the picture. */
+    @Volatile private var _activeVideoSession = 0
+    private val _videoSessions = mutableSetOf<Int>()
+
+    private fun _clearVideoSessions() {
+        synchronized(_videoSessions) {
+            _videoSessions.clear()
+            _activeVideoSession = 0
+            _videoSessionCount.value = 0
+        }
+    }
+
+    private fun _selectSession(session: Int): Boolean {
+        if (session <= 0) return true
+        if (_activeVideoSession == session) return true
+        synchronized(_videoSessions) {
+            _videoSessions.add(session)
+            if (_activeVideoSession != 0 && _videoSessions.size > 1) {
+                log("Video session $session takes over from $_activeVideoSession")
+            }
+            _activeVideoSession = session
+            _videoSessionCount.value = _videoSessions.size
+        }
+        // the new session has its own geometry, restart the decoder for it
+        videoRenderer.resetSession()
+        return true
+    }
+
+    private val _videoSessionCount = MutableStateFlow(0)
+    val videoSessionCount = _videoSessionCount.asStateFlow()
 
     // direct buffers the native side writes the frames into; keeping them
     // here avoids allocating a byte array for every frame
@@ -750,8 +786,14 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         log("Audio format: ct=$ct spf=$spf screen=$usingScreen")
     }
 
-    override fun onVideoSize(srcW: Float, srcH: Float, w: Float, h: Float) {
+    override fun onVideoSize(srcW: Float, srcH: Float, w: Float, h: Float, session: Int) {
         clearPin()
+        // a size report from a session that is not shown would resize the
+        // decoder of the session that is
+        if (session > 0 && session != _activeVideoSession) {
+            log("Video size ${w.toInt()}x${h.toInt()} from session $session ignored")
+            return
+        }
         if (w > 0 && h > 0) {
             _videoAspect.value = w / h
             _videoResolution.value = "${w.toInt()}x${h.toInt()}"
@@ -878,6 +920,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             _durationMs.value = 0
             dacpController?.reset()
             _clientVol = null
+            _clearVideoSessions()
             _mainHandler.post {
                 _clientVolDriveEnd()
                 if (_serverPreZeroIdx >= 0) {

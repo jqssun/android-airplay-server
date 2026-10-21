@@ -604,6 +604,8 @@ private fun OverviewContent(
     val connections by viewModel.connectionCount.collectAsState()
     val serverName by viewModel.pref(Prefs.SERVER_NAME).collectAsState()
     val videoResolution by viewModel.videoResolution.collectAsState()
+    val advertisedResolution by viewModel.advertisedResolution.collectAsState()
+    val videoSessionCount by viewModel.videoSessionCount.collectAsState()
     val idlePreview by viewModel.pref(Prefs.IDLE_PREVIEW).collectAsState()
     val mirroringActive by viewModel.mirroringActive.collectAsState()
     val videoPlaybackActive by viewModel.videoPlaybackActive.collectAsState()
@@ -740,6 +742,17 @@ private fun OverviewContent(
                             style = MaterialTheme.typography.bodySmall,
                             color = statusColor
                         )
+                        if (state == ServerState.RUNNING && advertisedResolution.isNotEmpty()) {
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = stringResource(R.string.advertised_display, advertisedResolution) +
+                                    if (videoSessionCount > 1) {
+                                        stringResource(R.string.display_sessions, videoSessionCount)
+                                    } else "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
 
                     val settings = localNetwork == LocalNetworkAccess.SETTINGS
