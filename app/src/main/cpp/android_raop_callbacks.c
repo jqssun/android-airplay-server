@@ -13,6 +13,7 @@
 
 #define TAG "AirPlayNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 static JNIEnv *_get_env(android_callback_ctx_t *ctx) {
@@ -37,6 +38,11 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->require_pin = 0;
     ctx->registered_count = 0;
     ctx->audio_engine = NULL;
+    ctx->frame_buffers = NULL;
+    ctx->frame_buffer_refs = NULL;
+    ctx->frame_buffer_count = 0;
+    ctx->frame_buffer_capacity = 0;
+    ctx->frame_buffer_next = 0;
     memset(ctx->registered_keys, 0, sizeof(ctx->registered_keys));
 
     pthread_mutex_init(&ctx->playback_info_lock, NULL);
@@ -50,6 +56,7 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
 
     jclass cls = (*env)->GetObjectClass(env, callback_obj);
     ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZ)V");
+    ctx->on_video_data_buffer = (*env)->GetMethodID(env, cls, "onVideoDataBuffer", "(IIJZ)V");
     ctx->on_audio_format = (*env)->GetMethodID(env, cls, "onAudioFormat", "(IIZ)V");
     ctx->on_video_size = (*env)->GetMethodID(env, cls, "onVideoSize", "(FFFF)V");
     ctx->on_client_volume = (*env)->GetMethodID(env, cls, "onClientVolume", "(F)V");
@@ -76,6 +83,13 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env) {
     if (ctx->callback_obj) {
         (*env)->DeleteGlobalRef(env, ctx->callback_obj);
         ctx->callback_obj = NULL;
+    }
+    free(ctx->frame_buffers);
+    ctx->frame_buffers = NULL;
+    ctx->frame_buffer_count = 0;
+    if (ctx->frame_buffer_refs) {
+        free(ctx->frame_buffer_refs);
+        ctx->frame_buffer_refs = NULL;
     }
     for (int i = 0; i < ctx->registered_count; i++) {
         free(ctx->registered_keys[i]);
@@ -119,11 +133,68 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
         return;
     }
 
+    /* hand the frame over through the app's direct buffer: no jbyteArray
+       allocation and no garbage collection per frame */
+    if (ctx->frame_buffers && ctx->frame_buffer_count > 0) {
+        int idx = ctx->frame_buffer_next;
+        ctx->frame_buffer_next = (idx + 1) % ctx->frame_buffer_count;
+        if (data->data_len <= ctx->frame_buffer_capacity) {
+            memcpy(ctx->frame_buffers[idx], data->data, (size_t) data->data_len);
+            (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_data_buffer,
+                                   (jint) idx, (jint) data->data_len,
+                                   (jlong) data->ntp_time_local, (jboolean) data->is_h265);
+            return;
+        }
+        LOGW("video frame of %d bytes exceeds the %d byte frame buffer, copying it over",
+             data->data_len, ctx->frame_buffer_capacity);
+    }
+
     jbyteArray arr = (*env)->NewByteArray(env, data->data_len);
     (*env)->SetByteArrayRegion(env, arr, 0, data->data_len, (jbyte *)data->data);
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_data,
                            arr, (jlong)data->ntp_time_local, (jboolean)data->is_h265);
     (*env)->DeleteLocalRef(env, arr);
+}
+
+/* the app owns the buffers, so it has to keep them alive while they are in use */
+void android_callbacks_set_frame_buffers(android_callback_ctx_t *ctx, JNIEnv *env,
+                                         jobjectArray buffers, jint capacity) {
+    if (ctx->frame_buffer_refs) {
+        for (int i = 0; i < ctx->frame_buffer_count; i++) {
+            if (ctx->frame_buffer_refs[i]) {
+                (*env)->DeleteGlobalRef(env, ctx->frame_buffer_refs[i]);
+                ctx->frame_buffer_refs[i] = NULL;
+            }
+        }
+        free(ctx->frame_buffer_refs);
+        ctx->frame_buffer_refs = NULL;
+    }
+    free(ctx->frame_buffers);
+    ctx->frame_buffers = NULL;
+    ctx->frame_buffer_count = 0;
+    ctx->frame_buffer_capacity = 0;
+    ctx->frame_buffer_next = 0;
+    if (!buffers || capacity <= 0) return;
+    jsize count = (*env)->GetArrayLength(env, buffers);
+    if (count <= 0) return;
+    uint8_t **addresses = calloc((size_t) count, sizeof(uint8_t *));
+    jobject *refs = calloc((size_t) count, sizeof(jobject));
+    if (!addresses || !refs) {
+        free(addresses);
+        free(refs);
+        return;
+    }
+    for (jsize i = 0; i < count; i++) {
+        jobject buffer = (*env)->GetObjectArrayElement(env, buffers, i);
+        if (!buffer) continue;
+        refs[i] = (*env)->NewGlobalRef(env, buffer);
+        addresses[i] = (uint8_t *) (*env)->GetDirectBufferAddress(env, buffer);
+        (*env)->DeleteLocalRef(env, buffer);
+    }
+    ctx->frame_buffers = addresses;
+    ctx->frame_buffer_refs = refs;
+    ctx->frame_buffer_count = (int) count;
+    ctx->frame_buffer_capacity = (int) capacity;
 }
 
 static void _conn_init(void *cls) {

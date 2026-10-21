@@ -15,6 +15,7 @@ typedef struct {
     jobject callback_obj;
     raop_t *raop;
     jmethodID on_video_data;
+    jmethodID on_video_data_buffer;
     jmethodID on_audio_format;
     jmethodID on_video_size;
     jmethodID on_client_volume;
@@ -49,6 +50,15 @@ typedef struct {
     pthread_cond_t play_ready_cond;
     int play_ready;
     AudioEngine *audio_engine;
+    /* ring of direct byte buffers owned by the app: the decrypted frame is
+       written straight into them, which avoids allocating a jbyteArray per
+       frame (and the garbage collection that comes with it) */
+    uint8_t **frame_buffers;
+    /* global refs to the buffers, they have to stay reachable */
+    jobject *frame_buffer_refs;
+    int frame_buffer_count;
+    int frame_buffer_capacity;
+    int frame_buffer_next;
 } android_callback_ctx_t;
 
 void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject callback_obj);
@@ -56,6 +66,9 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env);
 void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx);
 void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double position,
                                              double duration, float rate, int ready);
+/* take over the app's direct frame buffers */
+void android_callbacks_set_frame_buffers(android_callback_ctx_t *ctx, JNIEnv *env,
+                                         jobjectArray buffers, jint capacity);
 
 #ifdef __cplusplus
 }
