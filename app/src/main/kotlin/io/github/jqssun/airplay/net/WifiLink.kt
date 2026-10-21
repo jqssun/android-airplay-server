@@ -110,20 +110,68 @@ fun readScanThrottleEnabled(context: Context): Boolean? {
  * The number of packets the kernel dropped because the receive or the send buffer
  * of a socket was full. On the video path (tcp) this is not where the loss shows
  * up, there a retransmission stalls the whole stream instead.
+ *
+ * The counters live in /proc/net/snmp, which selinux denies to an app on many
+ * devices. Every denied read writes a line into the kernel log, so a reader that
+ * asks again and again fills the logcat buffer with denials and pushes the
+ * diagnostics of the session out of it. The read is therefore cached, and a
+ * device that denies it is asked again only once a minute.
  */
-fun readUdpErrors(): UdpErrors {
-    return try {
-        val lines = File("/proc/net/snmp").readLines()
-        val header = lines.firstOrNull { it.startsWith("Udp:") } ?: return UdpErrors(0, 0)
-        val values = lines.firstOrNull { it.startsWith("Udp:") && it != header } ?: return UdpErrors(0, 0)
-        val names = header.trim().split(Regex("\\s+")).drop(1)
-        val nums = values.trim().split(Regex("\\s+")).drop(1)
-        fun value(name: String): Long {
-            val i = names.indexOf(name)
-            return if (i in nums.indices) nums[i].toLongOrNull() ?: 0 else 0
+fun readUdpErrors(): UdpErrors = _udpErrorCache.get()
+
+private val _udpErrorCache = UdpErrorCache(read = {
+    val lines = File("/proc/net/snmp").readLines()
+    val header = lines.firstOrNull { it.startsWith("Udp:") }
+    val values = lines.firstOrNull { it.startsWith("Udp:") && it != header }
+        ?: throw java.io.IOException("no udp counters")
+    val names = header!!.trim().split(Regex("\\s+")).drop(1)
+    val nums = values.trim().split(Regex("\\s+")).drop(1)
+    fun value(name: String): Long {
+        val i = names.indexOf(name)
+        return if (i in nums.indices) nums[i].toLongOrNull() ?: 0 else 0
+    }
+    UdpErrors(value("RcvbufErrors"), value("SndbufErrors"))
+})
+
+/**
+ * Reads the counters at most once a second, and asks a device that denies the
+ * read only once a minute.
+ */
+class UdpErrorCache(
+    private val read: () -> UdpErrors,
+    private val now: () -> Long = { System.currentTimeMillis() },
+) {
+    private var value = UdpErrors(0, 0)
+    private var readAtMs = 0L
+    private var retryAtMs = 0L
+    private var hasRead = false
+    private var failed = false
+
+    @Synchronized
+    fun get(): UdpErrors {
+        val t = now()
+        // the device denied the read: wait before asking again
+        if (t < retryAtMs) return value
+        if (hasRead && t - readAtMs < CACHE_MS) return value
+        hasRead = true
+        readAtMs = t
+        return try {
+            value = read()
+            failed = false
+            value
+        } catch (e: Exception) {
+            if (!failed) {
+                // once is enough: the counters are simply not readable here
+                Log.w("WifiLink", "udp counters unavailable: ${e.message}")
+            }
+            failed = true
+            retryAtMs = t + RETRY_MS
+            value
         }
-        UdpErrors(value("RcvbufErrors"), value("SndbufErrors"))
-    } catch (_: Exception) {
-        UdpErrors(0, 0)
+    }
+
+    companion object {
+        const val CACHE_MS = 1_000L
+        const val RETRY_MS = 60_000L
     }
 }

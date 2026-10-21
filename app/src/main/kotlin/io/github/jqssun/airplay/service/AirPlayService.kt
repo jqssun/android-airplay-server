@@ -435,7 +435,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         val overscanned = prefs[Prefs.OVERSCANNED]
         val audioLatencyMs = prefs[Prefs.AUDIO_LATENCY_MS]
         val (reqW, reqH) = _displaySize(clamp = false)
-        val h265 = videoRenderer.selectDecoders(reqW, reqH, maxFps, _profileH265())
+        val h265 = videoRenderer.selectDecoders(reqW, reqH, maxFps, _profileH265(reqW, reqH))
         val alac = prefs[Prefs.ALAC_ENABLED]
         val aac = prefs[Prefs.AAC_ENABLED]
 
@@ -537,24 +537,25 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     // the stream profile bundles the resolution, the frame rate and the codec.
     // the picture quality comes first: the profiles give up frame rate before
     // they give up resolution, because 4k30 looks better than 1080p60
-    private fun _profileResolution(): String = when (prefs[Prefs.STREAM_PROFILE]) {
-        Prefs.PROFILE_4K30, Prefs.PROFILE_4K60 -> "3840x2160"
-        Prefs.PROFILE_1080P60 -> "1920x1080"
-        Prefs.PROFILE_CUSTOM -> prefs[Prefs.RESOLUTION]
-        else -> Prefs.AUTO
-    }
+    private fun _profileResolution(): String = StreamProfile.resolution(
+        prefs[Prefs.STREAM_PROFILE], prefs[Prefs.RESOLUTION]
+    )
 
-    private fun _profileFps(): Int = when (prefs[Prefs.STREAM_PROFILE]) {
-        Prefs.PROFILE_4K30 -> 30
-        else -> prefs[Prefs.MAX_FPS]
-    }
+    private fun _profileFps(): Int = StreamProfile.fps(
+        prefs[Prefs.STREAM_PROFILE], prefs[Prefs.MAX_FPS]
+    )
 
     // hevc needs about half the airtime of h264 for the same quality, which is
     // what keeps a weak link from retransmitting
-    private fun _profileH265(): Boolean? = when (prefs[Prefs.STREAM_PROFILE]) {
-        Prefs.PROFILE_CUSTOM -> Prefs.forced(prefs[Prefs.H265])
-        else -> true
-    }
+    //
+    // the dns-sd feature bit 42 is set together with it, and that bit is what
+    // tells the sender that it may send 4k at all. on a 1080p panel it would
+    // make the sender push a 4k mirror that the panel cannot show: four times
+    // the pixels, four times the decode work and no gain in the picture. so
+    // hevc follows the size unless the profile or the setting says otherwise.
+    private fun _profileH265(w: Int, h: Int): Boolean = StreamProfile.hevc(
+        prefs[Prefs.STREAM_PROFILE], prefs[Prefs.H265], w, h
+    )
 
     private fun _displaySize(clamp: Boolean = true): Pair<Int, Int> {
         val res = _profileResolution()

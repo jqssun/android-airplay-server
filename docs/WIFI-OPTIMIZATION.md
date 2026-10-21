@@ -122,6 +122,37 @@ The receiver asks for a 4 MB receive buffer, but the kernel hands out what
 (`raop_rtp socket rcvbuf N bytes`). When the logged number is far below 4 MB,
 this is the reason.
 
+## What the first test session on the tv showed
+
+The first real run of the receiver on a tv (a 1080p Android TV on 5 GHz, the
+receiver connected over the same access point) says more than any theory:
+
+| what | measured |
+|------|----------|
+| the panel | 1920 x 1080 @ 60 Hz, the receiver advertises `1920x1080@60` |
+| the decoders | `OMX.MS.AVC.Decoder` and `OMX.MS.HEVC.Decoder`, the codec reports up to 4096 x 2176 |
+| the link | RSSI -45 dBm, 5 GHz, 866 Mbps, 0 retransmissions, 0 UDP buffer errors |
+| the decode | 3.2 ms mean for a 4K frame (min 1.9, max 16) |
+| the audio | oboe's fast path granted: AAudio, mmap, 384 frames (8.7 ms) |
+| the extension | `Display session 1 takes over from 0`, `Video size: 1920x1080 -> 1920x1080` — the extended desktop is the panel's own size |
+| the mirror | the sender sent **3840x2160 H.264** onto the 1080p panel |
+
+Two things follow from it.
+
+**The extended desktop is exactly the panel's size.** The sender builds it from
+the geometry in the setup response, and the receiver hands out the panel's
+native resolution, clamped to what the decoder can decode. Nothing is scaled.
+
+**A plain mirror is bigger than the panel.** macOS picks the mirror's size
+itself: the receiver's geometry is what the *extended display* is built from,
+but a mirror comes in at the size macOS wants. The receiver cannot talk the
+sender out of it directly — what it can do is stop *asking* for it: the hevc
+capability is the dns-sd feature bit 42, and that bit is what tells the sender
+that it may send 4k at all. On a 1080p panel the bit is now left off (see
+`h265` above), the receiver advertises its size in the `/info` response as
+well, and the picture stays 1080p instead of being a 4k stream squeezed onto a
+panel that cannot show it.
+
 ## Prefer a wire
 
 USB-C tethering (CDC-NCM) removes the whole radio question: no contention, no
@@ -149,7 +180,7 @@ silently.
 |---------|-------|-----|
 | `stream_profile` | `auto` | the panel's native resolution, clamped to the decoder, frame rate clamped to what it sustains there. `4k30` for a weak link |
 | `max_fps` | `60` | the panel's top rate; the clamp above decides what is actually advertised |
-| `h265` | `on` | about half the bitrate of H.264 at the same quality |
+| `h265` | `auto` | hevc where it pays off, and only there: above 1080p it halves the bitrate, below that the hevc feature bit would make the sender push a 4k mirror onto a 1080p panel. `on` forces it, `off` forbids it |
 | `fit_aspect` | `true` | the picture keeps its shape instead of being stretched to the panel |
 | `overscanned` | `false` | use the whole panel |
 | `enforce_sdr` | `true` | the sender sends SDR, so the decoder is told to output BT.709 |
@@ -185,13 +216,18 @@ The numbers to compare, per profile (`4k60`, `4k30`, `1080p60`) and per link
 
 | metric | where it comes from | before | after |
 |--------|---------------------|--------|-------|
-| `Queuedrops` | debug overlay / benchmark log | | |
-| `Drops` | debug overlay / benchmark log | | |
-| frame pacing jitter | debug overlay | | |
-| `Udp: RcvbufErrors` | `tools/verify-screen-extension.sh link` | | |
-| effective `SO_RCVBUF` | receiver log at startup | | |
-| freezes seen by eye | watching the picture | | |
-| end-to-end delay | clapper board or a stopwatch on camera | | |
+| `Queuedrops` | debug overlay / benchmark log | 144 of 4807 frames (4k mirror) | |
+| `Drops` | debug overlay / benchmark log | 0 | |
+| frame pacing jitter | debug overlay | 32 ms (4k mirror at 30 fps) | |
+| `Udp: RcvbufErrors` | `tools/verify-screen-extension.sh link` | 0 | |
+| effective `SO_RCVBUF` | receiver log at startup | not in the log yet | |
+| freezes seen by eye | watching the picture | none reported | |
+| end-to-end delay | clapper board or a stopwatch on camera | not measured yet | |
+
+The numbers above are from one session on a 1080p tv over 5 GHz with the
+`auto` profile, where the sender sent a 4k mirror. They are the baseline, not
+a result: the same session has to be run again with the mirror at the panel's
+size (and over USB) before the two columns can be compared.
 
 Fill the "before" column from a build of the commit before
 `a3674e3 perf: decode on its own thread …`, and the "after" column from a current

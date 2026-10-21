@@ -75,8 +75,11 @@ apply_config() {
     set_pref stream_profile "$profile"
     set_pref resolution auto
     set_pref max_fps 60
-    # hevc: about half the bitrate of h264 at the same quality
-    set_pref h265 on
+    # hevc: about half the bitrate of h264 at the same quality. "auto" lets the
+    # app decide by size: hevc pays off above 1080p, and below that the hevc
+    # feature bit would only make the sender push a 4k mirror the panel cannot
+    # show. the 4k profiles ask for hevc on their own
+    set_pref h265 auto
     # the picture keeps its shape and fills the panel
     set_pref fit_aspect true
     set_pref overscanned false
