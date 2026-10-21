@@ -1,0 +1,13 @@
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -182,3 +182,8 @@
+     airplay_video_t *airplay_video = (airplay_video_t *) hls_get_current_video(raop);
+-    assert(airplay_video);
++    /* The sender can deliver properties after its HLS playlist was removed.
++     * Treat these like other unhandled properties instead of aborting the server. */
++    if (!airplay_video) {
++        logger_log(raop->logger, LOGGER_WARNING, "ignoring property %s without an active playlist", property);
++        goto post_error;
++    }
+     if (!strcmp(property, "selectedMediaArray")) {

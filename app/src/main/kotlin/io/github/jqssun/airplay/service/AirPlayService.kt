@@ -348,12 +348,24 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_START_SERVER) {
+        // A sticky service is recreated with a null intent after process death.
+        // An explicit stopSelf() still cancels restart, as does opting out of
+        // background operation before the recreated instance receives its intent.
+        val runInBackground = prefs[Prefs.RUN_IN_BACKGROUND]
+        if (intent == null && !runInBackground) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        val recovering = intent == null && runInBackground
+        if (intent?.action == ACTION_START_SERVER || recovering) {
+            if (recovering) log("Restoring background server after process restart")
             promoteToForeground()
             _startServer(ensureServiceStarted = false)
             if (_serverState.value != ServerState.RUNNING) stopSelf(startId)
         }
-        return START_NOT_STICKY
+        return if (_serverState.value == ServerState.RUNNING && runInBackground) {
+            START_STICKY
+        } else START_NOT_STICKY
     }
 
     fun startServer() {
