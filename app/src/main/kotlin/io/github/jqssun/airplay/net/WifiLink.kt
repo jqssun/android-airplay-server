@@ -95,8 +95,10 @@ fun readWifiLink(context: Context): WifiLink? {
  */
 fun readScanThrottleEnabled(context: Context): Boolean? {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
-    val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return null
     return try {
+        // the context may not be attached yet, so the lookup belongs in the try
+        val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            ?: return null
         wm.isScanThrottleEnabled
     } catch (e: Exception) {
         Log.w("WifiLink", "scan throttle state unavailable", e)

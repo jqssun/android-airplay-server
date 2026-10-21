@@ -89,9 +89,17 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private var foregroundStarted = false
     private var lastOrientation = Configuration.ORIENTATION_UNDEFINED
 
+    /*
+     * A Service is constructed before attachBaseContext runs, so the context is
+     * a ContextWrapper whose base is still null at this point: anything that
+     * dereferences it (applicationContext, getSystemService, packageManager)
+     * throws a NullPointerException here. Fields that need the context are
+     * therefore lazy, and the classes that take one resolve it on use.
+     * VideoRenderer is safe to build eagerly because it only stores the context.
+     */
     val videoRenderer = VideoRenderer(this)
     val audioRenderer = AudioRenderer()
-    private val wifiTuner = WifiTuner(this)
+    private val wifiTuner by lazy { WifiTuner(this) }
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val airPlayVideoPlayer by lazy { AirPlayVideoPlayer(this) }
     val videoDownloader by lazy { VideoDownloader(this) }

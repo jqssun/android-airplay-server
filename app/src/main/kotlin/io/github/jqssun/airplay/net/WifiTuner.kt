@@ -24,7 +24,15 @@ import android.util.Log
  */
 class WifiTuner(private val context: Context) {
 
-    private val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+    /*
+     * Resolved on use, never in the constructor. A Service is constructed before
+     * attachBaseContext runs, so at that point the service is a ContextWrapper
+     * whose base is still null and applicationContext throws. Anything that
+     * touches the context belongs here, behind a getter.
+     */
+    private val wifi: WifiManager?
+        get() = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+
     private var lock: WifiManager.WifiLock? = null
 
     /**
@@ -34,10 +42,11 @@ class WifiTuner(private val context: Context) {
     fun acquire(enabled: Boolean): String {
         release()
         if (!enabled) return "wifi lock off"
-        val wifi = wifi ?: return "wifi unavailable"
         val lowLatency = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
         val mode = if (lowLatency) WifiManager.WIFI_MODE_FULL_LOW_LATENCY else HIGH_PERF
         return try {
+            // the wifi lock is a nicety, it must never take the server down
+            val wifi = wifi ?: return "wifi unavailable"
             lock = wifi.createWifiLock(mode, "airplay:stream").apply { acquire() }
             "wifi lock held (${if (lowLatency) "low latency" else "high perf"})"
         } catch (e: Exception) {

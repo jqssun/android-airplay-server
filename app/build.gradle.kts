@@ -79,6 +79,14 @@ android {
         includeInBundle = false
     }
 
+    testOptions {
+        unitTests {
+            // the framework stubs do nothing, which is what a context that is not
+            // attached yet looks like anyway
+            isReturnDefaultValues = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -135,6 +143,8 @@ tasks.configureEach {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime)
