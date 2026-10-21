@@ -31,12 +31,27 @@ A fully featured free and open-source implementation of AirPlay for Android that
 - Optional PIN authentication
 - Video resolution, overscan, and frame rate control
 - Audio latency control and support for software decoder fallback
-- Debug overlay with real-time statistics (FPS, bitrate, codec, resolution, frame count, audio volume, etc.)
+- Debug overlay with real-time statistics (FPS, bitrate, codec, resolution, frame count, audio volume, link quality, etc.)
+- Stream profiles (4K60 / 4K30 / 1080p60 / custom), tuned sockets and receive path, Wi-Fi lock while streaming - see [docs/WIFI-OPTIMIZATION.md](docs/WIFI-OPTIMIZATION.md)
 - Android native media session integration with notification controls
 - Wired secondary display for macOS/iPadOS devices over USB tethering
 
 > [!WARNING]
 > DRM content (e.g. from the Apple TV application) is not supported.
+
+## Streaming quality
+
+Mirroring and extension video arrives over **TCP**, so on a weak link the picture
+freezes instead of dropping a frame. The receiver keeps the decode off the network
+thread, sizes its sockets for 4K, raises the media threads above the launcher,
+holds a Wi-Fi lock while the server runs and reports the link (band, RSSI, link
+speed, drops) in the debug overlay.
+
+Pick a **stream profile** that fits the link - 4K30 looks better than 1080p60 on a
+constrained one, and HEVC carries about twice as much detail as H.264 at the same
+bitrate. Prefer USB-C tethering when you can cable: it removes the radio from the
+equation entirely. What an app may and may not change on the radio, and how to
+measure before and after, is in [docs/WIFI-OPTIMIZATION.md](docs/WIFI-OPTIMIZATION.md).
 
 ## Configure from ADB
 
