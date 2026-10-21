@@ -80,6 +80,7 @@
     <string name="section_server">Server</string>
     <string name="section_connection">Connection</string>
     <string name="section_display">Display</string>
+    <string name="section_screen_extension">Screen extension</string>
     <string name="section_decode">Decode</string>
     <string name="section_developer">Developer</string>
 
@@ -137,6 +138,21 @@
     <string name="chip_custom">Custom</string>
     <string name="chip_device_portrait">Portrait</string>
     <string name="chip_device_landscape">Landscape</string>
+
+    <!-- Settings: Screen extension -->
+    <string name="setting_separate_display">Use as separate display</string>
+    <string name="setting_separate_display_desc">Let the sender use this device as an extended display (macOS: “Use As Separate Display”)</string>
+    <string name="setting_fit_aspect">Fit picture to panel</string>
+    <string name="setting_fit_aspect_desc">Letterbox the picture instead of stretching it to the panel, the extended desktop can have a different aspect ratio</string>
+    <string name="setting_display_physical_width">Physical width (mm)</string>
+    <string name="setting_display_physical_height">Physical height (mm)</string>
+    <string name="setting_display_physical_desc">Physical size of the panel, the sender scales the extended desktop’s user interface from it. 0 leaves it unknown.</string>
+    <string name="setting_verbose_protocol_log">Verbose protocol log</string>
+    <string name="setting_verbose_protocol_log_desc">Log the sender’s setup requests and connection setup</string>
+
+    <!-- Status -->
+    <string name="advertised_display">Display %1$s</string>
+    <string name="display_sessions"> • %1$d sessions</string>
 
     <!-- Settings: Decode -->
     <string name="setting_h265">H.265 (HEVC)</string>

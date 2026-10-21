@@ -43,6 +43,8 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->frame_buffer_count = 0;
     ctx->frame_buffer_capacity = 0;
     ctx->frame_buffer_next = 0;
+    ctx->video_session_count = 0;
+    memset(ctx->video_sessions, 0, sizeof(ctx->video_sessions));
     memset(ctx->registered_keys, 0, sizeof(ctx->registered_keys));
 
     pthread_mutex_init(&ctx->playback_info_lock, NULL);
@@ -55,10 +57,10 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->playback_ready = 0;
 
     jclass cls = (*env)->GetObjectClass(env, callback_obj);
-    ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZ)V");
-    ctx->on_video_data_buffer = (*env)->GetMethodID(env, cls, "onVideoDataBuffer", "(IIJZ)V");
+    ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZI)V");
+    ctx->on_video_data_buffer = (*env)->GetMethodID(env, cls, "onVideoDataBuffer", "(IIJZI)V");
     ctx->on_audio_format = (*env)->GetMethodID(env, cls, "onAudioFormat", "(IIZ)V");
-    ctx->on_video_size = (*env)->GetMethodID(env, cls, "onVideoSize", "(FFFF)V");
+    ctx->on_video_size = (*env)->GetMethodID(env, cls, "onVideoSize", "(FFFFI)V");
     ctx->on_client_volume = (*env)->GetMethodID(env, cls, "onClientVolume", "(F)V");
     ctx->on_client_volume_query = (*env)->GetMethodID(env, cls, "onClientVolumeQuery", "()F");
     ctx->on_audio_teardown = (*env)->GetMethodID(env, cls, "onAudioTeardown", "()V");
@@ -123,6 +125,55 @@ static void _audio_process(void *cls, raop_ntp_t *ntp, audio_decode_struct *data
                         (int)data->ct, (int64_t)data->ntp_time_local);
 }
 
+/* find the video session a frame belongs to, every mirroring connection has
+   its own ntp instance; a new one gets a fresh id */
+static int64_t _now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static int _video_session_id(android_callback_ctx_t *ctx, raop_ntp_t *ntp) {
+    uintptr_t key = (uintptr_t) ntp;
+    int64_t now = _now_ms();
+    for (int i = 0; i < ctx->video_session_count; i++) {
+        if (ctx->video_sessions[i].ntp == key) {
+            ctx->video_sessions[i].last_frame_ms = now;
+            return ctx->video_sessions[i].id;
+        }
+    }
+    int slot = ctx->video_session_count;
+    if (slot >= MAX_VIDEO_SESSIONS) {
+        /* all slots are taken, recycle the one that has been silent the
+           longest (its session is long gone) */
+        slot = 0;
+        for (int i = 1; i < ctx->video_session_count; i++) {
+            if (ctx->video_sessions[i].last_frame_ms < ctx->video_sessions[slot].last_frame_ms) {
+                slot = i;
+            }
+        }
+    } else {
+        ctx->video_session_count++;
+    }
+    ctx->video_sessions[slot].ntp = key;
+    ctx->video_sessions[slot].thread = pthread_self();
+    ctx->video_sessions[slot].id = slot + 1;
+    ctx->video_sessions[slot].last_frame_ms = now;
+    LOGI("new video session %d", ctx->video_sessions[slot].id);
+    return ctx->video_sessions[slot].id;
+}
+
+/* the size report comes from the session's own thread */
+static int _video_session_id_by_thread(android_callback_ctx_t *ctx) {
+    pthread_t self = pthread_self();
+    for (int i = 0; i < ctx->video_session_count; i++) {
+        if (pthread_equal(ctx->video_sessions[i].thread, self)) {
+            return ctx->video_sessions[i].id;
+        }
+    }
+    return 0;
+}
+
 static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
@@ -132,6 +183,7 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
         LOGE("video packet decryption failed, dropping %d bytes", data->data_len);
         return;
     }
+    int session = _video_session_id(ctx, ntp);
 
     /* hand the frame over through the app's direct buffer: no jbyteArray
        allocation and no garbage collection per frame */
@@ -142,7 +194,8 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
             memcpy(ctx->frame_buffers[idx], data->data, (size_t) data->data_len);
             (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_data_buffer,
                                    (jint) idx, (jint) data->data_len,
-                                   (jlong) data->ntp_time_local, (jboolean) data->is_h265);
+                                   (jlong) data->ntp_time_local, (jboolean) data->is_h265,
+                                   (jint) session);
             return;
         }
         LOGW("video frame of %d bytes exceeds the %d byte frame buffer, copying it over",
@@ -152,7 +205,8 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
     jbyteArray arr = (*env)->NewByteArray(env, data->data_len);
     (*env)->SetByteArrayRegion(env, arr, 0, data->data_len, (jbyte *)data->data);
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_data,
-                           arr, (jlong)data->ntp_time_local, (jboolean)data->is_h265);
+                           arr, (jlong)data->ntp_time_local, (jboolean)data->is_h265,
+                           (jint) session);
     (*env)->DeleteLocalRef(env, arr);
 }
 
@@ -247,8 +301,10 @@ static void _video_report_size(void *cls, float *w_src, float *h_src, float *w, 
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
+    int session = _video_session_id_by_thread(ctx);
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_size,
-                           (jfloat)*w_src, (jfloat)*h_src, (jfloat)*w, (jfloat)*h);
+                           (jfloat)*w_src, (jfloat)*h_src, (jfloat)*w, (jfloat)*h,
+                           (jint)session);
 }
 
 static void _display_pin(void *cls, char *pin) {
