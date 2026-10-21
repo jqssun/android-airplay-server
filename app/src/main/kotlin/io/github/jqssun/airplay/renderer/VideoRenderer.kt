@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.Build
 import android.os.Process
 import android.util.Log
 import android.view.Surface
@@ -104,6 +105,36 @@ class VideoRenderer(ctx: Context) {
         Log.i(TAG, "decoders: avc=${avcDecoder?.name} hevc=${hevcDecoder?.name}")
         hevcDecoder != null
     }
+
+    // the decoder may be asked for more frames than it can sustain at the
+    // advertised size: a decoder that tops out at 4k30 cannot keep up with a
+    // 4k60 stream and drops frames instead of decoding them. the frame rate
+    // the codec reports as achievable at that size is the honest limit.
+    // 0 means the codec did not tell us, in which case nothing is clamped.
+    fun maxFpsAt(w: Int, h: Int): Int = synchronized(lock) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@synchronized 0
+        val decoder = hevcDecoder?.let { it to DecoderSelector.HEVC }
+            ?: avcDecoder?.let { it to DecoderSelector.AVC }
+            ?: return@synchronized 0
+        val caps = runCatching { decoder.first.videoCaps(decoder.second) }.getOrNull()
+            ?: return@synchronized 0
+        // some decoders only report the limit for the other orientation
+        val sizes = if (w < h) listOf(w to h, h to w) else listOf(w to h)
+        for ((cw, ch) in sizes) {
+            val upper = runCatching { caps.getAchievableFrameRatesFor(cw, ch)?.upper?.toInt() }
+                .getOrNull() ?: continue
+            if (upper <= 0) continue
+            // trust the range only when the codec confirms the rate at this size
+            val confirmed = runCatching { caps.areSizeAndRateSupported(cw, ch, upper.toDouble()) }
+                .getOrDefault(false)
+            if (confirmed) return@synchronized upper
+        }
+        0
+    }
+
+    // the frame rate the decoder is configured with has to match the rate the
+    // sender was told about, otherwise the codec runs at the wrong rate
+    fun setMaxFps(fps: Int) = synchronized(lock) { maxFps = fps }
 
     // unknown limits default to 1080p
     // the sender picks the codec from the advertised features: with h265

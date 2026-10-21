@@ -53,6 +53,13 @@ bitrate. Prefer USB-C tethering when you can cable: it removes the radio from th
 equation entirely. What an app may and may not change on the radio, and how to
 measure before and after, is in [docs/WIFI-OPTIMIZATION.md](docs/WIFI-OPTIMIZATION.md).
 
+The whole choice, written down and applied to a connected device:
+
+```bash
+tools/optimal-config.sh apply     # best picture, least delay
+tools/optimal-config.sh show      # what the device is set to now
+```
+
 ## Configure from ADB
 
 On devices without a display, settings can also be changed over ADB. The receiver is protected by `android.permission.DUMP` so regular installed apps cannot change them. Values are passed as text using `--es`. Using `adb shell`:

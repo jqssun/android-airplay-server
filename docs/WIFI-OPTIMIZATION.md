@@ -59,6 +59,16 @@ resolution, frame rate and codec together, and the built-in profiles force HEVC 
 roughly half the bitrate of H.264 at the same quality. The receiver advertises
 what it can decode, and the sender honours it.
 
+The **size** is clamped to the decoder's caps, and the **frame rate** is clamped
+to what the decoder can sustain *at that size*: a decoder that tops out at 4K30
+cannot keep up with a 4K60 stream and drops frames instead of decoding them,
+which in an extended desktop is a visible stutter. The receiver logs the clamp:
+
+```
+Advertising display 3840x2160@30 (decoder limit 3840x2160, profile auto)
+Frame rate clamped to 30fps: the decoder cannot sustain 60fps at 3840x2160
+```
+
 The app only *advises* on a link problem, it never renegotiates mid-session: a
 resolution change makes the sender restart the stream, which is a worse surprise
 than a steady picture. The hint in the overview names the profile to switch to.
@@ -99,11 +109,66 @@ adb shell settings list global | grep -i wifi     # see what your build has
 adb shell getprop | grep -i wifi
 ```
 
+A rooted device can also raise the kernel's limit on the socket buffers, which
+is the last lever on the receive side:
+
+```bash
+adb shell su -c 'sysctl net.core.rmem_max'          # the limit the kernel applies
+adb shell su -c 'sysctl -w net.core.rmem_max=4194304'
+```
+
+The receiver asks for a 4 MB receive buffer, but the kernel hands out what
+`net.core.rmem_max` allows, and the effective size is logged at startup
+(`raop_rtp socket rcvbuf N bytes`). When the logged number is far below 4 MB,
+this is the reason.
+
 ## Prefer a wire
 
 USB-C tethering (CDC-NCM) removes the whole radio question: no contention, no
 beacon intervals, no neighbours. See the README for forcing CDC-NCM over RNDIS.
 Use Wi-Fi when you cannot cable, and then 5 GHz (or 6 GHz) at close range.
+
+## The configuration: best picture, least delay
+
+`tools/optimal-config.sh` writes the whole choice down and puts it on a connected
+device:
+
+```bash
+tools/optimal-config.sh apply          # the best picture with the least delay
+tools/optimal-config.sh apply 4k30     # the same, for a weak link
+tools/optimal-config.sh measure        # the same plus the counters that measure it
+tools/optimal-config.sh show           # what the device is set to now
+```
+
+Every setting is checked against the receiver, which answers with the value it
+stored — a setting the receiver refuses (a renamed key, a value out of range) is
+reported and the script exits with an error instead of leaving a gap behind
+silently.
+
+| setting | value | why |
+|---------|-------|-----|
+| `stream_profile` | `auto` | the panel's native resolution, clamped to the decoder, frame rate clamped to what it sustains there. `4k30` for a weak link |
+| `max_fps` | `60` | the panel's top rate; the clamp above decides what is actually advertised |
+| `h265` | `on` | about half the bitrate of H.264 at the same quality |
+| `fit_aspect` | `true` | the picture keeps its shape instead of being stretched to the panel |
+| `overscanned` | `false` | use the whole panel |
+| `enforce_sdr` | `true` | the sender sends SDR, so the decoder is told to output BT.709 |
+| `allow-frame-drop` | `true` | a frame that arrives late is dropped rather than stalling the picture |
+| `priority` | `true` | realtime priority for the codec |
+| `wifi_low_latency_lock` | `true` | the radio does not sleep between beacons |
+| `low_latency` | `true` | oboe's low-latency output and the decoder's low-latency flag; oboe falls back to a normal stream where the tv has no fast path |
+| `audio_auto_buffer` | `true` | the cushion follows the arrival delay instead of a fixed value |
+| `audio_adaptive_step` | `2` | the 90th percentile: less delay than the 95th percentile default, still stable. `1` or `0` is faster and clicks more |
+| `oboe_buffer_frames` | `256` | about 5 ms: enough that a busy tv does not run the output dry, small enough to stay below the eye's notice. `0` lets oboe pick, which in low-latency mode is two bursts — that clicks on a weak tv |
+| `separate_display` | `true` | the tv is a separate display, not a mirror |
+
+The settings that only the diagnostics need (`verbose_protocol_log`,
+`benchmark_log`, `debug_enabled`, `developer_options`) are **off** in the normal
+config and on in the `measure` config: the protocol log is a debug-level log and
+costs throughput, which is exactly what the measurements must not have.
+
+If the audio clicks on the tv, `low_latency false` is the first thing to try —
+the picture does not depend on it.
 
 ## Measuring before and after
 

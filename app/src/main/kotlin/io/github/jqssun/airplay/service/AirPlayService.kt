@@ -457,7 +457,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_MIRROR, advertiseMirroring)
         NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_AUDIO, advertiseAudio)
         NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_SEPARATE_DISPLAY, separateDisplay)
-        NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", maxFps)
         NativeBridge.nativeSetPlist(nativeHandle, "overscanned", if (overscanned) 1 else 0)
         if (audioLatencyMs >= 0) {
             NativeBridge.nativeSetPlist(nativeHandle, "audio_delay_micros", audioLatencyMs * 1000)
@@ -474,12 +473,23 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         videoRenderer.setResolution(w, h)
         _videoResolution.value = "${w}x${h}"
         _videoAspect.value = w.toFloat() / h
-        NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, maxFps)
+        // the advertised frame rate has to be one the decoder can sustain at
+        // this size: a 4k30 decoder asked for 4k60 drops frames instead of
+        // decoding them, and a dropped frame in an extended desktop is a
+        // visible stutter. the size is already clamped to the decoder's cap.
+        val decoderFpsCap = videoRenderer.maxFpsAt(w, h)
+        val fps = if (decoderFpsCap in 1 until maxFps) decoderFpsCap else maxFps
+        videoRenderer.setMaxFps(fps)
+        NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", fps)
+        NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, fps)
         _setupFrameBuffers()
         // the sender builds the extended desktop from this geometry, so it has
         // to be the panel's native resolution to avoid an upscaled desktop
-        _advertisedResolution.value = "${w}x${h}@${maxFps}"
-        log("Advertising display ${w}x${h}@${maxFps} (decoder limit ${videoRenderer.maxResolution().first}x${videoRenderer.maxResolution().second}, profile ${prefs[Prefs.STREAM_PROFILE]})")
+        _advertisedResolution.value = "${w}x${h}@${fps}"
+        log("Advertising display ${w}x${h}@${fps} (decoder limit ${videoRenderer.maxResolution().first}x${videoRenderer.maxResolution().second}, profile ${prefs[Prefs.STREAM_PROFILE]})")
+        if (decoderFpsCap in 1 until maxFps) {
+            log("Frame rate clamped to ${decoderFpsCap}fps: the decoder cannot sustain ${maxFps}fps at ${w}x${h}")
+        }
 
         // physical panel size, lets the sender scale the extended desktop's ui
         val physW = prefs[Prefs.DISPLAY_PHYSICAL_WIDTH_MM]
