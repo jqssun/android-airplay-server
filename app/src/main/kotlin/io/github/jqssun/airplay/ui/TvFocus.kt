@@ -21,10 +21,11 @@ inline fun Modifier.thenIf(condition: Boolean, block: Modifier.() -> Modifier): 
     if (condition) block() else this
 
 @Composable
+// the same ring as Modifier.dpadFocus, so a row and a round button look alike
 fun Modifier.focusRing(
     shape: Shape = CircleShape,
     color: Color = MaterialTheme.colorScheme.primary,
-    width: Dp = 3.dp,
+    width: Dp = 2.dp,
 ): Modifier {
     var focused by remember { mutableStateOf(false) }
     return this
