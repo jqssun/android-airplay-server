@@ -1137,7 +1137,19 @@ private fun debugOverlaySections(context: Context, info: DebugInfo): List<DebugS
         }
     }.takeIf { it.isNotEmpty() }?.let { add(DebugSection(context.getString(R.string.debug_section_audio), it)) }
 
-    add(DebugSection(context.getString(R.string.debug_section_network), listOf(context.getString(R.string.debug_clients, info.connections))))
+    buildList {
+        add(context.getString(R.string.debug_clients, info.connections))
+        info.link?.let { link ->
+            add(context.getString(
+                R.string.debug_link, link.band, link.rssiDbm, link.linkSpeedMbps, link.quality
+            ))
+        }
+        if (info.udpErrors.rcvbuf > 0 || info.udpErrors.sndbuf > 0) {
+            add(context.getString(
+                R.string.debug_udp_errors, info.udpErrors.rcvbuf, info.udpErrors.sndbuf
+            ))
+        }
+    }.takeIf { it.isNotEmpty() }?.let { add(DebugSection(context.getString(R.string.debug_section_network), it)) }
 }
 
 // "mean/max ms held=N", or "held=N" before first latency window lands

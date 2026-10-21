@@ -38,6 +38,8 @@ import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.changes
 import io.github.jqssun.airplay.get
 import io.github.jqssun.airplay.hasLocalNetwork
+import io.github.jqssun.airplay.net.readUdpErrors
+import io.github.jqssun.airplay.net.readWifiLink
 import io.github.jqssun.airplay.observe
 import io.github.jqssun.airplay.realDisplaySize
 import io.github.jqssun.airplay.audio.DacpController
@@ -1159,6 +1161,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         clientVolume = (100 * clientVolume()).roundToInt(),
         audio = audioRenderer.audioDebug(),
         connections = _connectionCount.value,
+        link = readWifiLink(this),
+        udpErrors = readUdpErrors(),
     )
 
     // helpers

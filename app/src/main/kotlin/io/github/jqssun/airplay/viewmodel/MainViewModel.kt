@@ -13,6 +13,8 @@ import io.github.jqssun.airplay.Pref
 import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.get
+import io.github.jqssun.airplay.net.UdpErrors
+import io.github.jqssun.airplay.net.WifiLink
 import io.github.jqssun.airplay.observe
 import io.github.jqssun.airplay.service.AirPlayService
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
@@ -61,6 +63,8 @@ data class DebugInfo(
     val clientVolume: Int = 100,
     val audio: AudioDebug? = null,
     val connections: Int = 0,
+    val link: WifiLink? = null,
+    val udpErrors: UdpErrors = UdpErrors(0, 0),
 ) {
     val bitrateStr: String get() {
         val kbps = videoBitrate / 1000
