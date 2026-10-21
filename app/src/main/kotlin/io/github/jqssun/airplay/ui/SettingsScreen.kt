@@ -51,6 +51,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val alacEnabled by viewModel.pref(Prefs.ALAC_ENABLED).collectAsState()
     val aacEnabled by viewModel.pref(Prefs.AAC_ENABLED).collectAsState()
     val resolution by viewModel.pref(Prefs.RESOLUTION).collectAsState()
+    val streamProfile by viewModel.pref(Prefs.STREAM_PROFILE).collectAsState()
     val idlePreview by viewModel.pref(Prefs.IDLE_PREVIEW).collectAsState()
     val autoFullscreen by viewModel.pref(Prefs.AUTO_FULLSCREEN).collectAsState()
     val keepScreenOn by viewModel.pref(Prefs.KEEP_SCREEN_ON).collectAsState()
@@ -202,20 +203,36 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onCheckedChange = { viewModel.set(Prefs.AUTO_FULLSCREEN, it) }
         )
 
-        SettingResolution(
-            value = resolution,
-            onValueChange = { viewModel.set(Prefs.RESOLUTION, it) }
+        SettingChips(
+            title = stringResource(R.string.setting_stream_profile),
+            description = stringResource(R.string.setting_stream_profile_desc),
+            value = streamProfile,
+            options = listOf(
+                Prefs.PROFILE_AUTO to stringResource(R.string.chip_auto),
+                Prefs.PROFILE_4K30 to stringResource(R.string.profile_4k30),
+                Prefs.PROFILE_4K60 to stringResource(R.string.profile_4k60),
+                Prefs.PROFILE_1080P60 to stringResource(R.string.profile_1080p60),
+                Prefs.PROFILE_CUSTOM to stringResource(R.string.chip_custom),
+            ),
+            onValueChange = { viewModel.set(Prefs.STREAM_PROFILE, it) }
         )
 
-        SettingChipField(
-            title = stringResource(R.string.setting_max_fps),
-            description = stringResource(R.string.setting_max_fps_desc),
-            value = maxFps.toString(),
-            presets = listOf("24" to "24", "30" to "30", "60" to "60", "120" to "120"),
-            placeholder = stringResource(R.string.setting_max_fps_placeholder),
-            keyboardType = KeyboardType.Number,
-            onValueChange = { it.toIntOrNull()?.let { v -> viewModel.set(Prefs.MAX_FPS, v) } }
-        )
+        if (streamProfile == Prefs.PROFILE_CUSTOM) {
+            SettingResolution(
+                value = resolution,
+                onValueChange = { viewModel.set(Prefs.RESOLUTION, it) }
+            )
+
+            SettingChipField(
+                title = stringResource(R.string.setting_max_fps),
+                description = stringResource(R.string.setting_max_fps_desc),
+                value = maxFps.toString(),
+                presets = listOf("24" to "24", "30" to "30", "60" to "60", "120" to "120"),
+                placeholder = stringResource(R.string.setting_max_fps_placeholder),
+                keyboardType = KeyboardType.Number,
+                onValueChange = { it.toIntOrNull()?.let { v -> viewModel.set(Prefs.MAX_FPS, v) } }
+            )
+        }
 
         SettingSwitch(
             title = stringResource(R.string.setting_overscanned),
@@ -289,13 +306,15 @@ fun SettingsScreen(viewModel: MainViewModel) {
 
         SectionHeader(stringResource(R.string.section_decode))
 
-        SettingChips(
-            title = stringResource(R.string.setting_h265),
-            description = stringResource(R.string.setting_h265_desc),
-            value = h265,
-            options = tri,
-            onValueChange = { viewModel.set(Prefs.H265, it) }
-        )
+        if (streamProfile == Prefs.PROFILE_CUSTOM) {
+            SettingChips(
+                title = stringResource(R.string.setting_h265),
+                description = stringResource(R.string.setting_h265_desc),
+                value = h265,
+                options = tri,
+                onValueChange = { viewModel.set(Prefs.H265, it) }
+            )
+        }
 
         SettingSwitch(
             title = stringResource(R.string.setting_sw_alac),

@@ -57,6 +57,9 @@ cmd_install() {
     set_pref fit_aspect true
     # the panel's native resolution, not the app's window size
     set_pref resolution auto
+    # the stream profile bundles resolution, frame rate and codec;
+    # use 4k30 for a weak 5 GHz link, 4k60 for a strong one
+    set_pref stream_profile auto
     # log the protocol, this is where the sender's setup request shows up
     set_pref verbose_protocol_log true
     echo

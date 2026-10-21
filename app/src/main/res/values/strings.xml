@@ -126,6 +126,11 @@
     <string name="setting_discovery_usb_desc">Only advertise over USB tethering to enforce wired connection. Uses custom mDNS responder.</string>
     <string name="chip_all_networks">All networks</string>
     <string name="chip_usb_only">USB only</string>
+    <string name="setting_stream_profile">Stream profile</string>
+    <string name="setting_stream_profile_desc">Resolution, frame rate and codec in one setting. The picture quality comes first: a profile gives up frame rate before resolution, because 4K at 30 fps looks better than 1080p at 60 fps. HEVC needs about half the airtime of H.264 for the same quality, which keeps a weak wifi link from stalling.</string>
+    <string name="profile_4k30">4K 30</string>
+    <string name="profile_4k60">4K 60</string>
+    <string name="profile_1080p60">1080p 60</string>
     <string name="setting_resolution">Resolution</string>
     <string name="setting_resolution_desc">Video resolution advertised to senders</string>
     <string name="setting_resolution_placeholder">[W]x[H]</string>

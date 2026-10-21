@@ -56,6 +56,14 @@ object Prefs {
     const val AUTO = "auto"; const val ON = "on"; const val OFF = "off"
     const val PORTRAIT = "portrait"; const val LANDSCAPE = "landscape"
     const val FALLBACK_MAC_ADDRESS = "fallback_mac_address"
+    // a stream profile bundles the resolution, the frame rate and the codec.
+    // the picture quality comes first, so the profiles give up frame rate
+    // before they give up resolution: 4k30 looks better than 1080p60
+    const val PROFILE_AUTO = "auto"
+    const val PROFILE_4K30 = "4k30"
+    const val PROFILE_4K60 = "4k60"
+    const val PROFILE_1080P60 = "1080p60"
+    const val PROFILE_CUSTOM = "custom"
     val ADAPTIVE_PERCENTILES = intArrayOf(80, 85, 90, 95, 99)
     private val SIZE = Regex("[1-9]\\d{0,4}x[1-9]\\d{0,4}")
 
@@ -99,6 +107,11 @@ object Prefs {
     val SYNC_CLIENT_VOLUME = bool("sync_client_volume", true)
     val RESOLUTION = str("resolution", AUTO, restart = true) { it in setOf(AUTO, PORTRAIT, LANDSCAPE) || SIZE.matches(it) }
     val MAX_FPS = int("max_fps", 60, 1..Int.MAX_VALUE, restart = true)
+    // resolution, frame rate and codec in one setting; the custom profile uses
+    // the resolution, the frame rate and the codec settings below
+    val STREAM_PROFILE = str("stream_profile", PROFILE_AUTO, restart = true) {
+        it in setOf(PROFILE_AUTO, PROFILE_4K30, PROFILE_4K60, PROFILE_1080P60, PROFILE_CUSTOM)
+    }
     val OVERSCANNED = bool("overscanned", false, restart = true)
     val REQUIRE_PIN = bool("require_pin", false, restart = true)
     val ALLOW_NEW_CONN = bool("allow_new_conn", true, restart = true)

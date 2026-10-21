@@ -407,11 +407,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         audioRenderer.attachEngine(nativeHandle)
 
         // apply settings from preferences
-        val maxFps = prefs[Prefs.MAX_FPS]
+        val maxFps = _profileFps()
         val overscanned = prefs[Prefs.OVERSCANNED]
         val audioLatencyMs = prefs[Prefs.AUDIO_LATENCY_MS]
         val (reqW, reqH) = _displaySize(clamp = false)
-        val h265 = videoRenderer.selectDecoders(reqW, reqH, maxFps, Prefs.forced(prefs[Prefs.H265]))
+        val h265 = videoRenderer.selectDecoders(reqW, reqH, maxFps, _profileH265())
         val alac = prefs[Prefs.ALAC_ENABLED]
         val aac = prefs[Prefs.AAC_ENABLED]
 
@@ -455,7 +455,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         // the sender builds the extended desktop from this geometry, so it has
         // to be the panel's native resolution to avoid an upscaled desktop
         _advertisedResolution.value = "${w}x${h}@${maxFps}"
-        log("Advertising display ${w}x${h}@${maxFps} (decoder limit ${videoRenderer.maxResolution().first}x${videoRenderer.maxResolution().second})")
+        log("Advertising display ${w}x${h}@${maxFps} (decoder limit ${videoRenderer.maxResolution().first}x${videoRenderer.maxResolution().second}, profile ${prefs[Prefs.STREAM_PROFILE]})")
 
         // physical panel size, lets the sender scale the extended desktop's ui
         val physW = prefs[Prefs.DISPLAY_PHYSICAL_WIDTH_MM]
@@ -498,10 +498,32 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     private fun _orientationFollowsDevice(): Boolean =
-        prefs[Prefs.RESOLUTION] == Prefs.AUTO
+        _profileResolution() == Prefs.AUTO
+
+    // the stream profile bundles the resolution, the frame rate and the codec.
+    // the picture quality comes first: the profiles give up frame rate before
+    // they give up resolution, because 4k30 looks better than 1080p60
+    private fun _profileResolution(): String = when (prefs[Prefs.STREAM_PROFILE]) {
+        Prefs.PROFILE_4K30, Prefs.PROFILE_4K60 -> "3840x2160"
+        Prefs.PROFILE_1080P60 -> "1920x1080"
+        Prefs.PROFILE_CUSTOM -> prefs[Prefs.RESOLUTION]
+        else -> Prefs.AUTO
+    }
+
+    private fun _profileFps(): Int = when (prefs[Prefs.STREAM_PROFILE]) {
+        Prefs.PROFILE_4K30 -> 30
+        else -> prefs[Prefs.MAX_FPS]
+    }
+
+    // hevc needs about half the airtime of h264 for the same quality, which is
+    // what keeps a weak link from retransmitting
+    private fun _profileH265(): Boolean? = when (prefs[Prefs.STREAM_PROFILE]) {
+        Prefs.PROFILE_CUSTOM -> Prefs.forced(prefs[Prefs.H265])
+        else -> true
+    }
 
     private fun _displaySize(clamp: Boolean = true): Pair<Int, Int> {
-        val res = prefs[Prefs.RESOLUTION]
+        val res = _profileResolution()
         val portrait = when (res) {
             Prefs.PORTRAIT -> true
             Prefs.LANDSCAPE -> false
@@ -534,7 +556,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         if (nativeHandle == 0L || _serverState.value != ServerState.RUNNING) return
         if (!_orientationFollowsDevice()) return
         val (w, h) = _displaySize()
-        NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, prefs[Prefs.MAX_FPS])
+        NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, _profileFps())
         log("Advertising ${w}x${h} from next session")
     }
 
