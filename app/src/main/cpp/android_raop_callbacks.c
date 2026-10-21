@@ -40,10 +40,12 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->audio_engine = NULL;
     ctx->frame_buffers = NULL;
     ctx->frame_buffer_refs = NULL;
+    ctx->frame_buffer_busy = NULL;
     ctx->frame_buffer_count = 0;
     ctx->frame_buffer_capacity = 0;
     ctx->frame_buffer_next = 0;
     ctx->video_session_count = 0;
+    ctx->next_video_session_id = 0;
     memset(ctx->video_sessions, 0, sizeof(ctx->video_sessions));
     memset(ctx->registered_keys, 0, sizeof(ctx->registered_keys));
 
@@ -93,6 +95,10 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env) {
         free(ctx->frame_buffer_refs);
         ctx->frame_buffer_refs = NULL;
     }
+    if (ctx->frame_buffer_busy) {
+        free(ctx->frame_buffer_busy);
+        ctx->frame_buffer_busy = NULL;
+    }
     for (int i = 0; i < ctx->registered_count; i++) {
         free(ctx->registered_keys[i]);
         ctx->registered_keys[i] = NULL;
@@ -133,45 +139,76 @@ static int64_t _now_ms(void) {
     return (int64_t) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-static int _video_session_id(android_callback_ctx_t *ctx, raop_ntp_t *ntp) {
-    uintptr_t key = (uintptr_t) ntp;
-    int64_t now = _now_ms();
+/* the slot of the session that runs on the calling thread, -1 if there is
+   none: the size report of a session arrives before its first frame */
+static int _video_session_slot_by_thread(android_callback_ctx_t *ctx) {
+    pthread_t self = pthread_self();
     for (int i = 0; i < ctx->video_session_count; i++) {
-        if (ctx->video_sessions[i].ntp == key) {
-            ctx->video_sessions[i].last_frame_ms = now;
-            return ctx->video_sessions[i].id;
+        if (ctx->video_sessions[i].has_thread &&
+            pthread_equal(ctx->video_sessions[i].thread, self)) {
+            return i;
         }
     }
+    return -1;
+}
+
+/* a free slot, or the one that has been silent the longest */
+static int _video_session_free_slot(android_callback_ctx_t *ctx) {
     int slot = ctx->video_session_count;
-    if (slot >= MAX_VIDEO_SESSIONS) {
-        /* all slots are taken, recycle the one that has been silent the
-           longest (its session is long gone) */
-        slot = 0;
-        for (int i = 1; i < ctx->video_session_count; i++) {
-            if (ctx->video_sessions[i].last_frame_ms < ctx->video_sessions[slot].last_frame_ms) {
-                slot = i;
-            }
-        }
-    } else {
+    if (slot < MAX_VIDEO_SESSIONS) {
         ctx->video_session_count++;
+        return slot;
     }
-    ctx->video_sessions[slot].ntp = key;
+    /* all slots are taken, recycle the one that has been silent the longest
+       (its session is long gone) */
+    slot = 0;
+    for (int i = 1; i < ctx->video_session_count; i++) {
+        if (ctx->video_sessions[i].last_frame_ms < ctx->video_sessions[slot].last_frame_ms) {
+            slot = i;
+        }
+    }
+    return slot;
+}
+
+static int _video_session_new(android_callback_ctx_t *ctx, int slot, uintptr_t ntp) {
+    ctx->video_sessions[slot].ntp = ntp;
     ctx->video_sessions[slot].thread = pthread_self();
-    ctx->video_sessions[slot].id = slot + 1;
-    ctx->video_sessions[slot].last_frame_ms = now;
+    ctx->video_sessions[slot].has_thread = 1;
+    /* the ids grow monotonically, so the app can tell a new session apart
+       from one that was dropped and came back */
+    ctx->video_sessions[slot].id = ++ctx->next_video_session_id;
+    ctx->video_sessions[slot].last_frame_ms = _now_ms();
     LOGI("new video session %d", ctx->video_sessions[slot].id);
     return ctx->video_sessions[slot].id;
 }
 
-/* the size report comes from the session's own thread */
-static int _video_session_id_by_thread(android_callback_ctx_t *ctx) {
-    pthread_t self = pthread_self();
+static int _video_session_id(android_callback_ctx_t *ctx, raop_ntp_t *ntp) {
+    uintptr_t key = (uintptr_t) ntp;
     for (int i = 0; i < ctx->video_session_count; i++) {
-        if (pthread_equal(ctx->video_sessions[i].thread, self)) {
+        if (ctx->video_sessions[i].ntp == key) {
+            ctx->video_sessions[i].last_frame_ms = _now_ms();
             return ctx->video_sessions[i].id;
         }
     }
-    return 0;
+    /* the session was already seen by its size report, which arrives from
+       the session's own thread before the first frame */
+    int slot = _video_session_slot_by_thread(ctx);
+    if (slot >= 0) {
+        ctx->video_sessions[slot].ntp = key;
+        ctx->video_sessions[slot].last_frame_ms = _now_ms();
+        return ctx->video_sessions[slot].id;
+    }
+    return _video_session_new(ctx, _video_session_free_slot(ctx), key);
+}
+
+/* the size report comes from the session's own thread */
+static int _video_session_id_by_thread(android_callback_ctx_t *ctx) {
+    int slot = _video_session_slot_by_thread(ctx);
+    if (slot >= 0) {
+        ctx->video_sessions[slot].last_frame_ms = _now_ms();
+        return ctx->video_sessions[slot].id;
+    }
+    return _video_session_new(ctx, _video_session_free_slot(ctx), 0);
 }
 
 static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data) {
@@ -188,18 +225,24 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
     /* hand the frame over through the app's direct buffer: no jbyteArray
        allocation and no garbage collection per frame */
     if (ctx->frame_buffers && ctx->frame_buffer_count > 0) {
-        int idx = ctx->frame_buffer_next;
-        ctx->frame_buffer_next = (idx + 1) % ctx->frame_buffer_count;
-        if (data->data_len <= ctx->frame_buffer_capacity) {
+        /* two sessions can deliver frames at the same time, so the index has
+           to be handed out atomically */
+        int idx = (int) (__atomic_fetch_add(&ctx->frame_buffer_next, 1, __ATOMIC_RELAXED) %
+                         (unsigned int) ctx->frame_buffer_count);
+        if (data->data_len <= ctx->frame_buffer_capacity &&
+            !__atomic_exchange_n(&ctx->frame_buffer_busy[idx], 1, __ATOMIC_ACQUIRE)) {
             memcpy(ctx->frame_buffers[idx], data->data, (size_t) data->data_len);
             (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_data_buffer,
                                    (jint) idx, (jint) data->data_len,
                                    (jlong) data->ntp_time_local, (jboolean) data->is_h265,
                                    (jint) session);
+            __atomic_store_n(&ctx->frame_buffer_busy[idx], 0, __ATOMIC_RELEASE);
             return;
         }
-        LOGW("video frame of %d bytes exceeds the %d byte frame buffer, copying it over",
-             data->data_len, ctx->frame_buffer_capacity);
+        if (data->data_len > ctx->frame_buffer_capacity) {
+            LOGW("video frame of %d bytes exceeds the %d byte frame buffer, copying it over",
+                 data->data_len, ctx->frame_buffer_capacity);
+        }
     }
 
     jbyteArray arr = (*env)->NewByteArray(env, data->data_len);
@@ -228,14 +271,20 @@ void android_callbacks_set_frame_buffers(android_callback_ctx_t *ctx, JNIEnv *en
     ctx->frame_buffer_count = 0;
     ctx->frame_buffer_capacity = 0;
     ctx->frame_buffer_next = 0;
+    if (ctx->frame_buffer_busy) {
+        free(ctx->frame_buffer_busy);
+        ctx->frame_buffer_busy = NULL;
+    }
     if (!buffers || capacity <= 0) return;
     jsize count = (*env)->GetArrayLength(env, buffers);
     if (count <= 0) return;
     uint8_t **addresses = calloc((size_t) count, sizeof(uint8_t *));
     jobject *refs = calloc((size_t) count, sizeof(jobject));
-    if (!addresses || !refs) {
+    unsigned char *busy = calloc((size_t) count, sizeof(unsigned char));
+    if (!addresses || !refs || !busy) {
         free(addresses);
         free(refs);
+        free(busy);
         return;
     }
     for (jsize i = 0; i < count; i++) {
@@ -247,6 +296,7 @@ void android_callbacks_set_frame_buffers(android_callback_ctx_t *ctx, JNIEnv *en
     }
     ctx->frame_buffers = addresses;
     ctx->frame_buffer_refs = refs;
+    ctx->frame_buffer_busy = busy;
     ctx->frame_buffer_count = (int) count;
     ctx->frame_buffer_capacity = (int) capacity;
 }

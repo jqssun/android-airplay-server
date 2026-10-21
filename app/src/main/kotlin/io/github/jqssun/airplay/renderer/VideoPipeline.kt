@@ -151,8 +151,11 @@ class VideoPipeline {
         // the extended desktop can have a different aspect ratio than the
         // panel, so fit the picture instead of stretching it
         val (vpX, vpY, vpW, vpH) = _viewport()
-        GLES20.glViewport(vpX, vpY, vpW, vpH)
+        // clear the whole window first, the bars around the picture have to
+        // be black and not the leftovers of the previous frame
+        GLES20.glViewport(0, 0, winW, winH)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        GLES20.glViewport(vpX, vpY, vpW, vpH)
         GLES20.glUseProgram(program)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTex)

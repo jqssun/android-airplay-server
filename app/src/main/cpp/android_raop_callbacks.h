@@ -59,6 +59,8 @@ typedef struct {
     uint8_t **frame_buffers;
     /* global refs to the buffers, they have to stay reachable */
     jobject *frame_buffer_refs;
+    /* 1 while a buffer is being handed over to the app */
+    unsigned char *frame_buffer_busy;
     int frame_buffer_count;
     int frame_buffer_capacity;
     int frame_buffer_next;
@@ -68,10 +70,12 @@ typedef struct {
     struct {
         uintptr_t ntp;
         pthread_t thread;
+        int has_thread;
         int id;
         int64_t last_frame_ms;
     } video_sessions[MAX_VIDEO_SESSIONS];
     int video_session_count;
+    int next_video_session_id;
 } android_callback_ctx_t;
 
 void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject callback_obj);
