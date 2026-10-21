@@ -449,7 +449,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _videoResolution.value = "${w}x${h}"
         _videoAspect.value = w.toFloat() / h
         NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, maxFps)
-        _setupFrameBuffers(w, h)
+        _setupFrameBuffers()
         // the sender builds the extended desktop from this geometry, so it has
         // to be the panel's native resolution to avoid an upscaled desktop
         _advertisedResolution.value = "${w}x${h}@${maxFps}"
@@ -767,21 +767,15 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     // here avoids allocating a byte array for every frame
     private var _frameBuffers: Array<java.nio.ByteBuffer>? = null
 
-    private fun _setupFrameBuffers(w: Int, h: Int) {
+    private fun _setupFrameBuffers() {
         if (nativeHandle == 0L) return
-        val capacity = _frameBufferCapacity(w, h)
+        val capacity = FRAME_BUFFER_SIZE
         val buffers = Array(FRAME_BUFFER_COUNT) {
             java.nio.ByteBuffer.allocateDirect(capacity).order(java.nio.ByteOrder.nativeOrder())
         }
         _frameBuffers = buffers
         NativeBridge.nativeSetFrameBuffers(nativeHandle, buffers, capacity)
         Log.i(TAG, "frame buffers: ${buffers.size} x ${capacity / 1024}k")
-    }
-
-    private fun _frameBufferCapacity(w: Int, h: Int): Int {
-        // a raw frame is the worst case for an uncompressed key frame
-        val raw = w.toLong() * h * 3 / 2
-        return raw.coerceIn(MIN_FRAME_BUFFER, MAX_FRAME_BUFFER).toInt()
     }
 
     override fun onVideoSessionPoll() {
@@ -1338,10 +1332,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         private const val AUDIO_CONFIG_DEBOUNCE_MS = 500L
         private const val SERVER_RESTART_DEBOUNCE_MS = 500L
 
-        // ring of direct frame buffers handed over to the native decoder
+        // ring of direct frame buffers handed over to the native decoder:
+        // uxplay hands over one access unit per callback and its length field
+        // is 16 bit, so the buffers stay small
         private const val FRAME_BUFFER_COUNT = 3
-        private const val MIN_FRAME_BUFFER = 4L * 1024 * 1024
-        private const val MAX_FRAME_BUFFER = 16L * 1024 * 1024
+        private const val FRAME_BUFFER_SIZE = 256 * 1024
 
         // how long a display session may stay quiet before another one gets
         // the panel, and when a session is forgotten completely
