@@ -115,6 +115,8 @@ fun MainScreen(
     val videoSessionPending by viewModel.videoSessionPending.collectAsState()
     val mirroringActive by viewModel.mirroringActive.collectAsState()
     val autoFullscreen by viewModel.pref(Prefs.AUTO_FULLSCREEN).collectAsState()
+    val context = LocalContext.current
+    val tv = isTv()
 
     // don't use movableContentOf: moving AndroidView across subcomposition boundaries makes it crash on reparent
     val video: @Composable () -> Unit = {
@@ -132,7 +134,13 @@ fun MainScreen(
         val justStarted = !prevMirroringActive && mirroringActive
         prevMirroringActive = mirroringActive
         if (justStarted && !audioOnly && !videoPlaybackActive && autoFullscreen && pin == null) {
-            fullscreen = true
+            if (tv) {
+                // going fullscreen on a tv hides the status the user was watching;
+                // say what happened instead, the fullscreen button is still there
+                Toast.makeText(context, context.getString(R.string.toast_connected), Toast.LENGTH_SHORT).show()
+            } else {
+                fullscreen = true
+            }
         }
     }
 
@@ -694,6 +702,26 @@ private fun OverviewContent(
                             textAlign = TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 24.dp)
                         )
+                        // an idle screen is what the room looks at: say what this
+                        // receiver is called and what it can show
+                        if (state == ServerState.RUNNING) {
+                            Spacer(Modifier.height(20.dp))
+                            Text(
+                                text = serverName.ifBlank { Prefs.SERVER_NAME.def },
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = 24.dp)
+                            )
+                            if (advertisedResolution.isNotEmpty()) {
+                                Text(
+                                    text = stringResource(R.string.advertised_display, advertisedResolution),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
                     }
                 } else if (connecting) {
                     Text(

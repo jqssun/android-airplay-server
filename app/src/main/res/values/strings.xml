@@ -75,6 +75,7 @@
     <!-- Logs screen -->
     <string name="btn_export">Export</string>
     <string name="btn_jump_latest">Jump to latest</string>
+    <string name="toast_connected">AirPlay connected</string>
     <string name="btn_clear">Clear</string>
     <string name="export_logs_chooser_title">Export logs</string>
 

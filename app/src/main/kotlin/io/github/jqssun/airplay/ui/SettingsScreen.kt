@@ -615,9 +615,10 @@ private fun SettingResolution(
     value: String,
     onValueChange: (String) -> Unit
 ) {
+    // 720p is gone: on a tv it is not worth a d-pad stop, and the custom chip
+    // still reaches it (and everything else) in two presses
     val presets = listOf(
         Prefs.AUTO to stringResource(R.string.chip_auto),
-        "1280x720" to "1280x720",
         "1920x1080" to "1920x1080",
         "3840x2160" to "3840x2160"
     )
