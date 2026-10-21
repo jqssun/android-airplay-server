@@ -10,3 +10,5 @@
 .cxx/
 
 *.jks
+# Synthetic input for the optional physical-device codec test
+/app/src/androidTest/assets/warmup-fixture.bin

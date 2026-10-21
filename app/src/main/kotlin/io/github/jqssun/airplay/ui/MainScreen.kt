@@ -96,6 +96,32 @@ fun MainScreen(
     onPip: () -> Unit = {},
     onLocalNetwork: () -> Unit = {}
 ) {
+    val directSurface by viewModel.pref(Prefs.DIRECT_SURFACE).collectAsState()
+    if (directSurface) {
+        val aspect by viewModel.videoAspect.collectAsState()
+        val mirroringActive by viewModel.mirroringActive.collectAsState()
+        // Related approach: PR #60 retains a full-window H10 SurfaceView.
+        // Here the retained view follows the actual preview/fullscreen slot.
+        PersistentVideoSurface(aspect, mirroringActive, onSurfaceAvailable, onSurfaceDestroyed) { video ->
+            MainScreenContent(viewModel, isInPip, onSurfaceAvailable, onSurfaceDestroyed,
+                onPip, onLocalNetwork, video)
+        }
+    } else {
+        MainScreenContent(viewModel, isInPip, onSurfaceAvailable, onSurfaceDestroyed,
+            onPip, onLocalNetwork)
+    }
+}
+
+@Composable
+private fun MainScreenContent(
+    viewModel: MainViewModel,
+    isInPip: Boolean,
+    onSurfaceAvailable: (android.view.Surface) -> Unit,
+    onSurfaceDestroyed: (android.view.Surface) -> Unit,
+    onPip: () -> Unit,
+    onLocalNetwork: () -> Unit,
+    persistentVideo: (@Composable () -> Unit)? = null
+) {
     var tab by remember { mutableStateOf(Tab.OVERVIEW) }
     var fullscreen by remember { mutableStateOf(false) }
     val pin by viewModel.pinCode.collectAsState()
@@ -107,7 +133,7 @@ fun MainScreen(
     val autoFullscreen by viewModel.pref(Prefs.AUTO_FULLSCREEN).collectAsState()
 
     // don't use movableContentOf: moving AndroidView across subcomposition boundaries makes it crash on reparent
-    val video: @Composable () -> Unit = {
+    val video: @Composable () -> Unit = persistentVideo ?: {
         val aspect by viewModel.videoAspect.collectAsState()
         VideoSurfaceView(
             onSurfaceAvailable = onSurfaceAvailable,

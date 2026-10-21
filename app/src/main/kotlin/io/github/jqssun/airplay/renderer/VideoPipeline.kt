@@ -1,6 +1,7 @@
 package io.github.jqssun.airplay.renderer
 
 import android.graphics.SurfaceTexture
+import android.os.SystemClock
 import android.opengl.EGL14
 import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
@@ -39,6 +40,8 @@ class VideoPipeline {
     @Volatile private var frameAvailable = false
     private var pendingDisplay: Surface? = null
     private var displayDirty = false
+    private var displayRevision = 0L
+    private var appliedDisplayRevision = 0L
     @Volatile private var videoW = 0
     @Volatile private var videoH = 0
 
@@ -52,7 +55,22 @@ class VideoPipeline {
     fun setDisplaySurface(surface: Surface?) = synchronized(lock) {
         pendingDisplay = surface
         displayDirty = true
+        displayRevision++
         lock.notifyAll()
+    }
+
+    // MediaCodec must not connect to a Surface still owned by EGL. Clearing the
+    // request also prevents a queued preview from binding after start().
+    fun detachDisplaySurface(): Boolean = synchronized(lock) {
+        setDisplaySurface(null)
+        val revision = displayRevision
+        val deadline = SystemClock.uptimeMillis() + 1000
+        while (running && appliedDisplayRevision < revision) {
+            val remaining = deadline - SystemClock.uptimeMillis()
+            if (remaining <= 0) return@synchronized false
+            lock.wait(remaining)
+        }
+        !running || appliedDisplayRevision >= revision
     }
 
     fun setVideoSize(w: Int, h: Int) {
@@ -88,6 +106,7 @@ class VideoPipeline {
         while (true) {
             var newDisplay: Surface? = null
             var displayChanged = false
+            var revision = 0L
             var doFrame = false
             synchronized(lock) {
                 while (running && !frameAvailable && !displayDirty) lock.wait()
@@ -95,6 +114,7 @@ class VideoPipeline {
                     newDisplay = pendingDisplay
                     displayChanged = true
                     displayDirty = false
+                    revision = displayRevision
                 }
                 if (running && frameAvailable) {
                     frameAvailable = false
@@ -102,7 +122,13 @@ class VideoPipeline {
                 }
             }
             if (!running) break
-            if (displayChanged) _bindDisplay(newDisplay)
+            if (displayChanged) {
+                _bindDisplay(newDisplay)
+                synchronized(lock) {
+                    appliedDisplayRevision = revision
+                    lock.notifyAll()
+                }
+            }
             if (doFrame) _consumeAndDraw()
         }
         _releaseGl()

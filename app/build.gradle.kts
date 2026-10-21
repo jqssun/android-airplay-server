@@ -35,6 +35,7 @@ android {
         targetSdk = 37
         versionCode = 36
         versionName = "0.0.36"
+        testInstrumentationRunner = "io.github.jqssun.airplay.ui.SurfaceContinuityInstrumentation"
 
         externalNativeBuild {
             cmake {
@@ -112,6 +113,7 @@ tasks.configureEach {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime)

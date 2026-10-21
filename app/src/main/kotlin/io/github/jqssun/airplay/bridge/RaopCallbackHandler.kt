@@ -18,6 +18,8 @@ interface RaopCallbackHandler {
     fun onProgress(start: Long, curr: Long, end: Long)
     fun onDacpId(dacpId: String, activeRemote: String)
     fun onMirrorRunning(running: Boolean)
+    // Synchronous cancellation before native shutdown joins the frame thread.
+    fun onMirrorStopping()
     // video (hls), distinct from mirroring and raop audio
     fun onVideoPlay(location: String, startPositionSeconds: Float)
     fun onVideoScrub(positionSeconds: Float)

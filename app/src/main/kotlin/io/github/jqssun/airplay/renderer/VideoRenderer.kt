@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import io.github.jqssun.airplay.renderer.DecoderSelector.Companion.videoCaps
@@ -17,11 +18,14 @@ class VideoRenderer(ctx: Context) {
     private var hevcDecoder: MediaCodecInfo? = null
     private var maxFps = 0
     private var codec: MediaCodec? = null
+    private var codecSurface: Surface? = null
     private var displaySurface: Surface? = null
     private var currentH265 = false
     private var videoWidth = 0
     private var videoHeight = 0
-    private var firstFrameQueued = false
+    private var streamRevision = 0L
+    private var decoderStartsAllowed = true
+    private var sessionFramesAllowed = true
 
     // stats
     @Volatile var fps = 0; private set
@@ -32,6 +36,9 @@ class VideoRenderer(ctx: Context) {
     @Volatile var framePacingJitterUs = 0L; private set
 
     var enforceSdr = true
+    var directSurface = false
+    private var directSurfaceFailed = false
+    private fun usesDirectSurface() = directSurface && !directSurfaceFailed
     var keyAllowFrameDrop = true
     var scheduledOutputBufferRelease = true
     var benchmarkLog = false
@@ -51,20 +58,60 @@ class VideoRenderer(ctx: Context) {
         if (w == videoWidth && h == videoHeight) return@synchronized
         videoWidth = w
         videoHeight = h
+        streamRevision++
+        lock.notifyAll()
         pipeline.setVideoSize(w, h)
         stopCodec()
     }
 
-    // doesn't restart codec; decoder renders into pipeline's own persistent surface
+    // Keep the codec and its reference frames across fullscreen/surface changes.
     fun setSurface(surface: Surface) = synchronized(lock) {
         displaySurface = surface
-        pipeline.setDisplaySurface(surface)
+        if (usesDirectSurface() && !pipeline.detachDisplaySurface()) {
+            Log.w(TAG, "EGL detach timed out; retaining the GL rendering path")
+            directSurfaceFailed = true
+            stopCodec()
+        }
+        if (usesDirectSurface() && codec != null && codecSurface !== surface) {
+            moveCodecToSurface(surface)
+        }
+        // Never connect EGL and MediaCodec producers to the same SurfaceView.
+        pipeline.setDisplaySurface(if (usesDirectSurface()) null else surface)
+        lock.notifyAll()
     }
 
     fun clearSurface(surface: Surface) = synchronized(lock) {
         if (displaySurface !== surface) return@synchronized
+        if (usesDirectSurface() && codecSurface === surface && codec != null) {
+            // The persistent SurfaceTexture keeps decoding while Android replaces
+            // the view. Waiting for a new keyframe would leave many senders black.
+            pipeline.start()
+            pipeline.setVideoSize(videoWidth, videoHeight)
+            pipeline.inputSurface?.let { moveCodecToSurface(it) }
+        }
         displaySurface = null
         pipeline.setDisplaySurface(null)
+    }
+
+    private fun moveCodecToSurface(surface: Surface) {
+        if (!surface.isValid) return
+        try {
+            codec?.setOutputSurface(surface)
+            codecSurface = surface
+            Log.i(TAG, "Decoder output surface changed (direct=$directSurface)")
+        } catch (e: Exception) {
+            Log.w(TAG, "Cannot switch decoder output surface", e)
+            if (codecSurface === pipeline.inputSurface) {
+                // A failed move from the dummy surface can safely retain the
+                // original rendering path without losing reference frames.
+                directSurfaceFailed = true
+                Log.w(TAG, "Using GL output until the receiver restarts")
+            } else {
+                // A destroyed vendor Surface cannot be reused. The next stream
+                // keyframe can create a decoder against the replacement view.
+                stopCodec()
+            }
+        }
     }
 
     fun selectDecoders(w: Int, h: Int, fps: Int, h265: Boolean?): Boolean = synchronized(lock) {
@@ -85,9 +132,36 @@ class VideoRenderer(ctx: Context) {
             .reduceOrNull { (w1, h1), (w2, h2) -> minOf(w1, w2) to minOf(h1, h2) } ?: (1920 to 1080)
 
     // codec per mirror session; pipeline persists across sessions
-    fun startSession() = synchronized(lock) { _resetStats() }
+    fun prepareForServerStart() = synchronized(lock) {
+        decoderStartsAllowed = true
+    }
 
-    fun stopSession() = synchronized(lock) { stopCodec() }
+    fun prepareForServerStop() = synchronized(lock) {
+        // Native shutdown joins the frame thread, so cancel its wait first and
+        // reject any subsequent frames until the server explicitly starts again.
+        decoderStartsAllowed = false
+        streamRevision++
+        lock.notifyAll()
+    }
+
+    fun startSession() = synchronized(lock) {
+        sessionFramesAllowed = true
+        streamRevision++
+        lock.notifyAll()
+        _resetStats()
+    }
+
+    fun prepareForSessionStop() = synchronized(lock) {
+        // Called synchronously before the native mirror thread is joined.
+        sessionFramesAllowed = false
+        streamRevision++
+        lock.notifyAll()
+    }
+
+    fun stopSession() = synchronized(lock) {
+        prepareForSessionStop()
+        stopCodec()
+    }
 
     private fun _resetStats() {
         fps = 0; bitrateBps = 0; frameCount = 0; codecName = ""
@@ -122,6 +196,7 @@ class VideoRenderer(ctx: Context) {
 
     fun feedFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
         synchronized(lock) {
+            if (!decoderStartsAllowed || !sessionFramesAllowed) return
             _updateStats(data.size)
             if (videoWidth == 0 || videoHeight == 0) return
 
@@ -135,9 +210,8 @@ class VideoRenderer(ctx: Context) {
             }
 
             try {
-                if (codec == null) startCodec(isH265)
-                _feedToCodec(data, ntpTimeNs)
-                drainOutput()
+                if (codec == null && !startCodec(isH265)) return@synchronized
+                if (_feedToCodec(data, ntpTimeNs)) drainOutput()
             } catch (e: Exception) {
                 Log.w(TAG, "Codec error, resetting", e)
                 stopCodec()
@@ -145,24 +219,31 @@ class VideoRenderer(ctx: Context) {
         }
     }
 
-    private fun _feedToCodec(data: ByteArray, ntpTimeNs: Long) {
-        val c = codec ?: return
-        // dropping a frame desyncs decoder until the next keyframe, but source would only send one on (re)connect
-        val retries = if (firstFrameQueued) FEED_RETRIES else FIRST_FEED_RETRIES
-        repeat(retries) {
-            val idx = c.dequeueInputBuffer(FEED_WAIT_US)
-            if (idx >= 0) {
-                val buf = c.getInputBuffer(idx) ?: return
-                buf.clear()
-                buf.put(data)
-                c.queueInputBuffer(idx, 0, data.size, ntpTimeNs / 1000, 0)
-                firstFrameQueued = true
-                return
+    private fun _feedToCodec(data: ByteArray, ntpTimeNs: Long): Boolean {
+        val c = codec ?: return false
+        val revision = streamRevision
+        val started = SystemClock.uptimeMillis()
+        var reportedStall = false
+        val idx = awaitCodecInput(
+            lock,
+            { c === codec && revision == streamRevision && decoderStartsAllowed && sessionFramesAllowed },
+            { c.dequeueInputBuffer(FEED_WAIT_US) },
+            {
+                drainOutput()
+                if (!reportedStall && SystemClock.uptimeMillis() - started >= 200) {
+                    reportedStall = true
+                    Log.w(TAG, "Decoder input backpressure; retaining compressed frame")
+                }
             }
-            drainOutput()
+        ) ?: return false
+        val buffer = checkNotNull(c.getInputBuffer(idx)) { "Decoder input buffer unavailable" }
+        buffer.clear()
+        buffer.put(data)
+        c.queueInputBuffer(idx, 0, data.size, ntpTimeNs / 1000, 0)
+        if (reportedStall) {
+            Log.i(TAG, "Decoder input resumed after ${SystemClock.uptimeMillis() - started}ms; frame retained")
         }
-        droppedFrames++
-        Log.w(TAG, "Decoder input queue full; dropping frame. drops=$droppedFrames")
+        return true
     }
 
     private fun _isKeyframe(data: ByteArray, isH265: Boolean): Boolean {
@@ -185,24 +266,65 @@ class VideoRenderer(ctx: Context) {
         return false
     }
 
-    private fun startCodec(h265: Boolean) {
+    private fun startCodec(h265: Boolean): Boolean {
+        if (usesDirectSurface() && displaySurface?.isValid != true) {
+            // The first keyframe can arrive before Compose creates the view.
+            // Configuring against SurfaceTexture first can retain buffer usage
+            // for the whole decoder lifetime, even after setOutputSurface().
+            // Wait on the native frame thread and retain that first keyframe;
+            // wait() releases the monitor so the UI can attach the SurfaceView.
+            val revision = streamRevision
+            val deadline = SystemClock.elapsedRealtime() + 5000
+            Log.i(TAG, "Waiting for SurfaceView before direct decoder startup")
+            while (displaySurface?.isValid != true && revision == streamRevision) {
+                val remaining = deadline - SystemClock.elapsedRealtime()
+                if (remaining <= 0) break
+                lock.wait(remaining)
+            }
+            // A stopped/replaced stream must not configure an old keyframe.
+            if (revision != streamRevision || !decoderStartsAllowed) return false
+            if (displaySurface?.isValid != true) {
+                Log.w(TAG, "No SurfaceView after 5s; starting with the GL surface")
+            }
+        }
+        if (usesDirectSurface() && !pipeline.detachDisplaySurface()) {
+            Log.w(TAG, "EGL detach timed out; retaining the GL rendering path")
+            directSurfaceFailed = true
+        }
         pipeline.start()
         pipeline.setVideoSize(videoWidth, videoHeight)
-        val s = pipeline.inputSurface ?: return
+        var s = if (usesDirectSurface()) {
+            displaySurface?.takeIf { it.isValid } ?: pipeline.inputSurface
+        } else pipeline.inputSurface
+        if (s == null) return false
         currentH265 = h265
         val mime = if (h265) DecoderSelector.HEVC else DecoderSelector.AVC
         val info = (if (h265) hevcDecoder else avcDecoder) ?: error("no decoder selected for $mime")
 
-        firstFrameQueued = false
         try {
             _startWithLadder(info, mime, s, h265)
         } catch (e: Exception) {
+            if (s === displaySurface && usesDirectSurface()) {
+                // Some vendor codecs reject the SurfaceView's usage flags.
+                // Retry hardware through the original path before software.
+                directSurfaceFailed = true
+                s = pipeline.inputSurface ?: throw e
+                pipeline.setDisplaySurface(displaySurface)
+                Log.w(TAG, "Direct output failed; trying the GL rendering path", e)
+                try {
+                    _startWithLadder(info, mime, s, h265)
+                    return true
+                } catch (glError: Exception) {
+                    Log.w(TAG, "GL hardware decoder also failed", glError)
+                }
+            }
             // strict hw decoders reject configs beyond their real limits
             val sw = selector.software(mime, videoWidth, videoHeight) ?: throw e
             Log.w(TAG, "Hardware decoder failed, trying software fallback", e)
             _startWithLadder(sw, mime, s, h265)
         }
         Log.i(TAG, "Video codec started: $mime ${videoWidth}x${videoHeight} ($codecName)")
+        return true
     }
 
     private fun _startWithLadder(info: MediaCodecInfo, mime: String, s: Surface, h265: Boolean) {
@@ -247,7 +369,10 @@ class VideoRenderer(ctx: Context) {
             throw e
         }
         codec = c
+        codecSurface = surface
+        pipeline.setDisplaySurface(if (usesDirectSurface()) null else displaySurface)
         codecName = (if (h265) "H.265" else "H.264") + " (${c.name})"
+        Log.i(TAG, "Decoder output: ${if (surface === displaySurface) "direct SurfaceView" else "GL pipeline"}")
     }
 
     private fun stopCodec() {
@@ -263,6 +388,7 @@ class VideoRenderer(ctx: Context) {
             } catch (_: Exception) {}
         }
         codec = null
+        codecSurface = null
     }
 
     private fun drainOutput() {
@@ -287,8 +413,11 @@ class VideoRenderer(ctx: Context) {
     }
 
     fun release() = synchronized(lock) {
+        streamRevision++
+        lock.notifyAll()
         stopCodec()
         pipeline.release()
+        directSurfaceFailed = false
         _resetStats()
     }
 
@@ -322,7 +451,5 @@ class VideoRenderer(ctx: Context) {
         private const val TAG = "VideoRenderer"
         private const val BENCH_TAG = "BENCHMARK"
         private const val FEED_WAIT_US = 20_000L
-        private const val FEED_RETRIES = 10
-        private const val FIRST_FEED_RETRIES = 50
     }
 }

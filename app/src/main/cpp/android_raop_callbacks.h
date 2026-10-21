@@ -29,6 +29,7 @@ typedef struct {
     jmethodID on_progress;
     jmethodID on_dacp_id;
     jmethodID on_mirror_running;
+    jmethodID on_mirror_stopping;
     jmethodID on_video_play;
     jmethodID on_video_scrub;
     jmethodID on_video_rate;

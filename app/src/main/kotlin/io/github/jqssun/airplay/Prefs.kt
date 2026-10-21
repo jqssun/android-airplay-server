@@ -78,6 +78,8 @@ object Prefs {
     val BOOT_AUTO_START = bool("boot_auto_start", true)
     val RUN_IN_BACKGROUND = bool("run_in_background", true)
     val H265 = tri("h265", restart = true)
+    // Opt-in: preserve decoder buffers for TVs with a lower-resolution Android UI.
+    val DIRECT_SURFACE = bool("direct_surface", false, restart = true)
     val ENFORCE_SDR = bool("enforce_sdr", true, restart = true)
     val KEY_ALLOW_FRAME_DROP = bool(MediaFormat.KEY_ALLOW_FRAME_DROP, true, restart = true)
     val KEY_PRIORITY = bool(MediaFormat.KEY_PRIORITY, true, restart = true)

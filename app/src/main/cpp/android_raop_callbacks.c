@@ -64,6 +64,7 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->on_progress = (*env)->GetMethodID(env, cls, "onProgress", "(JJJ)V");
     ctx->on_dacp_id = (*env)->GetMethodID(env, cls, "onDacpId", "(Ljava/lang/String;Ljava/lang/String;)V");
     ctx->on_mirror_running = (*env)->GetMethodID(env, cls, "onMirrorRunning", "(Z)V");
+    ctx->on_mirror_stopping = (*env)->GetMethodID(env, cls, "onMirrorStopping", "()V");
     ctx->on_video_play = (*env)->GetMethodID(env, cls, "onVideoPlay", "(Ljava/lang/String;F)V");
     ctx->on_video_scrub = (*env)->GetMethodID(env, cls, "onVideoScrub", "(F)V");
     ctx->on_video_rate = (*env)->GetMethodID(env, cls, "onVideoRate", "(F)V");
@@ -273,6 +274,14 @@ static void _audio_set_progress(void *cls, uint32_t *start, uint32_t *curr, uint
                            (jlong)*start, (jlong)*curr, (jlong)*end);
 }
 
+static void _mirror_video_stopping(void *cls) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    JNIEnv *env = _get_env(ctx);
+    if (!env) return;
+    /* Must remain synchronous: native shutdown joins the frame thread next. */
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_mirror_stopping);
+}
+
 static void _mirror_video_running(void *cls, bool running) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
@@ -412,6 +421,7 @@ void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx) 
     cbs->audio_get_format = _audio_get_format;
     cbs->video_report_size = _video_report_size;
     cbs->mirror_video_running = _mirror_video_running;
+    cbs->mirror_video_stopping = _mirror_video_stopping;
     cbs->display_pin = _display_pin;
     cbs->video_set_codec = _video_set_codec;
     cbs->on_video_play = _video_play;
