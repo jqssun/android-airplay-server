@@ -112,11 +112,12 @@ desktop a 5 GHz or 6 GHz link is recommended.
 ## Diagnostics
 
 The status line on the main screen shows the advertised geometry
-(`Display 3840x2160@60`) and the number of active mirroring sessions. A
-second session appears when the sender runs a mirror and an extended display
-at the same time; only one of them can be shown on the panel, the session that
-delivers the newest frame is displayed and the other one is dropped instead
-of corrupting the picture.
+(`Display 3840x2160@60`) and the number of active display sessions. A second
+session appears when the sender runs a mirror and an extended display at the
+same time. Only one of them can be shown on the panel: the session that
+started last gets it, and the frames of the other session are dropped instead
+of corrupting the picture. When the shown session goes quiet, the other one
+takes the panel over.
 
 With **Verbose protocol log** enabled, the app logs the sender's SETUP
 requests (as XML) and the connection setup. The interesting part is the
