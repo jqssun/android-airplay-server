@@ -57,6 +57,8 @@ data class DebugInfo(
     val videoBitrate: Long = 0,
     val videoFrames: Long = 0,
     val droppedFrames: Long = 0,
+    /* frames the decoder thread threw away because it could not keep up */
+    val queueDrops: Long = 0,
     val framePacingJitterUs: Long = 0,
     val audioCodec: String = "",
     val serverVolume: Int = 100,

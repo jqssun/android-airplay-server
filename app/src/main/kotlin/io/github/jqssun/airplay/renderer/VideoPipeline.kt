@@ -75,6 +75,8 @@ class VideoPipeline {
 
     private fun _loop() {
         try {
+            // the picture is drawn here, the launcher must not delay it
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
             egl = EglCore()
             _initGl()
         } catch (e: Exception) {

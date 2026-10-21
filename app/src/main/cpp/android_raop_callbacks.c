@@ -211,6 +211,28 @@ static int _video_session_id_by_thread(android_callback_ctx_t *ctx) {
     return _video_session_new(ctx, _video_session_free_slot(ctx), 0);
 }
 
+/* claim a frame buffer that is not in use; -1 when all of them are taken.
+   The buffer stays claimed until the app releases it, so the frame is not
+   overwritten while it is still in the decoder. */
+static int _claim_frame_buffer(android_callback_ctx_t *ctx) {
+    int count = ctx->frame_buffer_count;
+    if (!ctx->frame_buffers || !ctx->frame_buffer_busy || count <= 0) return -1;
+    int start = (int) (__atomic_fetch_add(&ctx->frame_buffer_next, 1, __ATOMIC_RELAXED) %
+                      (unsigned int) count);
+    for (int i = 0; i < count; i++) {
+        int idx = (start + i) % count;
+        if (!__atomic_exchange_n(&ctx->frame_buffer_busy[idx], 1, __ATOMIC_ACQUIRE)) {
+            return idx;
+        }
+    }
+    return -1;
+}
+
+void android_callbacks_release_frame_buffer(android_callback_ctx_t *ctx, int index) {
+    if (!ctx->frame_buffer_busy || index < 0 || index >= ctx->frame_buffer_count) return;
+    __atomic_store_n(&ctx->frame_buffer_busy[index], 0, __ATOMIC_RELEASE);
+}
+
 static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
@@ -225,23 +247,28 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
     /* hand the frame over through the app's direct buffer: no jbyteArray
        allocation and no garbage collection per frame */
     if (ctx->frame_buffers && ctx->frame_buffer_count > 0) {
-        /* two sessions can deliver frames at the same time, so the index has
-           to be handed out atomically */
-        int idx = (int) (__atomic_fetch_add(&ctx->frame_buffer_next, 1, __ATOMIC_RELAXED) %
-                         (unsigned int) ctx->frame_buffer_count);
-        if (data->data_len <= ctx->frame_buffer_capacity &&
-            !__atomic_exchange_n(&ctx->frame_buffer_busy[idx], 1, __ATOMIC_ACQUIRE)) {
-            memcpy(ctx->frame_buffers[idx], data->data, (size_t) data->data_len);
-            (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_data_buffer,
-                                   (jint) idx, (jint) data->data_len,
-                                   (jlong) data->ntp_time_local, (jboolean) data->is_h265,
-                                   (jint) session);
-            __atomic_store_n(&ctx->frame_buffer_busy[idx], 0, __ATOMIC_RELEASE);
-            return;
-        }
-        if (data->data_len > ctx->frame_buffer_capacity) {
+        int idx = _claim_frame_buffer(ctx);
+        if (idx >= 0) {
+            if (data->data_len <= ctx->frame_buffer_capacity) {
+                memcpy(ctx->frame_buffers[idx], data->data, (size_t) data->data_len);
+                /* the app decodes the frame on its own thread and releases the
+                   buffer when it is done with it, so the receive thread does
+                   not wait for the decoder */
+                (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_data_buffer,
+                                       (jint) idx, (jint) data->data_len,
+                                       (jlong) data->ntp_time_local, (jboolean) data->is_h265,
+                                       (jint) session);
+                return;
+            }
+            /* the frame does not fit into the buffer: give it back and copy */
+            android_callbacks_release_frame_buffer(ctx, idx);
             LOGW("video frame of %d bytes exceeds the %d byte frame buffer, copying it over",
                  data->data_len, ctx->frame_buffer_capacity);
+        } else {
+            /* every buffer is still in the decoder: the frame is dropped, the
+               decoder picks up again at the next keyframe */
+            ctx->video_frames_dropped++;
+            return;
         }
     }
 

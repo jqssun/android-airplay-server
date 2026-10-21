@@ -216,7 +216,7 @@
     <string name="debug_section_network">Network</string>
     <string name="debug_video">%1$s %2$s</string>
     <string name="debug_fps_bitrate">FPS: %1$d  Bitrate: %2$s</string>
-    <string name="debug_frames_drops">Frames: %1$d  Drops: %2$d</string>
+    <string name="debug_frames_drops">Frames: %1$d  Drops: %2$d  Queuedrops: %3$d</string>
     <string name="debug_jitter">Jitter: %1$s</string>
     <string name="debug_audio">%1$s  Receiver: %2$d%%  Sender: %3$d%%</string>
     <string name="debug_audio_buffer">Buffer: %1$d ms (tgt: %2$d ms)</string>

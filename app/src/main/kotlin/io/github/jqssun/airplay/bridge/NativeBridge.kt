@@ -31,6 +31,8 @@ object NativeBridge {
     external fun nativeSetDisplaySize(handle: Long, w: Int, h: Int, fps: Int)
     // direct byte buffers the native side writes the decoded frames into
     external fun nativeSetFrameBuffers(handle: Long, buffers: Array<java.nio.ByteBuffer>, capacity: Int)
+    // the frame in that buffer has been decoded, it can be filled again
+    external fun nativeReleaseFrameBuffer(handle: Long, index: Int)
     external fun nativeSetPlist(handle: Long, key: String, value: Int)
     external fun nativeSetH265Enabled(handle: Long, enabled: Boolean)
     external fun nativeSetCodecs(handle: Long, alac: Boolean, aac: Boolean)

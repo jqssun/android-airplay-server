@@ -80,7 +80,8 @@ data class VideoPlaybackInfo(
 
 class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
-    private var nativeHandle = 0L
+    // the decoder thread reads it to give a frame buffer back
+    @Volatile private var nativeHandle = 0L
     private var nsdManager: NsdServiceManager? = null
     private var usbAdvertiser: UsbMdnsAdvertiser? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -92,6 +93,13 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val airPlayVideoPlayer by lazy { AirPlayVideoPlayer(this) }
     val videoDownloader by lazy { VideoDownloader(this) }
+
+    init {
+        // the decoder thread tells the native side that a frame buffer is free again
+        videoRenderer.frameRelease = { index ->
+            if (nativeHandle != 0L) NativeBridge.nativeReleaseFrameBuffer(nativeHandle, index)
+        }
+    }
 
     // hls urls point at the native httpd, valid only while the session lives
     private val _videoLocation = MutableStateFlow<String?>(null)
@@ -705,13 +713,22 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     override fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean, session: Int) {
         if (!_acceptSession(session)) return
-        videoRenderer.feedFrame(data, ntpTimeNs, isH265)
+        // the decode runs on its own thread, the receive thread does not wait
+        videoRenderer.enqueueFrame(data, ntpTimeNs, isH265)
     }
 
     override fun onVideoDataBuffer(index: Int, size: Int, ntpTimeNs: Long, isH265: Boolean, session: Int) {
-        val buf = _frameBuffers?.getOrNull(index) ?: return
-        if (!_acceptSession(session)) return
-        videoRenderer.feedFrameBuffer(buf, size, ntpTimeNs, isH265)
+        val buf = _frameBuffers?.getOrNull(index)
+        if (buf == null) {
+            NativeBridge.nativeReleaseFrameBuffer(nativeHandle, index)
+            return
+        }
+        if (!_acceptSession(session)) {
+            // the frame is not shown, but the buffer has to be given back
+            NativeBridge.nativeReleaseFrameBuffer(nativeHandle, index)
+            return
+        }
+        videoRenderer.enqueueFrame(index, buf, size, ntpTimeNs, isH265)
     }
 
     /* The sender can run a mirror and an extended display at the same time,
@@ -1177,6 +1194,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         videoBitrate = videoRenderer.bitrateBps,
         videoFrames = videoRenderer.frameCount,
         droppedFrames = videoRenderer.droppedFrames,
+        queueDrops = videoRenderer.droppedByQueue,
         framePacingJitterUs = videoRenderer.framePacingJitterUs,
         audioCodec = audioRenderer.codecLabel,
         serverVolume = 100 * audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) / _serverVolMax(),
@@ -1361,8 +1379,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         // ring of direct frame buffers handed over to the native decoder:
         // uxplay hands over one access unit per callback and its length field
         // is 16 bit, so the buffers stay small
-        private const val FRAME_BUFFER_COUNT = 3
-        private const val FRAME_BUFFER_SIZE = 256 * 1024
+        private const val FRAME_BUFFER_COUNT = 6
+        private const val FRAME_BUFFER_SIZE = 1024 * 1024
 
         // how long a display session may stay quiet before another one gets
         // the panel, and when a session is forgotten completely

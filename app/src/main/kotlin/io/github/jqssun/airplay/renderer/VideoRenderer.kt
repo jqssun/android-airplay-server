@@ -4,10 +4,12 @@ import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.Process
 import android.util.Log
 import android.view.Surface
 import io.github.jqssun.airplay.renderer.DecoderSelector.Companion.videoCaps
 import java.nio.ByteBuffer
+import java.util.concurrent.ArrayBlockingQueue
 
 class VideoRenderer(ctx: Context) {
 
@@ -23,6 +25,28 @@ class VideoRenderer(ctx: Context) {
     private var videoWidth = 0
     private var videoHeight = 0
     private var firstFrameQueued = false
+
+    /* The frames are decoded on their own thread. The thread that receives
+       them must not wait for the decoder: a 4k frame takes 3-8 ms to decode and
+       during that time the socket is not drained, so the tcp window closes and
+       the sender stalls (a freeze of the whole picture). */
+    private val _pending = ArrayBlockingQueue<PendingFrame>(PENDING_CAPACITY)
+    private val _decodeLock = Object()
+    private var _decodeThread: Thread? = null
+    @Volatile private var _decodeRunning = false
+    /* tells the app that the frame buffer can be filled again */
+    var frameRelease: ((Int) -> Unit)? = null
+    /* frames that were dropped because the decoder could not keep up */
+    @Volatile var droppedByQueue = 0L; private set
+
+    private class PendingFrame(
+        val index: Int,
+        val data: ByteBuffer?,
+        val bytes: ByteArray?,
+        val size: Int,
+        val ntpTimeNs: Long,
+        val isH265: Boolean,
+    )
 
     // stats
     @Volatile var fps = 0; private set
@@ -100,7 +124,11 @@ class VideoRenderer(ctx: Context) {
     // codec per mirror session; pipeline persists across sessions
     fun startSession() = synchronized(lock) { _resetStats() }
 
-    fun stopSession() = synchronized(lock) { stopCodec() }
+    fun stopSession() {
+        // the queued frames belong to a session that is gone
+        _clearPending()
+        synchronized(lock) { stopCodec() }
+    }
 
     private fun _resetStats() {
         fps = 0; bitrateBps = 0; frameCount = 0; codecName = ""
@@ -127,7 +155,7 @@ class VideoRenderer(ctx: Context) {
     private fun _emitBenchmarkLine() {
         val msg = "fps=$fps bitrate=${bitrateBps / 1000}kbps " +
             "jitter=${framePacingJitterUs}us frames=$frameCount " +
-            "dropped=$droppedFrames codec=$codecName " +
+            "dropped=$droppedFrames queuedropped=$droppedByQueue codec=$codecName " +
             "res=${videoWidth}x${videoHeight}"
         Log.i(BENCH_TAG, msg)
         benchmarkLogCallback?.invoke(msg)
@@ -135,6 +163,81 @@ class VideoRenderer(ctx: Context) {
 
     fun feedFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
         feedFrameBuffer(ByteBuffer.wrap(data), data.size, ntpTimeNs, isH265)
+    }
+
+    /* Hands a frame over to the decoder thread. The caller (the thread that
+       receives the frames) returns immediately, it does not wait for the
+       decoder. */
+    fun enqueueFrame(index: Int, data: ByteBuffer, size: Int, ntpTimeNs: Long, isH265: Boolean) {
+        _enqueue(PendingFrame(index, data, null, size, ntpTimeNs, isH265))
+    }
+
+    fun enqueueFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
+        _enqueue(PendingFrame(-1, null, data, data.size, ntpTimeNs, isH265))
+    }
+
+    private fun _enqueue(frame: PendingFrame) {
+        _startDecoder()
+        if (_pending.offer(frame)) return
+        /* the decoder cannot keep up: the oldest frame goes, so the delay
+           stays small instead of growing without end */
+        val dropped = _pending.poll()
+        if (dropped != null) {
+            droppedByQueue++
+            _releaseFrame(dropped)
+        }
+        if (!_pending.offer(frame)) {
+            droppedByQueue++
+            _releaseFrame(frame)
+        }
+    }
+
+    private fun _releaseFrame(frame: PendingFrame) {
+        if (frame.index < 0) return
+        frameRelease?.invoke(frame.index)
+    }
+
+    private fun _startDecoder() {
+        synchronized(_decodeLock) {
+            if (_decodeThread != null) return
+            _decodeRunning = true
+            _decodeThread = Thread({
+                // the decoder is on the critical path of the picture
+                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY)
+                while (_decodeRunning) {
+                    val frame = try {
+                        _pending.take()
+                    } catch (e: InterruptedException) {
+                        break
+                    }
+                    try {
+                        if (frame.data != null) {
+                            feedFrameBuffer(frame.data, frame.size, frame.ntpTimeNs, frame.isH265)
+                        } else if (frame.bytes != null) {
+                            feedFrame(frame.bytes, frame.ntpTimeNs, frame.isH265)
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "decode failed", e)
+                    } finally {
+                        _releaseFrame(frame)
+                    }
+                }
+            }, "VideoDecode").also { it.start() }
+        }
+    }
+
+    /* stops the decoder thread and gives the queued frames back */
+    private fun _stopDecoder() {
+        val thread = synchronized(_decodeLock) {
+            _decodeRunning = false
+            _decodeThread.also { _decodeThread = null }
+        }
+        thread?.interrupt()
+        thread?.join(500)
+        while (true) {
+            val frame = _pending.poll() ?: break
+            _releaseFrame(frame)
+        }
     }
 
     // the frame data is read-only for us; the buffer is owned by the caller
@@ -311,14 +414,29 @@ class VideoRenderer(ctx: Context) {
     }
 
     // a new session starts with its own geometry and its own keyframes
-    fun resetSession() = synchronized(lock) {
-        stopCodec()
+    fun resetSession() {
+        // the queued frames belong to the session that is gone
+        _clearPending()
+        synchronized(lock) {
+            stopCodec()
+        }
     }
 
-    fun release() = synchronized(lock) {
-        stopCodec()
-        pipeline.release()
-        _resetStats()
+    fun release() {
+        _stopDecoder()
+        synchronized(lock) {
+            stopCodec()
+            pipeline.release()
+            _resetStats()
+        }
+    }
+
+    /* drops the queued frames and gives their buffers back */
+    private fun _clearPending() {
+        while (true) {
+            val frame = _pending.poll() ?: break
+            _releaseFrame(frame)
+        }
     }
 
     private fun _recordOutputFrameTime() {
@@ -353,5 +471,7 @@ class VideoRenderer(ctx: Context) {
         private const val FEED_WAIT_US = 20_000L
         private const val FEED_RETRIES = 10
         private const val FIRST_FEED_RETRIES = 50
+        // frames that wait for the decoder; the app has as many frame buffers
+        private const val PENDING_CAPACITY = 4
     }
 }

@@ -1123,7 +1123,7 @@ private fun debugOverlaySections(context: Context, info: DebugInfo): List<DebugS
         if (info.videoCodec.isNotEmpty()) {
             add(context.getString(R.string.debug_video, info.videoCodec, info.videoRes))
             add(context.getString(R.string.debug_fps_bitrate, info.videoFps, info.bitrateStr))
-            add(context.getString(R.string.debug_frames_drops, info.videoFrames, info.droppedFrames))
+            add(context.getString(R.string.debug_frames_drops, info.videoFrames, info.droppedFrames, info.queueDrops))
             add(context.getString(R.string.debug_jitter, info.jitterStr))
         }
     }.takeIf { it.isNotEmpty() }?.let { add(DebugSection(context.getString(R.string.debug_section_video), it)) }

@@ -214,6 +214,17 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetFrameBuffers(
     android_callbacks_set_frame_buffers(&ctx->cb_ctx, env, buffers, capacity);
 }
 
+/* the app is done with a frame buffer, the native side may fill it again */
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeReleaseFrameBuffer(
+        JNIEnv *env, jobject thiz, jlong handle, jint index) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx) return;
+    android_callbacks_release_frame_buffer(&ctx->cb_ctx, (int)index);
+}
+
 /* Returns a HashMap<String, String> of TXT records */
 static jobject _build_txt_map(JNIEnv *env, dnssd_t *dnssd, int is_raop) {
     jclass mapClass = env->FindClass("java/util/HashMap");

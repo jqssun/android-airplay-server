@@ -64,6 +64,8 @@ typedef struct {
     int frame_buffer_count;
     int frame_buffer_capacity;
     int frame_buffer_next;
+    /* frames that were dropped because every buffer was still in the decoder */
+    unsigned long video_frames_dropped;
     /* video sessions: every mirroring connection has its own ntp and thread,
        the sender can run a mirror and an extended display at the same time,
        so the frames have to be told apart */
@@ -86,6 +88,8 @@ void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double 
 /* take over the app's direct frame buffers */
 void android_callbacks_set_frame_buffers(android_callback_ctx_t *ctx, JNIEnv *env,
                                          jobjectArray buffers, jint capacity);
+/* the app is done with a frame buffer, it can be filled again */
+void android_callbacks_release_frame_buffer(android_callback_ctx_t *ctx, int index);
 
 #ifdef __cplusplus
 }
