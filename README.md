@@ -22,6 +22,7 @@ A fully featured free and open-source implementation of AirPlay for Android that
 ## Features
 
 - Screen mirroring with H.264 and H.265 (HEVC) video decoding
+- Screen extension: use the device as an extended desktop (macOS "Use As Separate Display"), see [docs/SCREEN-EXTENSION.md](docs/SCREEN-EXTENSION.md)
 - Audio streaming with AAC-ELD, AAC-LC and ALAC audio decoding
 - Video playback with support for HLS, downloads, and remote controls
 - Music playback with track information, cover art, and remote controls

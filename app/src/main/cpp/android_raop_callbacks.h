@@ -10,11 +10,15 @@
 extern "C" {
 #endif
 
+/* number of mirroring sessions that can be active at the same time */
+#define MAX_VIDEO_SESSIONS 4
+
 typedef struct {
     JavaVM *jvm;
     jobject callback_obj;
     raop_t *raop;
     jmethodID on_video_data;
+    jmethodID on_video_data_buffer;
     jmethodID on_audio_format;
     jmethodID on_video_size;
     jmethodID on_client_volume;
@@ -49,6 +53,29 @@ typedef struct {
     pthread_cond_t play_ready_cond;
     int play_ready;
     AudioEngine *audio_engine;
+    /* ring of direct byte buffers owned by the app: the decrypted frame is
+       written straight into them, which avoids allocating a jbyteArray per
+       frame (and the garbage collection that comes with it) */
+    uint8_t **frame_buffers;
+    /* global refs to the buffers, they have to stay reachable */
+    jobject *frame_buffer_refs;
+    /* 1 while a buffer is being handed over to the app */
+    unsigned char *frame_buffer_busy;
+    int frame_buffer_count;
+    int frame_buffer_capacity;
+    int frame_buffer_next;
+    /* video sessions: every mirroring connection has its own ntp and thread,
+       the sender can run a mirror and an extended display at the same time,
+       so the frames have to be told apart */
+    struct {
+        uintptr_t ntp;
+        pthread_t thread;
+        int has_thread;
+        int id;
+        int64_t last_frame_ms;
+    } video_sessions[MAX_VIDEO_SESSIONS];
+    int video_session_count;
+    int next_video_session_id;
 } android_callback_ctx_t;
 
 void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject callback_obj);
@@ -56,6 +83,9 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env);
 void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx);
 void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double position,
                                              double duration, float rate, int ready);
+/* take over the app's direct frame buffers */
+void android_callbacks_set_frame_buffers(android_callback_ctx_t *ctx, JNIEnv *env,
+                                         jobjectArray buffers, jint capacity);
 
 #ifdef __cplusplus
 }

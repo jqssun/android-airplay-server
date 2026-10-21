@@ -108,6 +108,12 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     private val _videoResolution = MutableStateFlow("")
     val videoResolution: StateFlow<String> = _videoResolution.asStateFlow()
+    // geometry advertised to the sender, the extended desktop is built from it
+    private val _advertisedResolution = MutableStateFlow("")
+    val advertisedResolution: StateFlow<String> = _advertisedResolution.asStateFlow()
+    // number of active mirroring sessions (a mirror and an extended display)
+    private val _videoSessionCount = MutableStateFlow(0)
+    val videoSessionCount: StateFlow<Int> = _videoSessionCount.asStateFlow()
 
     private val _prefStates = mutableMapOf<Pref<*>, StateFlow<*>>()
 
@@ -380,6 +386,8 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             _connectionCount.value = it.connectionCount.value
             _videoAspect.value = it.videoAspect.value
             _videoResolution.value = it.videoResolution.value
+            _advertisedResolution.value = it.advertisedResolution.value
+            _videoSessionCount.value = it.videoSessionCount.value
             _audioOnly.value = it.audioOnly.value
             val videoActive = it.videoPlaybackActive.value
             val playSeq = it.videoPlaySeq.value

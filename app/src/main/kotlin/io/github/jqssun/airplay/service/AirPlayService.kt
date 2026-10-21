@@ -110,6 +110,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private val _videoResolution = MutableStateFlow("")
     val videoResolution = _videoResolution.asStateFlow()
 
+    // geometry advertised to the sender; the extended desktop is built from it
+    private val _advertisedResolution = MutableStateFlow("")
+    val advertisedResolution = _advertisedResolution.asStateFlow()
+
     private val _audioOnly = MutableStateFlow(false)
     val audioOnly = _audioOnly.asStateFlow()
 
@@ -345,6 +349,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
                 .debounce(SERVER_RESTART_DEBOUNCE_MS)
                 .collect { _restartServer() }
         }
+        lifecycleScope.launch {
+            prefs.observe { this[Prefs.FIT_ASPECT] }.collect {
+                videoRenderer.setFitAspect(it)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -410,19 +419,27 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         videoRenderer.benchmarkLog = prefs[Prefs.BENCHMARK_LOG]
         videoRenderer.benchmarkLogCallback = { msg -> logCallback?.invoke(msg) }
         videoRenderer.scheduledOutputBufferRelease = prefs[Prefs.SCHEDULED_OUTPUT_BUFFER_RELEASE]
+        videoRenderer.setFitAspect(prefs[Prefs.FIT_ASPECT])
         NativeBridge.nativeSetH265Enabled(nativeHandle, h265)
         NativeBridge.nativeSetCodecs(nativeHandle, alac, aac)
         val advertiseVideo = prefs[Prefs.ADVERTISE_VIDEO]
         val advertiseMirroring = prefs[Prefs.ADVERTISE_MIRRORING]
         val advertiseAudio = prefs[Prefs.ADVERTISE_AUDIO]
+        val separateDisplay = prefs[Prefs.SEPARATE_DISPLAY]
         NativeBridge.nativeSetHlsEnabled(nativeHandle, advertiseVideo)
         NativeBridge.nativeSetLang(nativeHandle, ConfigurationCompat.getLocales(resources.configuration).toLanguageTags().replace(',', ':'))
         NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_MIRROR, advertiseMirroring)
         NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_AUDIO, advertiseAudio)
+        NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_SEPARATE_DISPLAY, separateDisplay)
         NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", maxFps)
         NativeBridge.nativeSetPlist(nativeHandle, "overscanned", if (overscanned) 1 else 0)
         if (audioLatencyMs >= 0) {
             NativeBridge.nativeSetPlist(nativeHandle, "audio_delay_micros", audioLatencyMs * 1000)
+        }
+        // the protocol diagnostics (setup requests, connection setup) are only
+        // logged at debug level
+        if (prefs[Prefs.VERBOSE_PROTOCOL_LOG]) {
+            NativeBridge.nativeSetLogLevel(nativeHandle, NativeBridge.LOG_LEVEL_DEBUG)
         }
 
         // set display params
@@ -432,6 +449,17 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _videoResolution.value = "${w}x${h}"
         _videoAspect.value = w.toFloat() / h
         NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, maxFps)
+        _setupFrameBuffers()
+        // the sender builds the extended desktop from this geometry, so it has
+        // to be the panel's native resolution to avoid an upscaled desktop
+        _advertisedResolution.value = "${w}x${h}@${maxFps}"
+        log("Advertising display ${w}x${h}@${maxFps} (decoder limit ${videoRenderer.maxResolution().first}x${videoRenderer.maxResolution().second})")
+
+        // physical panel size, lets the sender scale the extended desktop's ui
+        val physW = prefs[Prefs.DISPLAY_PHYSICAL_WIDTH_MM]
+        val physH = prefs[Prefs.DISPLAY_PHYSICAL_HEIGHT_MM]
+        if (physW > 0) NativeBridge.nativeSetPlist(nativeHandle, "displayPhysicalWidth", physW)
+        if (physH > 0) NativeBridge.nativeSetPlist(nativeHandle, "displayPhysicalHeight", physH)
 
         val requestedPort = prefs[Prefs.SERVER_PORT]
         val port = NativeBridge.nativeStart(nativeHandle, requestedPort)
@@ -486,7 +514,15 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         if (!clamp) return w to h
         // strict decoders black-screen past their limits; advertised size is only upper bound for senders
         val (maxW, maxH) = videoRenderer.maxResolution()
-        return w.coerceAtMost(maxW) to h.coerceAtMost(maxH)
+        return _fit(w, h, maxW, maxH)
+    }
+
+    // scale down to the decoder limits without changing the aspect ratio:
+    // the sender builds the extended desktop from the advertised geometry
+    fun _fit(w: Int, h: Int, maxW: Int, maxH: Int): Pair<Int, Int> {
+        if (w <= maxW && h <= maxH) return w to h
+        val scale = minOf(maxW.toDouble() / w, maxH.toDouble() / h)
+        return (w * scale).roundToInt().coerceAtLeast(1) to (h * scale).roundToInt().coerceAtLeast(1)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -643,8 +679,103 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     // RaopCallbackHandler (called from native threads)
 
-    override fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
+    override fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean, session: Int) {
+        if (!_acceptSession(session)) return
         videoRenderer.feedFrame(data, ntpTimeNs, isH265)
+    }
+
+    override fun onVideoDataBuffer(index: Int, size: Int, ntpTimeNs: Long, isH265: Boolean, session: Int) {
+        val buf = _frameBuffers?.getOrNull(index) ?: return
+        if (!_acceptSession(session)) return
+        videoRenderer.feedFrameBuffer(buf, size, ntpTimeNs, isH265)
+    }
+
+    /* The sender can run a mirror and an extended display at the same time,
+       each in its own session. Only one of them can be shown on the panel, so
+       the frames of the other sessions are dropped instead of corrupting the
+       picture. A session that just appeared is the newer one (the sender
+       switched to the extended display) and takes the panel over; a session
+       that was shown before only takes over when the current one went quiet. */
+    private class _VideoSession {
+        var lastFrameMs = 0L
+        var suppressedUntilMs = 0L
+    }
+
+    @Volatile private var _activeVideoSession = 0
+    private val _videoSessionStates = mutableMapOf<Int, _VideoSession>()
+
+    private val _videoSessionCount = MutableStateFlow(0)
+    val videoSessionCount = _videoSessionCount.asStateFlow()
+
+    private fun _clearVideoSessions() {
+        synchronized(_videoSessionStates) {
+            _videoSessionStates.clear()
+            _activeVideoSession = 0
+            _videoSessionCount.value = 0
+        }
+    }
+
+    /* returns true when the frame belongs to the session that is shown */
+    private fun _acceptSession(session: Int): Boolean {
+        if (session <= 0) return true
+        val now = android.os.SystemClock.elapsedRealtime()
+        var isNew = false
+        var state: _VideoSession
+        synchronized(_videoSessionStates) {
+            var s = _videoSessionStates[session]
+            if (s == null) {
+                s = _VideoSession()
+                _videoSessionStates[session] = s
+                isNew = true
+            }
+            state = s
+            state.lastFrameMs = now
+            // forget the sessions that have been gone for a while
+            _videoSessionStates.entries.removeAll { it.value.lastFrameMs < now - SESSION_TIMEOUT_MS }
+            _videoSessionCount.value = _videoSessionStates.size
+        }
+        if (session == _activeVideoSession) return true
+        if (now < state.suppressedUntilMs) return false
+        if (!isNew) {
+            // the session was shown before: it only gets the panel back when
+            // the session that is shown now has gone quiet
+            val active = _activeVideoSession
+            val activeState = synchronized(_videoSessionStates) { _videoSessionStates[active] }
+            val activeQuiet = activeState == null || now - activeState.lastFrameMs > SESSION_SWITCH_MS
+            if (!activeQuiet) return false
+        }
+        _takeOverSession(session, now)
+        return true
+    }
+
+    private fun _takeOverSession(session: Int, now: Long) {
+        val previous = _activeVideoSession
+        if (previous == session) return
+        synchronized(_videoSessionStates) {
+            // keep the loser quiet for a moment, otherwise the two sessions
+            // would take the panel over from each other in turns
+            _videoSessionStates[previous]?.suppressedUntilMs = now + SESSION_SWITCH_MS
+            _videoSessionStates[session]?.suppressedUntilMs = now + SESSION_SWITCH_MS
+            _activeVideoSession = session
+        }
+        log("Display session $session takes over from $previous")
+        // the new session has its own geometry and its own keyframes
+        videoRenderer.resetSession()
+    }
+
+    // direct buffers the native side writes the frames into; keeping them
+    // here avoids allocating a byte array for every frame
+    private var _frameBuffers: Array<java.nio.ByteBuffer>? = null
+
+    private fun _setupFrameBuffers() {
+        if (nativeHandle == 0L) return
+        val capacity = FRAME_BUFFER_SIZE
+        val buffers = Array(FRAME_BUFFER_COUNT) {
+            java.nio.ByteBuffer.allocateDirect(capacity).order(java.nio.ByteOrder.nativeOrder())
+        }
+        _frameBuffers = buffers
+        NativeBridge.nativeSetFrameBuffers(nativeHandle, buffers, capacity)
+        Log.i(TAG, "frame buffers: ${buffers.size} x ${capacity / 1024}k")
     }
 
     override fun onVideoSessionPoll() {
@@ -688,8 +819,14 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         log("Audio format: ct=$ct spf=$spf screen=$usingScreen")
     }
 
-    override fun onVideoSize(srcW: Float, srcH: Float, w: Float, h: Float) {
+    override fun onVideoSize(srcW: Float, srcH: Float, w: Float, h: Float, session: Int) {
         clearPin()
+        // a size report from a session that is not shown would resize the
+        // decoder of the session that is
+        if (session > 0 && !_acceptSession(session)) {
+            log("Video size ${w.toInt()}x${h.toInt()} from session $session ignored")
+            return
+        }
         if (w > 0 && h > 0) {
             _videoAspect.value = w / h
             _videoResolution.value = "${w.toInt()}x${h.toInt()}"
@@ -816,6 +953,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             _durationMs.value = 0
             dacpController?.reset()
             _clientVol = null
+            _clearVideoSessions()
             _mainHandler.post {
                 _clientVolDriveEnd()
                 if (_serverPreZeroIdx >= 0) {
@@ -1193,6 +1331,17 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
         private const val AUDIO_CONFIG_DEBOUNCE_MS = 500L
         private const val SERVER_RESTART_DEBOUNCE_MS = 500L
+
+        // ring of direct frame buffers handed over to the native decoder:
+        // uxplay hands over one access unit per callback and its length field
+        // is 16 bit, so the buffers stay small
+        private const val FRAME_BUFFER_COUNT = 3
+        private const val FRAME_BUFFER_SIZE = 256 * 1024
+
+        // how long a display session may stay quiet before another one gets
+        // the panel, and when a session is forgotten completely
+        private const val SESSION_SWITCH_MS = 1000L
+        private const val SESSION_TIMEOUT_MS = 30_000L
 
         // airplay volume is linear in dB along sender slider
         private fun _dbToFrac(db: Float) = if (db <= -144f) 0f else ((db + 30f) / 30f).coerceIn(0f, 1f)

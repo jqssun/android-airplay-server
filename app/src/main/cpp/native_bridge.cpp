@@ -40,6 +40,9 @@ static void _log_callback(void *cls, int level, const char *msg) {
     else if (level == LOGGER_WARNING) prio = ANDROID_LOG_WARN;
     else if (level <= LOGGER_INFO) prio = ANDROID_LOG_INFO;
     __android_log_print(prio, TAG, "%s", msg);
+    /* the protocol diagnostics are only interesting in the app's log window */
+    server_ctx_t *ctx = (server_ctx_t *) cls;
+    if (ctx && ctx->log) ctx->log->raw(prio, msg);
 }
 
 extern "C"
@@ -69,7 +72,7 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
     ctx->cb_ctx.raop = ctx->raop;
 
     raop_set_log_level(ctx->raop, LOGGER_ERR);
-    raop_set_log_callback(ctx->raop, _log_callback, NULL);
+    raop_set_log_callback(ctx->raop, _log_callback, ctx);
 
     const char *keyfile_c = env->GetStringUTFChars(keyFile, NULL);
     const char *name_c = env->GetStringUTFChars(name, NULL);
@@ -197,6 +200,18 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetDisplaySize(
     raop_set_plist(ctx->raop, "width", w);
     raop_set_plist(ctx->raop, "height", h);
     raop_set_plist(ctx->raop, "refreshRate", fps);
+}
+
+/* the app's direct frame buffers, the native side writes the decrypted
+   frames into them instead of allocating a byte array per frame */
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetFrameBuffers(
+        JNIEnv *env, jobject thiz, jlong handle, jobjectArray buffers, jint capacity) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx) return;
+    android_callbacks_set_frame_buffers(&ctx->cb_ctx, env, buffers, capacity);
 }
 
 /* Returns a HashMap<String, String> of TXT records */
@@ -341,6 +356,18 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetCodecs(
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
     if (!ctx || !ctx->dnssd) return;
     android_dnssd_set_codecs(ctx->dnssd, alac ? 1 : 0, aac ? 1 : 0);
+}
+
+/* raise the native log level, the protocol diagnostics (setup requests,
+   connection setup) are only logged at debug level */
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetLogLevel(
+        JNIEnv *env, jobject thiz, jlong handle, jint level) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx || !ctx->raop) return;
+    raop_set_log_level(ctx->raop, level);
 }
 
 extern "C"

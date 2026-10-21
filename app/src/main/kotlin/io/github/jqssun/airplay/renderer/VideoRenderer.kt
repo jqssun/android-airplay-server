@@ -7,6 +7,7 @@ import android.media.MediaFormat
 import android.util.Log
 import android.view.Surface
 import io.github.jqssun.airplay.renderer.DecoderSelector.Companion.videoCaps
+import java.nio.ByteBuffer
 
 class VideoRenderer(ctx: Context) {
 
@@ -55,6 +56,11 @@ class VideoRenderer(ctx: Context) {
         stopCodec()
     }
 
+    // keep the picture's aspect ratio instead of stretching it to the panel
+    fun setFitAspect(fit: Boolean) {
+        pipeline.fitAspect = fit
+    }
+
     // doesn't restart codec; decoder renders into pipeline's own persistent surface
     fun setSurface(surface: Surface) = synchronized(lock) {
         displaySurface = surface
@@ -76,13 +82,20 @@ class VideoRenderer(ctx: Context) {
     }
 
     // unknown limits default to 1080p
-    fun maxResolution(): Pair<Int, Int> =
-        listOfNotNull(avcDecoder?.let { it to DecoderSelector.AVC }, hevcDecoder?.let { it to DecoderSelector.HEVC })
-            .map { (info, mime) ->
-                runCatching { info.videoCaps(mime).let { it.supportedWidths.upper to it.supportedHeights.upper } }
-                    .getOrDefault(1920 to 1080)
-            }
-            .reduceOrNull { (w1, h1), (w2, h2) -> minOf(w1, w2) to minOf(h1, h2) } ?: (1920 to 1080)
+    // the sender picks the codec from the advertised features: with h265
+    // advertised (dns-sd feature bit 42) macos prefers hevc for resolutions
+    // beyond h264 limits, so the hevc caps bound the advertised size.
+    // taking the smaller of both caps would advertise 1080p on tv sets whose
+    // h264 decoder is limited while the hevc one handles 4k, and the extended
+    // desktop would then be upscaled by the sender
+    fun maxResolution(): Pair<Int, Int> {
+        val decoder = hevcDecoder?.let { it to DecoderSelector.HEVC }
+            ?: avcDecoder?.let { it to DecoderSelector.AVC }
+            ?: return 1920 to 1080
+        return runCatching {
+            decoder.first.videoCaps(decoder.second).let { it.supportedWidths.upper to it.supportedHeights.upper }
+        }.getOrDefault(1920 to 1080)
+    }
 
     // codec per mirror session; pipeline persists across sessions
     fun startSession() = synchronized(lock) { _resetStats() }
@@ -121,13 +134,18 @@ class VideoRenderer(ctx: Context) {
     }
 
     fun feedFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
+        feedFrameBuffer(ByteBuffer.wrap(data), data.size, ntpTimeNs, isH265)
+    }
+
+    // the frame data is read-only for us; the buffer is owned by the caller
+    fun feedFrameBuffer(data: ByteBuffer, size: Int, ntpTimeNs: Long, isH265: Boolean) {
         synchronized(lock) {
-            _updateStats(data.size)
+            _updateStats(size)
             if (videoWidth == 0 || videoHeight == 0) return
 
             if (codec == null || isH265 != currentH265) {
                 // a stale reference frame decodes to corruption, so wait for a keyframe to (re)start
-                if (!_isKeyframe(data, isH265)) {
+                if (!_isKeyframe(data, size, isH265)) {
                     if (codec != null) stopCodec()
                     return
                 }
@@ -136,7 +154,7 @@ class VideoRenderer(ctx: Context) {
 
             try {
                 if (codec == null) startCodec(isH265)
-                _feedToCodec(data, ntpTimeNs)
+                _feedToCodec(data, size, ntpTimeNs)
                 drainOutput()
             } catch (e: Exception) {
                 Log.w(TAG, "Codec error, resetting", e)
@@ -145,7 +163,7 @@ class VideoRenderer(ctx: Context) {
         }
     }
 
-    private fun _feedToCodec(data: ByteArray, ntpTimeNs: Long) {
+    private fun _feedToCodec(data: ByteBuffer, size: Int, ntpTimeNs: Long) {
         val c = codec ?: return
         // dropping a frame desyncs decoder until the next keyframe, but source would only send one on (re)connect
         val retries = if (firstFrameQueued) FEED_RETRIES else FIRST_FEED_RETRIES
@@ -154,8 +172,14 @@ class VideoRenderer(ctx: Context) {
             if (idx >= 0) {
                 val buf = c.getInputBuffer(idx) ?: return
                 buf.clear()
+                val pos = data.position()
+                val lim = data.limit()
+                data.position(0)
+                data.limit(size)
                 buf.put(data)
-                c.queueInputBuffer(idx, 0, data.size, ntpTimeNs / 1000, 0)
+                data.position(pos)
+                data.limit(lim)
+                c.queueInputBuffer(idx, 0, size, ntpTimeNs / 1000, 0)
                 firstFrameQueued = true
                 return
             }
@@ -165,17 +189,17 @@ class VideoRenderer(ctx: Context) {
         Log.w(TAG, "Decoder input queue full; dropping frame. drops=$droppedFrames")
     }
 
-    private fun _isKeyframe(data: ByteArray, isH265: Boolean): Boolean {
-        if (data.size < 5) return false
+    private fun _isKeyframe(data: ByteBuffer, size: Int, isH265: Boolean): Boolean {
+        if (size < 5) return false
         var i = 0
-        while (i <= data.size - 5) {
-            if (data[i] == 0.toByte() && data[i + 1] == 0.toByte() &&
-                data[i + 2] == 0.toByte() && data[i + 3] == 1.toByte()) {
+        while (i <= size - 5) {
+            if (data.get(i) == 0.toByte() && data.get(i + 1) == 0.toByte() &&
+                data.get(i + 2) == 0.toByte() && data.get(i + 3) == 1.toByte()) {
                 val key = if (isH265) {
-                    val type = (data[i + 4].toInt() shr 1) and 0x3F
+                    val type = (data.get(i + 4).toInt() shr 1) and 0x3F
                     type == 19 || type == 20 || type == 21 || type == 32 || type == 33
                 } else {
-                    val type = data[i + 4].toInt() and 0x1F
+                    val type = data.get(i + 4).toInt() and 0x1F
                     type == 5 || type == 7
                 }
                 if (key) return true
@@ -284,6 +308,11 @@ class VideoRenderer(ctx: Context) {
                 c.releaseOutputBuffer(idx, true)
             }
         }
+    }
+
+    // a new session starts with its own geometry and its own keyframes
+    fun resetSession() = synchronized(lock) {
+        stopCodec()
     }
 
     fun release() = synchronized(lock) {
