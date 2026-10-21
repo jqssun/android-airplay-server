@@ -224,5 +224,8 @@
     <string name="debug_audio_decode">Decode: %1$s</string>
     <string name="debug_clients">Senders: %1$d</string>
     <string name="debug_link">Link: %1$s  %2$d dBm  %3$d Mbps  (%4$s)</string>
+    <string name="debug_scan_throttled">Scans throttled: scans steal airtime mid stream</string>
+    <string name="setting_wifi_lock">Keep the wifi radio awake</string>
+    <string name="setting_wifi_lock_desc">Holds a wifi lock while the server runs so the radio does not sleep between beacons. Adds jitter when it sleeps, costs battery when it does not.</string>
     <string name="debug_udp_errors">UDP buffer errors: rcv %1$d  snd %2$d</string>
 </resources>

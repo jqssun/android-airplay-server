@@ -38,6 +38,7 @@ import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.changes
 import io.github.jqssun.airplay.get
 import io.github.jqssun.airplay.hasLocalNetwork
+import io.github.jqssun.airplay.net.WifiTuner
 import io.github.jqssun.airplay.net.readUdpErrors
 import io.github.jqssun.airplay.net.readWifiLink
 import io.github.jqssun.airplay.observe
@@ -90,6 +91,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     val videoRenderer = VideoRenderer(this)
     val audioRenderer = AudioRenderer()
+    private val wifiTuner = WifiTuner(this)
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val airPlayVideoPlayer by lazy { AirPlayVideoPlayer(this) }
     val videoDownloader by lazy { VideoDownloader(this) }
@@ -392,6 +394,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "airplay:server").apply { acquire() }
 
         nsdManager = NsdServiceManager(this).apply { acquireMulticastLock() }
+        // a radio that sleeps between beacons adds jitter the stream cannot get
+        // back; the lock is the one lever an app has here
+        log(wifiTuner.acquire(prefs[Prefs.WIFI_LOW_LATENCY_LOCK]))
+        wifiTuner.scanThrottled()?.let { throttled ->
+            if (throttled) log("Scan throttling is on: scans steal airtime from the stream, switch it off in the device's developer options")
+        }
 
         val hwAddr = getHwAddr()
         val keyFile = filesDir.resolve("airplay.pem").absolutePath
@@ -569,6 +577,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     private fun _failStart() {
+        wifiTuner.release()
         audioRenderer.detachEngine()
         if (nativeHandle != 0L) {
             NativeBridge.nativeDestroy(nativeHandle)
@@ -606,6 +615,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             NativeBridge.nativeDestroy(nativeHandle)
             nativeHandle = 0L
         }
+        wifiTuner.release()
         dacpController?.reset()
         usbAdvertiser?.stop()
         usbAdvertiser = null

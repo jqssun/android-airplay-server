@@ -1143,6 +1143,8 @@ private fun debugOverlaySections(context: Context, info: DebugInfo): List<DebugS
             add(context.getString(
                 R.string.debug_link, link.band, link.rssiDbm, link.linkSpeedMbps, link.quality
             ))
+            // only the user can switch this off, in the device's developer options
+            if (link.scanThrottled == true) add(context.getString(R.string.debug_scan_throttled))
         }
         if (info.udpErrors.rcvbuf > 0 || info.udpErrors.sndbuf > 0) {
             add(context.getString(

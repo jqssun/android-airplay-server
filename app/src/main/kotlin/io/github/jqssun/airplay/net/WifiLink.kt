@@ -6,6 +6,7 @@ import android.net.NetworkCapabilities
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.util.Log
 import java.io.File
 
 /**
@@ -20,6 +21,8 @@ data class WifiLink(
     val rssiDbm: Int,
     val linkSpeedMbps: Int,
     val frequencyMHz: Int,
+    /** true while the system throttles scans, which costs the stream airtime */
+    val scanThrottled: Boolean? = null,
 ) {
     val quality: String
         get() = when {
@@ -62,6 +65,7 @@ fun readWifiLink(context: Context): WifiLink? {
                     rssiDbm = info.rssi,
                     linkSpeedMbps = info.linkSpeed,
                     frequencyMHz = info.frequency,
+                    scanThrottled = readScanThrottleEnabled(app),
                 )
             }
         }
@@ -80,7 +84,24 @@ fun readWifiLink(context: Context): WifiLink? {
         rssiDbm = rssi,
         linkSpeedMbps = speed,
         frequencyMHz = frequency,
+        scanThrottled = readScanThrottleEnabled(app),
     )
+}
+
+/**
+ * True while the system throttles background scans (api 30+). A scan hops to
+ * another channel and every hop costs the stream airtime. Read only: switching
+ * it off is done in the developer options of the device.
+ */
+fun readScanThrottleEnabled(context: Context): Boolean? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+    val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return null
+    return try {
+        wm.isScanThrottleEnabled
+    } catch (e: Exception) {
+        Log.w("WifiLink", "scan throttle state unavailable", e)
+        null
+    }
 }
 
 /**

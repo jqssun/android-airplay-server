@@ -69,6 +69,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val displayPhysicalWidth by viewModel.pref(Prefs.DISPLAY_PHYSICAL_WIDTH_MM).collectAsState()
     val displayPhysicalHeight by viewModel.pref(Prefs.DISPLAY_PHYSICAL_HEIGHT_MM).collectAsState()
     val verboseProtocolLog by viewModel.pref(Prefs.VERBOSE_PROTOCOL_LOG).collectAsState()
+    val wifiLowLatencyLock by viewModel.pref(Prefs.WIFI_LOW_LATENCY_LOCK).collectAsState()
     val autoStart by viewModel.pref(Prefs.AUTO_START).collectAsState()
     val bootAutoStart by viewModel.pref(Prefs.BOOT_AUTO_START).collectAsState()
     val runInBackground by viewModel.pref(Prefs.RUN_IN_BACKGROUND).collectAsState()
@@ -394,6 +395,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 description = stringResource(R.string.setting_verbose_protocol_log_desc),
                 checked = verboseProtocolLog,
                 onCheckedChange = { viewModel.set(Prefs.VERBOSE_PROTOCOL_LOG, it) }
+            )
+
+            SettingSwitch(
+                title = stringResource(R.string.setting_wifi_lock),
+                description = stringResource(R.string.setting_wifi_lock_desc),
+                checked = wifiLowLatencyLock,
+                onCheckedChange = { viewModel.set(Prefs.WIFI_LOW_LATENCY_LOCK, it) }
             )
 
             SettingSwitch(

@@ -137,4 +137,7 @@ object Prefs {
     val VERBOSE_PROTOCOL_LOG = bool("verbose_protocol_log", false, restart = true)
     val LAUNCH_ON_CONNECT = bool("launch_on_connect", true)
     val USB_ONLY = bool("usb_only", false, restart = true)
+    // hold a wifi lock while the server runs so the radio does not sleep
+    // between beacons; costs battery, which is why it is a setting
+    val WIFI_LOW_LATENCY_LOCK = bool("wifi_low_latency_lock", true, restart = true)
 }
