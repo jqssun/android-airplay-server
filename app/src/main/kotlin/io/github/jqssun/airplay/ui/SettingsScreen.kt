@@ -25,6 +25,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
@@ -96,12 +97,10 @@ fun SettingsScreen(viewModel: MainViewModel) {
         Prefs.OFF to stringResource(R.string.chip_off),
     )
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(vertical = 8.dp)
-    ) {
+    // on a wide screen (a tv) forty rows in one column are a lot of presses on a
+    // d-pad, so the settings flow into two columns with a scroll state each
+    val wide = LocalConfiguration.current.screenWidthDp >= MIN_TWO_COLUMN_WIDTH_DP
+    val left: @Composable ColumnScope.() -> Unit = {
         SectionHeader(stringResource(R.string.section_server))
 
         EditableValue(
@@ -241,7 +240,9 @@ fun SettingsScreen(viewModel: MainViewModel) {
             checked = overscanned,
             onCheckedChange = { viewModel.set(Prefs.OVERSCANNED, it) }
         )
+    }
 
+    val right: @Composable ColumnScope.() -> Unit = {
         SectionHeader(stringResource(R.string.section_screen_extension))
 
         SettingSwitch(
@@ -557,7 +558,33 @@ fun SettingsScreen(viewModel: MainViewModel) {
             )
         }
     }
+
+    if (wide) {
+        Row(Modifier.fillMaxSize().padding(vertical = 8.dp)) {
+            Column(
+                modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                content = left
+            )
+            Column(
+                modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                content = right
+            )
+        }
+    } else {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 8.dp)
+        ) {
+            left()
+            right()
+        }
+    }
 }
+
+/** below this width the settings stay in one column, like on a phone */
+private const val MIN_TWO_COLUMN_WIDTH_DP = 600
 
 private fun canAutoLaunch(ctx: Context): Boolean =
     Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || Settings.canDrawOverlays(ctx)

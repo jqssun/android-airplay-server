@@ -12,6 +12,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -31,7 +32,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -555,7 +559,24 @@ fun MainScreen(
                 }
             }
         ) { padding ->
-            Box(modifier = Modifier.padding(padding).consumeWindowInsets(padding)) {
+            val contentFocus = remember { FocusRequester() }
+            var shownTab by remember { mutableStateOf<Tab?>(null) }
+
+            // a remote has no touch: switching tabs has to carry the focus into the
+            // new screen, otherwise the user has to guess that "up" enters it
+            LaunchedEffect(tab) {
+                val was = shownTab
+                shownTab = tab
+                if (was != null && was != tab) contentFocus.requestFocus()
+            }
+
+            Box(
+                modifier = Modifier
+                    .padding(padding)
+                    .consumeWindowInsets(padding)
+                    .focusRequester(contentFocus)
+                    .focusGroup()
+            ) {
                 TabContent(
                     tab, viewModel, video,
                     onFullscreen = { fullscreen = true }, onPip = onPip, onLocalNetwork = onLocalNetwork,
@@ -879,20 +900,37 @@ private fun HoldScanButton(
     onEnd: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // a remote has no touch: the ok button going down starts the seek and it
+    // going up stops it again. Losing focus has to stop it too, otherwise a
+    // seek that is interrupted by a key up that never arrives runs forever.
+    var held by remember { mutableStateOf(false) }
+    fun begin() { if (!held) { held = true; onBegin() } }
+    fun end() { if (held) { held = false; onEnd() } }
+
     Box(
         modifier = modifier
             .size(48.dp)
             .clip(CircleShape)
             .pointerInput(Unit) {
                 detectTapGestures(onPress = {
-                    onBegin()
+                    begin()
                     try {
                         awaitRelease()
                     } finally {
-                        onEnd()
+                        end()
                     }
                 })
-            },
+            }
+            .dpadFocus()
+            .onFocusChanged { if (!it.isFocused) end() }
+            .onKeyEvent { e ->
+                when (e.type) {
+                    KeyEventType.KeyDown -> { begin(); true }
+                    KeyEventType.KeyUp -> { end(); true }
+                    else -> false
+                }
+            }
+            .focusable(),
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, contentDescription)
