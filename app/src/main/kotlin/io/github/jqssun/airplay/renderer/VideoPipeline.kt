@@ -41,6 +41,8 @@ class VideoPipeline {
     private var displayDirty = false
     @Volatile private var videoW = 0
     @Volatile private var videoH = 0
+    // keep the picture's aspect ratio instead of stretching it to the window
+    @Volatile var fitAspect = true
 
     fun start() = synchronized(lock) {
         if (running) return@synchronized
@@ -146,7 +148,10 @@ class VideoPipeline {
     }
 
     private fun _render() {
-        GLES20.glViewport(0, 0, winW, winH)
+        // the extended desktop can have a different aspect ratio than the
+        // panel, so fit the picture instead of stretching it
+        val (vpX, vpY, vpW, vpH) = _viewport()
+        GLES20.glViewport(vpX, vpY, vpW, vpH)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         GLES20.glUseProgram(program)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
@@ -160,6 +165,25 @@ class VideoPipeline {
         GLES20.glDisableVertexAttribArray(aPos)
         GLES20.glDisableVertexAttribArray(aTex)
         egl?.swap(window)
+    }
+
+    // letterbox/pillarbox the picture inside the window, keeping the video's
+    // aspect ratio; returns the viewport to draw into
+    private fun _viewport(): IntArray {
+        val w = winW
+        val h = winH
+        val vw = videoW
+        val vh = videoH
+        if (!fitAspect || w <= 0 || h <= 0 || vw <= 0 || vh <= 0) return intArrayOf(0, 0, w, h)
+        val videoAspect = vw.toDouble() / vh
+        val windowAspect = w.toDouble() / h
+        return if (videoAspect > windowAspect) {
+            val drawH = (w / videoAspect).toInt().coerceAtLeast(1)
+            intArrayOf(0, (h - drawH) / 2, w, drawH)
+        } else {
+            val drawW = (h * videoAspect).toInt().coerceAtLeast(1)
+            intArrayOf((w - drawW) / 2, 0, drawW, h)
+        }
     }
 
     private fun _initGl() {

@@ -110,6 +110,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private val _videoResolution = MutableStateFlow("")
     val videoResolution = _videoResolution.asStateFlow()
 
+    // geometry advertised to the sender; the extended desktop is built from it
+    private val _advertisedResolution = MutableStateFlow("")
+    val advertisedResolution = _advertisedResolution.asStateFlow()
+
     private val _audioOnly = MutableStateFlow(false)
     val audioOnly = _audioOnly.asStateFlow()
 
@@ -345,6 +349,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
                 .debounce(SERVER_RESTART_DEBOUNCE_MS)
                 .collect { _restartServer() }
         }
+        lifecycleScope.launch {
+            prefs.observe { this[Prefs.FIT_ASPECT] }.collect {
+                videoRenderer.setFitAspect(it)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -410,19 +419,27 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         videoRenderer.benchmarkLog = prefs[Prefs.BENCHMARK_LOG]
         videoRenderer.benchmarkLogCallback = { msg -> logCallback?.invoke(msg) }
         videoRenderer.scheduledOutputBufferRelease = prefs[Prefs.SCHEDULED_OUTPUT_BUFFER_RELEASE]
+        videoRenderer.setFitAspect(prefs[Prefs.FIT_ASPECT])
         NativeBridge.nativeSetH265Enabled(nativeHandle, h265)
         NativeBridge.nativeSetCodecs(nativeHandle, alac, aac)
         val advertiseVideo = prefs[Prefs.ADVERTISE_VIDEO]
         val advertiseMirroring = prefs[Prefs.ADVERTISE_MIRRORING]
         val advertiseAudio = prefs[Prefs.ADVERTISE_AUDIO]
+        val separateDisplay = prefs[Prefs.SEPARATE_DISPLAY]
         NativeBridge.nativeSetHlsEnabled(nativeHandle, advertiseVideo)
         NativeBridge.nativeSetLang(nativeHandle, ConfigurationCompat.getLocales(resources.configuration).toLanguageTags().replace(',', ':'))
         NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_MIRROR, advertiseMirroring)
         NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_AUDIO, advertiseAudio)
+        NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_SEPARATE_DISPLAY, separateDisplay)
         NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", maxFps)
         NativeBridge.nativeSetPlist(nativeHandle, "overscanned", if (overscanned) 1 else 0)
         if (audioLatencyMs >= 0) {
             NativeBridge.nativeSetPlist(nativeHandle, "audio_delay_micros", audioLatencyMs * 1000)
+        }
+        // the protocol diagnostics (setup requests, connection setup) are only
+        // logged at debug level
+        if (prefs[Prefs.VERBOSE_PROTOCOL_LOG]) {
+            NativeBridge.nativeSetLogLevel(nativeHandle, NativeBridge.LOG_LEVEL_DEBUG)
         }
 
         // set display params
@@ -432,6 +449,17 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _videoResolution.value = "${w}x${h}"
         _videoAspect.value = w.toFloat() / h
         NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, maxFps)
+        _setupFrameBuffers(w, h)
+        // the sender builds the extended desktop from this geometry, so it has
+        // to be the panel's native resolution to avoid an upscaled desktop
+        _advertisedResolution.value = "${w}x${h}@${maxFps}"
+        log("Advertising display ${w}x${h}@${maxFps} (decoder limit ${videoRenderer.maxResolution().first}x${videoRenderer.maxResolution().second})")
+
+        // physical panel size, lets the sender scale the extended desktop's ui
+        val physW = prefs[Prefs.DISPLAY_PHYSICAL_WIDTH_MM]
+        val physH = prefs[Prefs.DISPLAY_PHYSICAL_HEIGHT_MM]
+        if (physW > 0) NativeBridge.nativeSetPlist(nativeHandle, "displayPhysicalWidth", physW)
+        if (physH > 0) NativeBridge.nativeSetPlist(nativeHandle, "displayPhysicalHeight", physH)
 
         val requestedPort = prefs[Prefs.SERVER_PORT]
         val port = NativeBridge.nativeStart(nativeHandle, requestedPort)
@@ -486,7 +514,15 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         if (!clamp) return w to h
         // strict decoders black-screen past their limits; advertised size is only upper bound for senders
         val (maxW, maxH) = videoRenderer.maxResolution()
-        return w.coerceAtMost(maxW) to h.coerceAtMost(maxH)
+        return _fit(w, h, maxW, maxH)
+    }
+
+    // scale down to the decoder limits without changing the aspect ratio:
+    // the sender builds the extended desktop from the advertised geometry
+    fun _fit(w: Int, h: Int, maxW: Int, maxH: Int): Pair<Int, Int> {
+        if (w <= maxW && h <= maxH) return w to h
+        val scale = minOf(maxW.toDouble() / w, maxH.toDouble() / h)
+        return (w * scale).roundToInt().coerceAtLeast(1) to (h * scale).roundToInt().coerceAtLeast(1)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -645,6 +681,32 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     override fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
         videoRenderer.feedFrame(data, ntpTimeNs, isH265)
+    }
+
+    override fun onVideoDataBuffer(index: Int, size: Int, ntpTimeNs: Long, isH265: Boolean) {
+        val buf = _frameBuffers?.getOrNull(index) ?: return
+        videoRenderer.feedFrameBuffer(buf, size, ntpTimeNs, isH265)
+    }
+
+    // direct buffers the native side writes the frames into; keeping them
+    // here avoids allocating a byte array for every frame
+    private var _frameBuffers: Array<java.nio.ByteBuffer>? = null
+
+    private fun _setupFrameBuffers(w: Int, h: Int) {
+        if (nativeHandle == 0L) return
+        val capacity = _frameBufferCapacity(w, h)
+        val buffers = Array(FRAME_BUFFER_COUNT) {
+            java.nio.ByteBuffer.allocateDirect(capacity).order(java.nio.ByteOrder.nativeOrder())
+        }
+        _frameBuffers = buffers
+        NativeBridge.nativeSetFrameBuffers(nativeHandle, buffers, capacity)
+        Log.i(TAG, "frame buffers: ${buffers.size} x ${capacity / 1024}k")
+    }
+
+    private fun _frameBufferCapacity(w: Int, h: Int): Int {
+        // a raw frame is the worst case for an uncompressed key frame
+        val raw = w.toLong() * h * 3 / 2
+        return raw.coerceIn(MIN_FRAME_BUFFER, MAX_FRAME_BUFFER).toInt()
     }
 
     override fun onVideoSessionPoll() {
@@ -1193,6 +1255,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
         private const val AUDIO_CONFIG_DEBOUNCE_MS = 500L
         private const val SERVER_RESTART_DEBOUNCE_MS = 500L
+
+        // ring of direct frame buffers handed over to the native decoder
+        private const val FRAME_BUFFER_COUNT = 3
+        private const val MIN_FRAME_BUFFER = 4L * 1024 * 1024
+        private const val MAX_FRAME_BUFFER = 16L * 1024 * 1024
 
         // airplay volume is linear in dB along sender slider
         private fun _dbToFrac(db: Float) = if (db <= -144f) 0f else ((db + 30f) / 30f).coerceIn(0f, 1f)

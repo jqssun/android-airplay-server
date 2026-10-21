@@ -112,6 +112,16 @@ object Prefs {
     val ADVERTISE_VIDEO = bool("advertise_video", true, restart = true)
     val ADVERTISE_MIRRORING = bool("advertise_mirroring", true, restart = true)
     val ADVERTISE_AUDIO = bool("advertise_audio", true, restart = true)
+    // dns-sd feature bit 14: lets the sender offer "Use As Separate Display"
+    val SEPARATE_DISPLAY = bool("separate_display", true, restart = true)
+    // physical size of the panel in mm; the sender scales the extended
+    // desktop's ui from it, 0 leaves it unset
+    val DISPLAY_PHYSICAL_WIDTH_MM = int("display_physical_width_mm", 0, 0..10000, restart = true)
+    val DISPLAY_PHYSICAL_HEIGHT_MM = int("display_physical_height_mm", 0, 0..10000, restart = true)
+    // keep the picture's aspect ratio instead of stretching it to the panel
+    val FIT_ASPECT = bool("fit_aspect", true)
+    // log the protocol traffic (setup requests, connection setup) natively
+    val VERBOSE_PROTOCOL_LOG = bool("verbose_protocol_log", false, restart = true)
     val LAUNCH_ON_CONNECT = bool("launch_on_connect", true)
     val USB_ONLY = bool("usb_only", false, restart = true)
 }
