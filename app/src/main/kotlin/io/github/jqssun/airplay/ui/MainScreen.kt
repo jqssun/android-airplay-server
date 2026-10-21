@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.os.SystemClock
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn as AndroidxOptIn
 import androidx.compose.animation.animateColorAsState
@@ -87,6 +89,9 @@ private enum class Tab(val labelRes: Int, val icon: ImageVector) {
     SETTINGS(R.string.tab_settings, Icons.Default.Settings)
 }
 
+// how long the back button has to be pressed twice to leave the app
+private const val BACK_EXIT_WINDOW_MS = 2000L
+
 @Composable
 fun MainScreen(
     viewModel: MainViewModel,
@@ -98,6 +103,7 @@ fun MainScreen(
 ) {
     var tab by remember { mutableStateOf(Tab.OVERVIEW) }
     var fullscreen by remember { mutableStateOf(false) }
+    var lastBackPress by remember { mutableLongStateOf(0L) }
     val pin by viewModel.pinCode.collectAsState()
     val connections by viewModel.connectionCount.collectAsState()
     val audioOnly by viewModel.audioOnly.collectAsState()
@@ -516,6 +522,17 @@ fun MainScreen(
             onPip = onPip
         )
     } else {
+        // back on a tv leaves the settings and the log first, the app itself last
+        BackHandler(enabled = tab != Tab.OVERVIEW) { tab = Tab.OVERVIEW }
+        BackHandler(enabled = tab == Tab.OVERVIEW) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastBackPress < BACK_EXIT_WINDOW_MS) {
+                activity?.finish()
+            } else {
+                lastBackPress = now
+                Toast.makeText(activity, R.string.back_exit_hint, Toast.LENGTH_SHORT).show()
+            }
+        }
         Scaffold(
             bottomBar = {
                 Column {

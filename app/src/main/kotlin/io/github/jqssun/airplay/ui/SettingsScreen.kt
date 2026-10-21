@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
@@ -16,8 +17,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
@@ -35,6 +42,7 @@ import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import kotlin.math.roundToInt
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(viewModel: MainViewModel) {
     val serverName by viewModel.pref(Prefs.SERVER_NAME).collectAsState()
@@ -94,16 +102,18 @@ fun SettingsScreen(viewModel: MainViewModel) {
     ) {
         SectionHeader(stringResource(R.string.section_server))
 
-        SettingTextField(
+        EditableValue(
             label = stringResource(R.string.setting_server_name),
             value = serverName,
             onCommit = { viewModel.set(Prefs.SERVER_NAME, it) }
         )
 
-        SettingTextField(
+        EditableValue(
             label = stringResource(R.string.setting_server_port),
             value = serverPort.toString(),
             onCommit = { viewModel.set(Prefs.SERVER_PORT, it.toInt()) },
+            keyboardType = KeyboardType.Number,
+            digitsOnly = true,
             range = Prefs.SERVER_PORT.range
         )
 
@@ -230,38 +240,51 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onCheckedChange = { viewModel.set(Prefs.FIT_ASPECT, it) }
         )
 
+        // the common panel sizes, so that the size rarely has to be typed in
+        val panelSizes = listOf(
+            Triple(0, 0, stringResource(R.string.chip_auto)),
+            Triple(965, 540, "43\""),
+            Triple(1118, 629, "50\""),
+            Triple(1229, 692, "55\""),
+            Triple(1435, 808, "65\""),
+            Triple(1668, 938, "75\"")
+        )
         ListItem(
             headlineContent = { Text(stringResource(R.string.setting_display_physical_desc)) },
             supportingContent = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = displayPhysicalWidth.toString(),
-                        onValueChange = {
-                            viewModel.set(Prefs.DISPLAY_PHYSICAL_WIDTH_MM, it.toIntOrNull() ?: 0)
-                        },
-                        singleLine = true,
-                        label = { Text(stringResource(R.string.setting_display_physical_width)) },
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number,
-                            imeAction = ImeAction.Next
-                        ),
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = displayPhysicalHeight.toString(),
-                        onValueChange = {
-                            viewModel.set(Prefs.DISPLAY_PHYSICAL_HEIGHT_MM, it.toIntOrNull() ?: 0)
-                        },
-                        singleLine = true,
-                        label = { Text(stringResource(R.string.setting_display_physical_height)) },
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number,
-                            imeAction = ImeAction.Done
-                        ),
-                        modifier = Modifier.weight(1f)
-                    )
+                Column {
+                    Spacer(Modifier.height(8.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        panelSizes.forEach { (w, h, label) ->
+                            FilterChip(
+                                selected = displayPhysicalWidth == w && displayPhysicalHeight == h,
+                                onClick = {
+                                    viewModel.set(Prefs.DISPLAY_PHYSICAL_WIDTH_MM, w)
+                                    viewModel.set(Prefs.DISPLAY_PHYSICAL_HEIGHT_MM, h)
+                                },
+                                label = { Text(label) },
+                                modifier = Modifier.dpadFocus()
+                            )
+                        }
+                    }
                 }
             }
+        )
+
+        EditableValue(
+            label = stringResource(R.string.setting_display_physical_width),
+            value = displayPhysicalWidth.toString(),
+            onCommit = { viewModel.set(Prefs.DISPLAY_PHYSICAL_WIDTH_MM, it.toIntOrNull() ?: 0) },
+            keyboardType = KeyboardType.Number,
+            digitsOnly = true
+        )
+
+        EditableValue(
+            label = stringResource(R.string.setting_display_physical_height),
+            value = displayPhysicalHeight.toString(),
+            onCommit = { viewModel.set(Prefs.DISPLAY_PHYSICAL_HEIGHT_MM, it.toIntOrNull() ?: 0) },
+            keyboardType = KeyboardType.Number,
+            digitsOnly = true
         )
 
         SectionHeader(stringResource(R.string.section_decode))
@@ -470,20 +493,24 @@ fun SettingsScreen(viewModel: MainViewModel) {
                     }
                 )
             } else {
-                SettingTextField(
+                EditableValue(
                     label = stringResource(R.string.setting_audio_cushion_ms),
                     value = audioCushionMs.toString(),
                     onCommit = { viewModel.set(Prefs.AUDIO_CUSHION_MS, it.toInt()) },
                     description = stringResource(R.string.setting_audio_cushion_ms_desc),
+                    keyboardType = KeyboardType.Number,
+                    digitsOnly = true,
                     range = Prefs.AUDIO_CUSHION_MS.range
                 )
             }
 
-            SettingTextField(
+            EditableValue(
                 label = stringResource(R.string.setting_oboe_buffer_frames),
                 value = oboeBufferFrames.toString(),
                 onCommit = { viewModel.set(Prefs.OBOE_BUFFER_FRAMES, it.toInt()) },
                 description = stringResource(R.string.setting_oboe_buffer_frames_desc),
+                keyboardType = KeyboardType.Number,
+                digitsOnly = true,
                 range = Prefs.OBOE_BUFFER_FRAMES.range
             )
 
@@ -549,6 +576,13 @@ private fun SettingResolution(
     val parts = if (!isPreset && value.contains("x")) value.split("x", limit = 2) else listOf("", "")
     var width by remember(value) { mutableStateOf(if (isPreset) "" else parts[0]) }
     var height by remember(value) { mutableStateOf(if (isPreset) "" else parts.getOrElse(1) { "" }) }
+    val widthFocus = remember { FocusRequester() }
+
+    fun cancel() {
+        editing = false
+        width = if (isPreset) "" else parts[0]
+        height = if (isPreset) "" else parts.getOrElse(1) { "" }
+    }
 
     ListItem(
         headlineContent = { Text(stringResource(R.string.setting_resolution)) },
@@ -572,12 +606,16 @@ private fun SettingResolution(
                     FilterChip(
                         selected = !isPreset || editing,
                         onClick = { editing = true },
-                        label = { Text(stringResource(R.string.chip_custom)) },
+                        label = {
+                            Text(if (isPreset) stringResource(R.string.chip_custom) else value)
+                        },
                         modifier = Modifier.dpadFocus()
                     )
                     devicePresets.forEach { (key, label) -> presetChip(key, label) }
                 }
-                if (editing || !isPreset) {
+                // the fields only exist while they are edited, otherwise the d-pad
+                // would walk straight into them and open the keyboard
+                if (editing) {
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
@@ -589,7 +627,17 @@ private fun SettingResolution(
                                 keyboardType = KeyboardType.Number,
                                 imeAction = ImeAction.Next
                             ),
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .weight(1f)
+                                .focusRequester(widthFocus)
+                                .onPreviewKeyEvent { event ->
+                                    if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                                        cancel()
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
                         )
                         OutlinedTextField(
                             value = height,
@@ -608,9 +656,21 @@ private fun SettingResolution(
                                     editing = false
                                 }
                             },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .weight(1f)
+                                .onPreviewKeyEvent { event ->
+                                    if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                                        cancel()
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }
                         )
                     }
+                    // back leaves the editor, it must not reach the activity
+                    BackHandler { cancel() }
+                    LaunchedEffect(Unit) { widthFocus.requestFocusUntilLanded() }
                 }
             }
         }
@@ -621,39 +681,6 @@ private fun SettingResolution(
 private fun doneAndHide(commit: () -> Unit): KeyboardActions {
     val keyboard = LocalSoftwareKeyboardController.current
     return KeyboardActions(onDone = { commit(); keyboard?.hide() })
-}
-
-@Composable
-private fun SettingTextField(
-    label: String,
-    value: String,
-    onCommit: (String) -> Unit,
-    description: String? = null,
-    range: IntRange? = null
-) {
-    var text by remember(value) { mutableStateOf(value) }
-    val valid = range == null || text.toIntOrNull()?.let { it in range } == true
-    fun save() {
-        if (valid && text != value) onCommit(text)
-    }
-    OutlinedTextField(
-        value = text,
-        onValueChange = { text = if (range == null) it else it.filter { c -> c.isDigit() }.take(6) },
-        label = { Text(label) },
-        supportingText = description?.let { { Text(it) } },
-        singleLine = true,
-        isError = !valid,
-        keyboardOptions = KeyboardOptions(
-            keyboardType = if (range == null) KeyboardType.Text else KeyboardType.Number,
-            imeAction = ImeAction.Done
-        ),
-        keyboardActions = doneAndHide(::save),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .padding(bottom = 8.dp)
-            .onFocusChanged { if (!it.isFocused) save() }
-    )
 }
 
 @Composable
@@ -669,6 +696,7 @@ private fun SettingChipField(
     val isPreset = presets.any { it.first == value }
     var editing by remember { mutableStateOf(false) }
     var text by remember(value) { mutableStateOf(if (isPreset) "" else value) }
+    val fieldFocus = remember { FocusRequester() }
 
     ListItem(
         headlineContent = { Text(title) },
@@ -679,12 +707,15 @@ private fun SettingChipField(
                 ChipRow(if (editing) "" else value, presets, { editing = false; text = ""; onValueChange(it) }) {
                     FilterChip(
                         selected = !isPreset || editing,
-                        onClick = { editing = true },
-                        label = { Text(stringResource(R.string.chip_custom)) },
+                        onClick = { editing = true; text = value },
+                        label = {
+                            Text(if (isPreset) stringResource(R.string.chip_custom) else value)
+                        },
                         modifier = Modifier.dpadFocus()
                     )
                 }
-                if (editing || !isPreset) {
+                // the field only exists while it is edited
+                if (editing) {
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = text,
@@ -701,8 +732,22 @@ private fun SettingChipField(
                                 editing = false
                             }
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(fieldFocus)
+                            .onPreviewKeyEvent { event ->
+                                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                                    editing = false
+                                    text = ""
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
                     )
+                    // back leaves the editor, it must not reach the activity
+                    BackHandler { editing = false; text = "" }
+                    LaunchedEffect(Unit) { fieldFocus.requestFocusUntilLanded() }
                 }
             }
         }

@@ -70,6 +70,7 @@
     <!-- Dialogs -->
     <string name="dialog_pin_title">AirPlay PIN</string>
     <string name="btn_ok">OK</string>
+    <string name="back_exit_hint">Press back again to exit</string>
 
     <!-- Logs screen -->
     <string name="btn_export">Export</string>
