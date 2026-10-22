@@ -39,6 +39,7 @@ class VideoPipeline {
     @Volatile private var frameAvailable = false
     private var pendingDisplay: Surface? = null
     private var displayDirty = false
+    private var clearRequested = false
     @Volatile private var videoW = 0
     @Volatile private var videoH = 0
     // keep the picture's aspect ratio instead of stretching it to the window
@@ -61,6 +62,21 @@ class VideoPipeline {
         videoW = w
         videoH = h
         surfaceTexture?.setDefaultBufferSize(w, h)
+    }
+
+    /**
+     * Wipes the picture.
+     *
+     * The last frame of the session that is gone must not stay on the panel
+     * while the next one is still looking for its first frame - that is the
+     * "old desktop" that stays visible at the start of a broadcast.
+     */
+    fun clear() {
+        synchronized(lock) {
+            hasFrame = false
+            clearRequested = true
+            lock.notifyAll()
+        }
     }
 
     fun release() {
@@ -93,12 +109,17 @@ class VideoPipeline {
             var newDisplay: Surface? = null
             var displayChanged = false
             var doFrame = false
+            var doClear = false
             synchronized(lock) {
-                while (running && !frameAvailable && !displayDirty) lock.wait()
+                while (running && !frameAvailable && !displayDirty && !clearRequested) lock.wait()
                 if (running && displayDirty) {
                     newDisplay = pendingDisplay
                     displayChanged = true
                     displayDirty = false
+                }
+                if (running && clearRequested) {
+                    clearRequested = false
+                    doClear = true
                 }
                 if (running && frameAvailable) {
                     frameAvailable = false
@@ -107,9 +128,21 @@ class VideoPipeline {
             }
             if (!running) break
             if (displayChanged) _bindDisplay(newDisplay)
+            if (doClear) _clearWindow()
             if (doFrame) _consumeAndDraw()
         }
         _releaseGl()
+    }
+
+    /* paints the window black: the picture of the session that is gone */
+    private fun _clearWindow() {
+        val egl = egl ?: return
+        if (window == EGL14.EGL_NO_SURFACE) return
+        egl.makeCurrent(window)
+        GLES20.glViewport(0, 0, winW, winH)
+        GLES20.glClearColor(0f, 0f, 0f, 1f)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        egl.swap(window)
     }
 
     private fun _bindDisplay(surface: Surface?) {

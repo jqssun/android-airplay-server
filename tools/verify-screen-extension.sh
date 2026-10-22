@@ -26,7 +26,7 @@ ACTION=io.github.jqssun.airplay.SET_SETTING
 APK=app/build/outputs/apk/debug/app-debug.apk
 
 # the lines that tell how the extended desktop is set up
-GREP_PATTERNS='Advertising display|Display session|Video size|Video codec started|new video session|SETUP request|displays|decoders:'
+GREP_PATTERNS='Advertising display|Advertised features|profile asks for|Display session|Video size|Video codec started|new video session|SETUP request|displays|decoders:'
 
 adbs() { adb shell "$@"; }
 

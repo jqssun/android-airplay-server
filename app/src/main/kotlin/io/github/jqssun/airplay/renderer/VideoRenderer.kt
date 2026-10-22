@@ -79,6 +79,8 @@ class VideoRenderer(ctx: Context) {
         videoHeight = h
         pipeline.setVideoSize(w, h)
         stopCodec()
+        // the picture on the panel belongs to the old size, it must not stay
+        pipeline.clear()
     }
 
     // keep the picture's aspect ratio instead of stretching it to the panel
@@ -158,12 +160,16 @@ class VideoRenderer(ctx: Context) {
     fun stopSession() {
         // the queued frames belong to a session that is gone
         _clearPending()
-        synchronized(lock) { stopCodec() }
+        synchronized(lock) {
+            stopCodec()
+            // the picture on the panel is gone with the session
+            pipeline.clear()
+        }
     }
 
     private fun _resetStats() {
         fps = 0; bitrateBps = 0; frameCount = 0; codecName = ""
-        droppedFrames = 0; framePacingJitterUs = 0
+        droppedFrames = 0; framePacingJitterUs = 0; droppedByQueue = 0
         _framesThisSec = 0; _bytesThisSec = 0
     }
 
@@ -450,6 +456,10 @@ class VideoRenderer(ctx: Context) {
         _clearPending()
         synchronized(lock) {
             stopCodec()
+            // the old picture must not stay on the panel while the new
+            // session finds its first frame: that is the "old desktop" the
+            // user sees at the start of a broadcast
+            pipeline.clear()
         }
     }
 

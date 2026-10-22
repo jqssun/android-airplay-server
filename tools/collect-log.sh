@@ -53,7 +53,7 @@ echo "== collecting =="
 # the summary first: it is what the log is read for, the rest is the detail
 {
     echo "### what the receiver advertises"
-    adb logcat -d -v brief 2>/dev/null | grep -iE "Advertising display|decoders:|Frame rate clamped|server started|Listening|wifi lock" | tail -12 || true
+    adb logcat -d -v brief 2>/dev/null | grep -iE "Advertising display|Advertised features|profile asks for|decoders:|Frame rate clamped|server started|Listening|wifi lock" | tail -14 || true
 } >> "$OUT"
 
 {

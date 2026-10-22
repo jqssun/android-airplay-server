@@ -71,14 +71,16 @@ apply_config() {
 
     echo "== picture =="
     # the panel's native resolution, clamped to what the decoder can decode,
-    # with the frame rate clamped to what it can sustain at that size
+    # with the frame rate clamped to what it can sustain at that size. the
+    # panel is the cap: a size it cannot show makes the sender spread its bits
+    # over pixels nobody sees, and the picture breaks into blocks
     set_pref stream_profile "$profile"
     set_pref resolution auto
     set_pref max_fps 60
     # hevc: about half the bitrate of h264 at the same quality. "auto" lets the
     # app decide by size: hevc pays off above 1080p, and below that the hevc
     # feature bit would only make the sender push a 4k mirror the panel cannot
-    # show. the 4k profiles ask for hevc on their own
+    # show
     set_pref h265 auto
     # the picture keeps its shape and fills the panel
     set_pref fit_aspect true

@@ -49,9 +49,12 @@ speed, drops) in the debug overlay.
 
 Pick a **stream profile** that fits the link - 4K30 looks better than 1080p60 on a
 constrained one, and HEVC carries about twice as much detail as H.264 at the same
-bitrate. Prefer USB-C tethering when you can cable: it removes the radio from the
-equation entirely. What an app may and may not change on the radio, and how to
-measure before and after, is in [docs/WIFI-OPTIMIZATION.md](docs/WIFI-OPTIMIZATION.md).
+bitrate. The picture is sent in the **panel's own size**: a size the panel cannot
+show costs airtime and quality, because the sender spreads its bits over the
+pixels it sends. Prefer USB-C tethering when you can cable: it removes the radio
+from the equation entirely. What an app may and may not change on the radio, and
+how to measure before and after, is in
+[docs/WIFI-OPTIMIZATION.md](docs/WIFI-OPTIMIZATION.md).
 
 The whole choice, written down and applied to a connected device:
 

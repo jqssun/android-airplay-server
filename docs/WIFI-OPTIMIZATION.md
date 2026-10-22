@@ -51,22 +51,39 @@ The mirror thread, the audio RTP thread and the httpd thread ask to run ahead of
 the UI (patch `0012`, best effort), the decode thread and the GL pipeline thread
 run at `THREAD_PRIORITY_URGENT_DISPLAY`.
 
-### Drops frame rate before resolution
+### Drops frame rate before resolution, and the panel caps the size
 
 On a constrained link 3840×2160@30 looks far better than 1920×1080@60. The
 **Stream profile** setting (`auto`, `4k30`, `4k60`, `1080p60`, `custom`) picks
-resolution, frame rate and codec together, and the built-in profiles force HEVC —
-roughly half the bitrate of H.264 at the same quality. The receiver advertises
-what it can decode, and the sender honours it.
+resolution, frame rate and codec together. The receiver advertises what it can
+decode, and the sender honours it.
 
-The **size** is clamped to the decoder's caps, and the **frame rate** is clamped
-to what the decoder can sustain *at that size*: a decoder that tops out at 4K30
-cannot keep up with a 4K60 stream and drops frames instead of decoding them,
-which in an extended desktop is a visible stutter. The receiver logs the clamp:
+The **panel** is the cap on the size. A picture the panel cannot show costs
+airtime *and* quality: the sender spreads its bits over the pixels it sends, so
+a 4K stream on a 1080p panel has a quarter of the bits per pixel of a 1080p
+stream and breaks into blocks as soon as the picture changes. The `custom`
+profile is the way out — there the setting is the user's own decision and is
+taken as it is.
+
+The **frame rate** follows the size: the profile gives up the frame rate before
+it gives up the resolution (4K30 beats 1080p60), but when the panel forced a
+smaller picture the frame rate goes back up to the panel's own rate, because a
+smaller picture costs less to send at full rate.
+
+The **codec** follows the size as well: HEVC is roughly half the bitrate of
+H.264 at the same quality, so it pays off above 1080p — and below that its
+feature bit (dns-sd bit 42) would only make the sender push a 4K mirror onto a
+1080p panel. The `h265` setting overrides this in either direction.
+
+The size is further clamped to the decoder's caps, and the frame rate to what
+the decoder can sustain *at that size*: a decoder that tops out at 4K30 cannot
+keep up with a 4K60 stream and drops frames instead of decoding them, which in
+an extended desktop is a visible stutter. The receiver logs all of it:
 
 ```
-Advertising display 3840x2160@30 (decoder limit 3840x2160, profile auto)
-Frame rate clamped to 30fps: the decoder cannot sustain 60fps at 3840x2160
+Advertising display 1920x1080@60 (panel 1920x1080, decoder limit 4096x2176, profile 4k60)
+The profile asks for 3840x2160, the panel shows 1920x1080: the picture is sent in the panel's own size
+Advertised features: ft=0x5A7FFEE6,0x0 features=0x5A7FFEE6,0x0 hevc(bit 42)=off
 ```
 
 The app only *advises* on a link problem, it never renegotiates mid-session: a
@@ -148,10 +165,52 @@ itself: the receiver's geometry is what the *extended display* is built from,
 but a mirror comes in at the size macOS wants. The receiver cannot talk the
 sender out of it directly — what it can do is stop *asking* for it: the hevc
 capability is the dns-sd feature bit 42, and that bit is what tells the sender
-that it may send 4k at all. On a 1080p panel the bit is now left off (see
-`h265` above), the receiver advertises its size in the `/info` response as
-well, and the picture stays 1080p instead of being a 4k stream squeezed onto a
-panel that cannot show it.
+that it may send 4k at all. On a 1080p panel the bit is left off (see `h265`
+above), the receiver advertises its size in the `/info` response as well, and
+the picture stays 1080p instead of being a 4k stream squeezed onto a panel that
+cannot show it.
+
+## What the second test session on the tv showed
+
+The second session was the first one with the extended display *and* a mirror at
+the same time, and it showed two things that no theory would have predicted.
+
+| what | measured |
+|------|----------|
+| the advertised display | `3840x2160@60` — the `4k60` profile asked for 4k and nothing capped it to the panel |
+| the extension | `Display session 1 takes over from 0`, the desktop came at **3840x2160 H.264** — exactly the advertised geometry |
+| the codec | `video_set_codec: 1` — h.264, although the receiver had the hevc decoder and the hevc feature bit was set |
+| the bitrate | **3.3 – 5.0 Mbps** at 3840x2160, 30–47 fps, 0 frames dropped |
+| the jitter | 8 ms at the start, ~22 ms after a few minutes |
+| the decode | 3.29 ms mean over 200 frames (max 7.62) |
+| the link | unchanged: 0 udp buffer errors, no retransmissions |
+
+**The "cubes" are the bitrate per pixel.** 4 Mbps over 8.3 million pixels is
+4.5 bits per pixel; the same picture in 1080p has four times as many bits per
+pixel. The sender does the rate control, but the size is what the receiver
+asked for — so the receiver stops asking for a size the panel cannot show.
+That is the panel cap above, and it is the fix for the blocks.
+
+**A 4k stream at 4 Mbps also makes the sender's encoder work harder**, and the
+jitter that grew from 8 ms to 22 ms says the frames were not arriving evenly.
+At the panel's own size the same link has four times the bits per pixel to
+spend on each frame, so the encoder needs fewer bits for the same picture and
+the frames arrive evenly.
+
+**The codec is still h.264.** The hevc feature bit reached the sender (it sent
+4k, which is only possible with bit 42), so the choice is made somewhere else:
+the display entry of the `/info` response and the http `/info` features were
+both hardcoded. The http features now carry bit 42 when the receiver can decode
+hevc, and the receiver logs the feature words it puts on the wire, so the next
+log shows what the sender actually saw.
+
+## The picture is cleared when the session changes
+
+The panel kept a picture from the previous session at the start of the next
+one. The picture of a session that is gone is now wiped from the surface
+(`glClear` + swap) whenever the session changes, the sender disconnects or the
+geometry changes, so the panel is black until the new session's first frame
+arrives instead of showing the old desktop.
 
 ## Prefer a wire
 
@@ -216,17 +275,21 @@ The numbers to compare, per profile (`4k60`, `4k30`, `1080p60`) and per link
 
 | metric | where it comes from | before | after |
 |--------|---------------------|--------|-------|
+| the advertised size | receiver log at startup | `3840x2160@60` on a 1080p panel | |
+| the codec | `video_set_codec` in the log | h.264 (`video_set_codec: 1`) | |
+| the bitrate | benchmark log | 3.3 – 5.0 Mbps at 3840x2160 | |
+| bits per pixel | bitrate ÷ pixels ÷ fps | ~4.5 bits/pixel at 4k | |
 | `Queuedrops` | debug overlay / benchmark log | 144 of 4807 frames (4k mirror) | |
 | `Drops` | debug overlay / benchmark log | 0 | |
-| frame pacing jitter | debug overlay | 32 ms (4k mirror at 30 fps) | |
+| frame pacing jitter | debug overlay | 32 ms (4k mirror at 30 fps), 8 → 22 ms in the second session | |
 | `Udp: RcvbufErrors` | `tools/verify-screen-extension.sh link` | 0 | |
 | effective `SO_RCVBUF` | receiver log at startup | not in the log yet | |
 | freezes seen by eye | watching the picture | none reported | |
 | end-to-end delay | clapper board or a stopwatch on camera | not measured yet | |
 
-The numbers above are from one session on a 1080p tv over 5 GHz with the
-`auto` profile, where the sender sent a 4k mirror. They are the baseline, not
-a result: the same session has to be run again with the mirror at the panel's
+The numbers above are from sessions on a 1080p tv over 5 GHz with the `auto`
+profile, where the sender sent a 4k mirror. They are the baseline, not a
+result: the same session has to be run again with the mirror at the panel's
 size (and over USB) before the two columns can be compared.
 
 Fill the "before" column from a build of the commit before
