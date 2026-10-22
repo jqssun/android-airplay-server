@@ -39,6 +39,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import android.content.Context
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -94,7 +95,8 @@ fun MainScreen(
     onSurfaceAvailable: (android.view.Surface) -> Unit,
     onSurfaceDestroyed: (android.view.Surface) -> Unit,
     onPip: () -> Unit = {},
-    onLocalNetwork: () -> Unit = {}
+    onLocalNetwork: () -> Unit = {},
+    onSurfaceSizeChanged: ((android.view.Surface, Int, Int) -> Unit)? = null
 ) {
     var tab by remember { mutableStateOf(Tab.OVERVIEW) }
     var fullscreen by remember { mutableStateOf(false) }
@@ -105,14 +107,25 @@ fun MainScreen(
     val videoSessionPending by viewModel.videoSessionPending.collectAsState()
     val mirroringActive by viewModel.mirroringActive.collectAsState()
     val autoFullscreen by viewModel.pref(Prefs.AUTO_FULLSCREEN).collectAsState()
+    val directVideoOutput by viewModel.pref(Prefs.DIRECT_VIDEO_OUTPUT).collectAsState()
+    val fillLandscape by viewModel.pref(Prefs.MIRROR_FILL_LANDSCAPE).collectAsState()
+    val isTelevision = LocalConfiguration.current.uiMode and
+        Configuration.UI_MODE_TYPE_MASK == Configuration.UI_MODE_TYPE_TELEVISION
 
     // don't use movableContentOf: moving AndroidView across subcomposition boundaries makes it crash on reparent
     val video: @Composable () -> Unit = {
         val aspect by viewModel.videoAspect.collectAsState()
+        val fillWindow = (fullscreen || isInPip) && (!directVideoOutput || (fillLandscape && aspect > 1f))
         VideoSurfaceView(
             onSurfaceAvailable = onSurfaceAvailable,
             onSurfaceDestroyed = onSurfaceDestroyed,
-            aspectRatio = aspect
+            aspectRatio = aspect,
+            // Sony can compose a letterboxed SurfaceView through its 1080p UI path.
+            // Keep the fullscreen surface panel-sized; the GL pipeline fits the image.
+            applyAspectRatio = !fillWindow,
+            modifier = if (fillWindow) Modifier.fillMaxSize() else Modifier,
+            onSurfaceSizeChanged = onSurfaceSizeChanged,
+            useNativeResolution = !directVideoOutput && fullscreen && !isInPip
         )
     }
 
@@ -508,7 +521,10 @@ fun MainScreen(
     }
 
     if (fullscreen) {
-        BackHandler { fullscreen = false }
+        BackHandler {
+            if (isTelevision) viewModel.stopServer()
+            fullscreen = false
+        }
         FullscreenVideo(
             viewModel = viewModel,
             video = video,
@@ -780,6 +796,9 @@ private fun FullscreenVideo(
     val videoResolution by viewModel.videoResolution.collectAsState()
     val debugEnabled by viewModel.pref(Prefs.DEBUG_ENABLED).collectAsState()
     val debugInfo by viewModel.debugInfo.collectAsState()
+    val fillLandscape by viewModel.pref(Prefs.MIRROR_FILL_LANDSCAPE).collectAsState()
+    val screenFocus = remember { FocusRequester() }
+    val framingFocus = remember { FocusRequester() }
 
     var controlsVisible by remember { mutableStateOf(true) }
     var tapTick by remember { mutableStateOf(0) }
@@ -788,11 +807,32 @@ private fun FullscreenVideo(
         delay(8000)
         controlsVisible = false
     }
+    LaunchedEffect(controlsVisible) {
+        if (controlsVisible) framingFocus.requestFocus() else screenFocus.requestFocus()
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
+            .onPreviewKeyEvent {
+                val event = it.nativeKeyEvent
+                val reveal = event.keyCode in listOf(
+                    android.view.KeyEvent.KEYCODE_MENU,
+                    android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                    android.view.KeyEvent.KEYCODE_DPAD_UP,
+                    android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                )
+                if (event.action == android.view.KeyEvent.ACTION_DOWN && reveal &&
+                    (!controlsVisible || event.keyCode == android.view.KeyEvent.KEYCODE_MENU)) {
+                    tapTick++
+                    true
+                } else false
+            }
+            .focusRequester(screenFocus)
+            .focusable()
             .pointerInput(Unit) { detectTapGestures { tapTick++ } },
         contentAlignment = Alignment.Center
     ) {
@@ -802,6 +842,15 @@ private fun FullscreenVideo(
             modifier = Modifier.align(Alignment.TopEnd)
         ) {
             Row(modifier = Modifier.padding(8.dp)) {
+                FilledTonalButton(
+                    onClick = {
+                        viewModel.set(Prefs.MIRROR_FILL_LANDSCAPE, !fillLandscape)
+                        tapTick++
+                    },
+                    modifier = Modifier.dpadFocus().focusRequester(framingFocus)
+                ) {
+                    Text(stringResource(if (fillLandscape) R.string.mirror_landscape_fill else R.string.mirror_original_fit))
+                }
                 IconButton(onClick = onPip, modifier = Modifier.dpadFocus()) {
                     Icon(
                         painterResource(R.drawable.ic_pip), contentDescription = stringResource(R.string.cd_pip),
@@ -1095,6 +1144,7 @@ private fun debugOverlaySections(context: Context, info: DebugInfo): List<DebugS
             add(context.getString(R.string.debug_fps_bitrate, info.videoFps, info.bitrateStr))
             add(context.getString(R.string.debug_frames_drops, info.videoFrames, info.droppedFrames))
             add(context.getString(R.string.debug_jitter, info.jitterStr))
+            add(context.getString(R.string.debug_video_queue, info.videoBacklogMs, info.staleVideoFrames))
         }
     }.takeIf { it.isNotEmpty() }?.let { add(DebugSection(context.getString(R.string.debug_section_video), it)) }
 

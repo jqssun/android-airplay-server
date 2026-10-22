@@ -114,6 +114,7 @@ class MainActivity : ComponentActivity() {
                     viewModel = viewModel,
                     isInPip = isInPip.value,
                     onSurfaceAvailable = { viewModel.onSurfaceAvailable(it) },
+                    onSurfaceSizeChanged = { surface, width, height -> viewModel.onSurfaceAvailable(surface, width, height) },
                     onSurfaceDestroyed = { viewModel.onSurfaceDestroyed(it) },
                     onPip = { enterPip() },
                     onLocalNetwork = ::_requestLocalNetwork
@@ -165,6 +166,7 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         _syncLocalNetwork()
         _refreshForeground()
+        if (_isTelevision()) _autoStart()
     }
 
     fun enterPip() {
@@ -184,8 +186,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun _shouldAutoPip(): Boolean =
-        viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&
+        !_isTelevision() &&
+            viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&
             viewModel.connectionCount.value > 0
+
+    private fun _isTelevision() =
+        resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK == Configuration.UI_MODE_TYPE_TELEVISION
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
@@ -199,6 +205,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        // Leaving the TV receiver ends playback unless PiP was explicitly chosen.
+        // Do not retain decoder/display resources behind another TV application.
+        if (_isTelevision() && !isChangingConfigurations && !isInPip.value) {
+            viewModel.stopServer()
+            return
+        }
         // never stop mid-session
         if (!viewModel.pref(Prefs.RUN_IN_BACKGROUND).value && !isChangingConfigurations &&
             viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&

@@ -6,12 +6,17 @@ plugins {
 }
 
 import java.util.Properties
+import java.security.MessageDigest
 
 val localProps = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
 }
 
 val allAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+// Windows can reuse the unmodified native libraries from the matching upstream release.
+// The Kotlin display/decoder changes are still compiled from this checkout.
+val nativeApk = providers.gradleProperty("airplayNativeApk").orNull?.let { rootProject.file(it) }
+val prebuiltJni = layout.buildDirectory.dir("upstream-jni")
 
 android {
     namespace = "io.github.jqssun.airplay"
@@ -35,8 +40,9 @@ android {
         targetSdk = 37
         versionCode = 36
         versionName = "0.0.36"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        externalNativeBuild {
+        if (nativeApk == null) externalNativeBuild {
             cmake {
                 arguments += "-DANDROID_STL=c++_shared"
                 arguments += "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
@@ -44,7 +50,7 @@ android {
         }
     }
 
-    externalNativeBuild {
+    if (nativeApk == null) externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
         }
@@ -59,6 +65,21 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfigs.findByName("release")?.let { signingConfig = it }
             ndk { abiFilters += allAbis }
+        }
+        create("sonyTest") {
+            initWith(getByName("release"))
+            isMinifyEnabled = false
+            matchingFallbacks += "release"
+            applicationIdSuffix = ".sonytest"
+            versionNameSuffix = "-sony.4"
+            signingConfig = signingConfigs.getByName("debug")
+        }
+        create("sonyRelease") {
+            initWith(getByName("release"))
+            matchingFallbacks += "release"
+            applicationIdSuffix = ".sonytest"
+            versionNameSuffix = "-sony.4"
+            signingConfig = signingConfigs.getByName("debug")
         }
         // debuggable build with HWASan (arm64) + UBSan in native code
         create("sanitize") {
@@ -88,6 +109,30 @@ android {
         compose = true
         prefab = true
     }
+    testBuildType = "sonyTest"
+    sourceSets.getByName("sonyRelease").res.directories.add("src/sonyTest/res")
+    lint { baseline = file("lint-baseline.xml") }
+    if (nativeApk != null) sourceSets.getByName("main").jniLibs.directories.add(prebuiltJni.get().asFile.absolutePath)
+}
+
+if (nativeApk != null) {
+    val extractUpstreamNative = tasks.register<Sync>("extractUpstreamNative") {
+        inputs.file(nativeApk)
+        doFirst {
+            val hash = MessageDigest.getInstance("SHA-256")
+                .digest(nativeApk.readBytes()).joinToString("") { "%02x".format(it) }
+            check(hash == "b8c7c595ed93f91562feedce92c27800f08f9c84df424f6ac2045e82324cf2a4") {
+                "airplayNativeApk must be the official, unmodified v0.0.36 app-release.apk"
+            }
+        }
+        from(zipTree(nativeApk)) {
+            include("lib/*/libairplay_native.so", "lib/*/libcrypto.so", "lib/*/libc++_shared.so", "lib/*/liboboe.so")
+            eachFile { path = path.removePrefix("lib/") }
+            includeEmptyDirs = false
+        }
+        into(prebuiltJni)
+    }
+    tasks.named("preBuild").configure { dependsOn(extractUpstreamNative) }
 }
 
 tasks.register("applyUxplayPatches") {
@@ -112,6 +157,10 @@ tasks.configureEach {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime)

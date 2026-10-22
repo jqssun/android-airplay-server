@@ -2,7 +2,6 @@ package io.github.jqssun.airplay.ui
 
 import android.view.Surface
 import android.view.SurfaceHolder
-import android.view.SurfaceView
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -18,7 +17,9 @@ fun VideoSurfaceView(
     aspectRatio: Float = 16f / 9f,
     // false = caller sizes the surface (content-scale modes)
     applyAspectRatio: Boolean = true,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onSurfaceSizeChanged: ((Surface, Int, Int) -> Unit)? = null,
+    useNativeResolution: Boolean = true
 ) {
     val callbacks = remember {
         object : SurfaceHolder.Callback {
@@ -26,7 +27,8 @@ fun VideoSurfaceView(
                 onSurfaceAvailable(holder.surface)
             }
             override fun surfaceChanged(holder: SurfaceHolder, fmt: Int, w: Int, h: Int) {
-                onSurfaceAvailable(holder.surface)
+                if (onSurfaceSizeChanged != null) onSurfaceSizeChanged(holder.surface, w, h)
+                else onSurfaceAvailable(holder.surface)
             }
             override fun surfaceDestroyed(holder: SurfaceHolder) {
                 onSurfaceDestroyed(holder.surface)
@@ -36,9 +38,14 @@ fun VideoSurfaceView(
 
     AndroidView(
         factory = { ctx ->
-            SurfaceView(ctx).also {
+            NativeVideoSurface(ctx).also {
+                it.nativeResolutionEnabled = useNativeResolution
                 it.holder.addCallback(callbacks)
             }
+        },
+        update = {
+            it.nativeResolutionEnabled = useNativeResolution
+            it.updateBufferSize()
         },
         modifier = if (applyAspectRatio) {
             modifier
