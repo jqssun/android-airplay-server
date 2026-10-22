@@ -433,6 +433,13 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         // apply settings from preferences
         val overscanned = prefs[Prefs.OVERSCANNED]
         val audioLatencyMs = prefs[Prefs.AUDIO_LATENCY_MS]
+        // the identity the receiver tells the sender about: the model name
+        // and the feature bits are what the sender reads to pick the codec
+        // and the bitrate budget it uses for the picture
+        val sender = _senderProfile()
+        NativeBridge.nativeSetReceiverModel(nativeHandle, sender.model)
+        NativeBridge.nativeSetPlist(nativeHandle, "infoFeatures", sender.infoFeatures)
+        NativeBridge.nativeSetPlist(nativeHandle, "displayFeatures", sender.displayFeatures)
         // the size comes first: the frame rate and the codec follow it
         val (reqW, reqH) = _displaySize(clamp = false)
         val maxFps = _profileFps(reqW, reqH)
@@ -531,6 +538,13 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         // send: log them, so the log shows what was on the wire
         log("Advertised features: ft=${raopTxt["ft"] ?: "?"} features=${airplayTxt["features"] ?: "?"} " +
             "hevc(bit 42)=${if (h265) "on" else "off"}")
+        // everything the sender was told about, in one line: the identity it
+        // reads to pick the codec and the bitrate budget, and the geometry
+        val infoFeatures = sender.infoFeatures.toLong() or (if (h265) 1L shl 42 else 0L)
+        log("The sender is told: model=${sender.model} /info features=0x${infoFeatures.toString(16)} " +
+            "displays[0].features=${sender.displayFeatures} size=${w}x${h}@${fps} maxFPS=$fps " +
+            "hevc(bit 42)=${if (h265) "on" else "off"} profile=${prefs[Prefs.STREAM_PROFILE]} " +
+            "sender=${sender.name}")
         val raopName = NativeBridge.nativeGetRaopServiceName(nativeHandle) ?: "AirPlay"
         val resolvedName = NativeBridge.nativeGetServerName(nativeHandle) ?: effectiveName
 
@@ -564,9 +578,17 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         prefs[Prefs.STREAM_PROFILE], prefs[Prefs.RESOLUTION]
     )
 
-    private fun _profileFps(w: Int, h: Int): Int = StreamProfile.fps(
-        prefs[Prefs.STREAM_PROFILE], prefs[Prefs.MAX_FPS], w, h
-    )
+    private fun _profileFps(w: Int, h: Int): Int {
+        val sender = _senderProfile().fps
+        if (sender != null) return sender
+        return StreamProfile.fps(
+            prefs[Prefs.STREAM_PROFILE], prefs[Prefs.MAX_FPS], w, h
+        )
+    }
+
+    // the identity the receiver tells the sender about
+    private fun _senderProfile(): SenderProfile =
+        SenderProfile.forName(prefs[Prefs.SENDER_PROFILE])
 
     // hevc needs about half the airtime of h264 for the same quality, which is
     // what keeps a weak link from retransmitting
@@ -577,9 +599,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     // the pixels, four times the decode work and no gain in the picture. so
     // hevc follows the size the sender is told about, and only the setting
     // says otherwise.
-    private fun _profileH265(w: Int, h: Int): Boolean = StreamProfile.hevc(
-        prefs[Prefs.H265], w, h
-    )
+    private fun _profileH265(w: Int, h: Int): Boolean {
+        if (_senderProfile().forceH265) return true
+        return StreamProfile.hevc(
+            prefs[Prefs.H265], w, h
+        )
+    }
 
     /* the panel in the orientation the picture is shown in */
     private fun _panelSize(): Pair<Int, Int> {
@@ -596,6 +621,14 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private fun _displaySize(clamp: Boolean = true): Pair<Int, Int> {
         val res = _profileResolution()
         val device = _panelSize()
+        // the sender profile can ask for a size above the panel's own: the tv
+        // downscales it, and the sender spends more bits on the picture
+        val forced = _senderProfile().size
+        if (forced != null) {
+            if (!clamp) return forced
+            val (maxW, maxH) = videoRenderer.maxResolution()
+            return StreamProfile.fit(forced.first, forced.second, maxW, maxH)
+        }
         if (res == Prefs.PORTRAIT || res == Prefs.LANDSCAPE) return device
         val (w, h) = if (res.contains("x")) {
             res.split("x").let { it[0].toInt() to it[1].toInt() }

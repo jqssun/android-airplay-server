@@ -56,6 +56,13 @@ from the equation entirely. What an app may and may not change on the radio, and
 how to measure before and after, is in
 [docs/WIFI-OPTIMIZATION.md](docs/WIFI-OPTIMIZATION.md).
 
+The receiver also says **what it is**: the sender reads the model name and the
+feature bits the receiver announces and picks the codec and the bitrate budget
+from them. A receiver that announces itself as an old Apple TV gets H.264 and a
+budget so small that the picture breaks into blocks. The **sender identity**
+setting (`safe`, `airplay2`, `airplay2_4k`) changes that, and the log line
+"The sender is told" shows exactly what went on the wire.
+
 The whole choice, written down and applied to a connected device:
 
 ```bash

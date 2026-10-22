@@ -45,6 +45,15 @@ visible in the debug overlay as `Queuedrops`.
 buffer is logged at startup (`raop_rtp socket rcvbuf N bytes`) — compare it with
 `net.core.rmem_max`, the kernel clamps to that.
 
+Asking for a large receive buffer has a side effect that is easy to miss:
+setting `SO_RCVBUF` explicitly switches **off** the kernel's own tuning of the
+buffer, and the kernel clamps the request to `net.core.rmem_max`. When that
+clamp is small, the request makes the sender's window *smaller* than the one
+the kernel would have grown on its own. The receiver therefore asks the kernel
+first what it honors (patch `0016`) and only sets the buffer when the answer is
+worth it; the number is logged at startup (`the kernel gives the sockets a N
+byte receive buffer`).
+
 ### Raises the media threads above the launcher
 
 The mirror thread, the audio RTP thread and the httpd thread ask to run ahead of
@@ -204,6 +213,64 @@ both hardcoded. The http features now carry bit 42 when the receiver can decode
 hevc, and the receiver logs the feature words it puts on the wire, so the next
 log shows what the sender actually saw.
 
+## What the receiver says it is
+
+The second session showed the sender's rate control sitting at a hard ceiling:
+3.4 – 4.4 Mbps over 8.3 million pixels is **0.015 bits per pixel per frame**,
+about thirteen times less than the 0.20 that H.264 needs for a clean picture.
+The rate stayed there while the screen moved, with `dropped=0` and a clean
+link, so it was not the content and not the network: the sender was *budgeting*
+like that.
+
+There is no bitrate field in the AirPlay `/info` response or in the setup
+response. The sender owns the rate control. What it does read is the
+**identity of the receiver** — the model name and the feature bits — and from
+that it decides which codec it may use and how many bits it may spend.
+
+And the receiver was lying to it, in two ways at once:
+
+| what was announced | value | what a sender reads it as |
+|--------------------|-------|---------------------------|
+| the model name | `AppleTV3,2` | an apple tv 3 of 2012: h264, 1080p, a small budget |
+| the http `/info` features | `0x27F` | a receiver that cannot do hevc and has to be treated with a small budget |
+| the dns-sd `ft` | `0x5A7FFEE6` | a receiver that can do everything |
+
+The dns-sd record and the `/info` response contradicted each other, and the
+conservative one is the one a sender reads first.
+
+The identity is now a setting of its own (`sender_profile`), and the receiver
+logs exactly what it announced:
+
+```
+The sender is told: model=AppleTV6,2 /info features=0x5a7ffee6 displays[0].features=30 size=1920x1080@60 maxFPS=60 hevc(bit 42)=on profile=auto sender=airplay2
+```
+
+| profile | model | `/info` features | `displays[0].features` | size |
+|---------|-------|------------------|------------------------|------|
+| `safe` | `AppleTV3,2` | `0x27F` | `14` | the panel's own |
+| `airplay2` | `AppleTV6,2` | `0x5A7FFEE6` | `30` | the panel's own |
+| `airplay2_4k` | `AppleTV6,2` | `0x5A7FFEE6` | `30` | 3840x2160 at 30 fps, hevc on |
+
+The app's default is `safe` (what it used to say), and the tuned config uses
+`airplay2`. The `airplay2_4k` profile is the escape hatch: hevc is only
+offered above 1080p, so it asks for the 4k picture and lets the tv downscale
+it — that costs several times the airtime of h264 in 1080p, and it wants a fast
+link.
+
+**The picture quality is now measured, not guessed.** The benchmark line
+carries the bits per pixel per frame and a verdict:
+
+```
+fps=37 bitrate=4850kbps jitter=28358us frames=37 dropped=0 queuedropped=148 codec=H.264 (OMX.MS.AVC.Decoder) res=3840x2160 kB/frame=16 bpp=0.0157 quality=blocky
+```
+
+| verdict | h.264 | h.265 |
+|---------|-------|-------|
+| `clean` | ≥ 0.15 bits/pixel | ≥ 0.08 |
+| `good` | ≥ 0.08 | ≥ 0.04 |
+| `soft` | ≥ 0.03 | ≥ 0.015 |
+| `blocky` | below that | below that |
+
 ## The picture is cleared when the session changes
 
 The panel kept a picture from the previous session at the start of the next
@@ -226,6 +293,7 @@ device:
 ```bash
 tools/optimal-config.sh apply          # the best picture with the least delay
 tools/optimal-config.sh apply 4k30     # the same, for a weak link
+tools/optimal-config.sh apply auto airplay2_4k   # 4k with hevc, for a fast link
 tools/optimal-config.sh measure        # the same plus the counters that measure it
 tools/optimal-config.sh show           # what the device is set to now
 ```
@@ -238,6 +306,7 @@ silently.
 | setting | value | why |
 |---------|-------|-----|
 | `stream_profile` | `auto` | the panel's native resolution, clamped to the decoder, frame rate clamped to what it sustains there. `4k30` for a weak link |
+| `sender_profile` | `airplay2` | what the receiver says it is. The sender reads the model name and the feature bits and picks the codec and the bitrate budget from them; `safe` is the old apple tv identity that gets h264 and a small budget |
 | `max_fps` | `60` | the panel's top rate; the clamp above decides what is actually advertised |
 | `h265` | `auto` | hevc where it pays off, and only there: above 1080p it halves the bitrate, below that the hevc feature bit would make the sender push a 4k mirror onto a 1080p panel. `on` forces it, `off` forbids it |
 | `fit_aspect` | `true` | the picture keeps its shape instead of being stretched to the panel |
@@ -276,16 +345,22 @@ The numbers to compare, per profile (`4k60`, `4k30`, `1080p60`) and per link
 | metric | where it comes from | before | after |
 |--------|---------------------|--------|-------|
 | the advertised size | receiver log at startup | `3840x2160@60` on a 1080p panel | |
+| the identity announced | `The sender is told` in the log | `AppleTV3,2`, `/info 0x27F` | |
 | the codec | `video_set_codec` in the log | h.264 (`video_set_codec: 1`) | |
 | the bitrate | benchmark log | 3.3 – 5.0 Mbps at 3840x2160 | |
-| bits per pixel | bitrate ÷ pixels ÷ fps | ~4.5 bits/pixel at 4k | |
+| bits per pixel | the benchmark line (`bpp=`) | 0.0157 bits/pixel/frame (`blocky`) | |
 | `Queuedrops` | debug overlay / benchmark log | 144 of 4807 frames (4k mirror) | |
 | `Drops` | debug overlay / benchmark log | 0 | |
 | frame pacing jitter | debug overlay | 32 ms (4k mirror at 30 fps), 8 → 22 ms in the second session | |
 | `Udp: RcvbufErrors` | `tools/verify-screen-extension.sh link` | 0 | |
-| effective `SO_RCVBUF` | receiver log at startup | not in the log yet | |
+| effective `SO_RCVBUF` | the log at startup | not in the log yet | |
 | freezes seen by eye | watching the picture | none reported | |
 | end-to-end delay | clapper board or a stopwatch on camera | not measured yet | |
+
+The three `sender_profile` values are the experiment that fills the "after"
+column: the same session, the same link, the same content, with only the
+announced identity changed. What to look at is the codec, the `bpp=` and the
+`quality=` word in the benchmark line.
 
 The numbers above are from sessions on a 1080p tv over 5 GHz with the `auto`
 profile, where the sender sent a 4k mirror. They are the baseline, not a

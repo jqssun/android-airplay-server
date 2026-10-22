@@ -133,6 +133,11 @@
     <string name="profile_4k30">4K 30</string>
     <string name="profile_4k60">4K 60</string>
     <string name="profile_1080p60">1080p 60</string>
+    <string name="setting_sender_profile">Sender identity</string>
+    <string name="setting_sender_profile_desc">What the receiver tells the sender it is. The sender reads the model name and the feature bits and picks the codec and the bitrate budget from them: a receiver that announces itself as an old Apple TV gets H.264 and a small budget, and the picture breaks into blocks as soon as the screen changes. The log line "The sender is told" shows what was announced.</string>
+    <string name="sender_safe">Safe</string>
+    <string name="sender_airplay2">AirPlay 2</string>
+    <string name="sender_airplay2_4k">AirPlay 2, 4K HEVC</string>
     <string name="setting_resolution">Resolution</string>
     <string name="setting_resolution_desc">Video resolution advertised to senders</string>
     <string name="setting_resolution_placeholder">[W]x[H]</string>

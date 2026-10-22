@@ -12,6 +12,7 @@ extern "C" {
 #include "raop.h"
 #include "dnssd.h"
 #include "logger.h"
+#include "netutils.h"
 #include "pairing.h"
 #include "android_raop_callbacks.h"
 #include "android_dnssd_shim.h"
@@ -71,8 +72,20 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
     }
     ctx->cb_ctx.raop = ctx->raop;
 
-    raop_set_log_level(ctx->raop, LOGGER_ERR);
+    // the protocol diagnostics are the only way to see what the sender asked
+    // for and what the kernel gave us: the effective receive buffer of the
+    // video socket, the setup request, the geometry the sender used. errors
+    // only would hide all of it.
+    raop_set_log_level(ctx->raop, LOGGER_INFO);
     raop_set_log_callback(ctx->raop, _log_callback, ctx);
+
+    // the receive buffer the kernel gives the video socket: a small one caps
+    // the throughput of the tcp connection and starves the encoder of the
+    // sender, and the picture breaks into blocks
+    int rcvbuf = netutils_rcvbuf_probe();
+    if (rcvbuf > 0) {
+        LOGI("The kernel gives the sockets a %d byte receive buffer", rcvbuf);
+    }
 
     const char *keyfile_c = env->GetStringUTFChars(keyFile, NULL);
     const char *name_c = env->GetStringUTFChars(name, NULL);
@@ -320,6 +333,25 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetH265Enabled(
     if (ctx->dnssd) {
         dnssd_set_airplay_features(ctx->dnssd, 42, enabled ? 1 : 0);
     }
+}
+
+/* the model name the receiver tells the sender about: the sender reads it
+ * together with the feature bits to pick the codec and the bitrate budget it
+ * uses for the picture. it goes into the dns-sd records and into the info
+ * responses. */
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetReceiverModel(
+        JNIEnv *env, jobject thiz, jlong handle, jstring model) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx || !ctx->raop) return;
+    const char *model_c = env->GetStringUTFChars(model, NULL);
+    raop_set_receiver_model(ctx->raop, model_c);
+    if (ctx->dnssd) {
+        dnssd_set_receiver_model(ctx->dnssd, model_c);
+    }
+    env->ReleaseStringUTFChars(model, model_c);
 }
 
 /* hls plist gates raop.c's hls support; feature bits 0/4 advertise it over dns-sd */

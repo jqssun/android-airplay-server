@@ -53,7 +53,7 @@ echo "== collecting =="
 # the summary first: it is what the log is read for, the rest is the detail
 {
     echo "### what the receiver advertises"
-    adb logcat -d -v brief 2>/dev/null | grep -iE "Advertising display|Advertised features|profile asks for|decoders:|Frame rate clamped|server started|Listening|wifi lock|rcvbuf" | tail -16 || true
+    adb logcat -d -v brief 2>/dev/null | grep -iE "Advertising display|Advertised features|The sender is told|profile asks for|decoders:|Frame rate clamped|server started|Listening|wifi lock|rcvbuf|receive buffer" | tail -16 || true
 } >> "$OUT"
 
 {
@@ -63,7 +63,7 @@ echo "== collecting =="
         adb logcat -d -v time 2>/dev/null
     else
         adb logcat -d -v time 2>/dev/null | grep -E \
-            "AirPlayService|AirPlayNative|WifiTuner|DecoderSelector|VideoRenderer|VideoPipeline|BENCHMARK|NsdServiceManager|UsbMdnsAdvertiser|DacpController|FATAL|AndroidRuntime|$PKG"
+            "AirPlayService|AirPlayNative|WifiTuner|DecoderSelector|VideoRenderer|VideoPipeline|BENCHMARK|NsdServiceManager|UsbMdnsAdvertiser|DacpController|FATAL|AndroidRuntime|$PKG|video_set_codec|h265|mirror socket rcvbuf"
     fi
 } >> "$OUT"
 

@@ -8,10 +8,14 @@
 #
 # Usage:
 #   tools/optimal-config.sh show             what the device is set to now
-#   tools/optimal-config.sh apply [profile]  apply the config
+#   tools/optimal-config.sh apply [profile] [sender]
+#                                            apply the config
 #                                            profile: auto | 4k30 | 4k60 |
 #                                                     1080p60 | custom
-#   tools/optimal-config.sh measure [profile] the config plus the diagnostics
+#                                            sender: safe | airplay2 |
+#                                                    airplay2_4k
+#   tools/optimal-config.sh measure [profile] [sender]
+#                                            the config plus the diagnostics
 #   tools/optimal-config.sh status           what the receiver advertises
 #
 # The picture comes first: the frame rate is given up before the resolution,
@@ -19,6 +23,14 @@
 # that has to drop frames to keep up. The "auto" profile takes the panel's
 # native resolution and the frame rate the decoder can actually sustain at
 # that size, so it is the profile to use unless the link is too weak.
+#
+# The sender identity is the second knob: the sender reads the model name and
+# the feature bits the receiver announces and picks the codec and the bitrate
+# budget from them. "safe" is what the receiver used to say (an old apple tv,
+# h264, a small budget), "airplay2" says what the dns-sd record already said,
+# and "airplay2_4k" adds the 4k picture with hevc on top - that one needs a
+# fast link, because hevc in 4k costs several times the airtime of h264 in
+# 1080p.
 
 set -euo pipefail
 
@@ -63,9 +75,14 @@ report() {
 
 apply_config() {
     local profile=${1:-auto}
+    local sender=${2:-airplay2}
     case "$profile" in
         auto | 4k30 | 4k60 | 1080p60 | custom) ;;
         *) echo "unknown profile: $profile (auto | 4k30 | 4k60 | 1080p60 | custom)" >&2; exit 1 ;;
+    esac
+    case "$sender" in
+        safe | airplay2 | airplay2_4k) ;;
+        *) echo "unknown sender: $sender (safe | airplay2 | airplay2_4k)" >&2; exit 1 ;;
     esac
     require_device
 
@@ -77,6 +94,11 @@ apply_config() {
     set_pref stream_profile "$profile"
     set_pref resolution auto
     set_pref max_fps 60
+    # what the receiver says it is: the sender reads the model name and the
+    # feature bits and picks the codec and the bitrate budget from them. the
+    # "safe" identity is an old apple tv, and that is what makes the sender
+    # send h264 with a budget so small that the picture breaks into blocks
+    set_pref sender_profile "$sender"
     # hevc: about half the bitrate of h264 at the same quality. "auto" lets the
     # app decide by size: hevc pays off above 1080p, and below that the hevc
     # feature bit would only make the sender push a 4k mirror the panel cannot
@@ -138,7 +160,8 @@ apply_config() {
 
 apply_measure() {
     local profile=${1:-auto}
-    apply_config "$profile"
+    local sender=${2:-airplay2}
+    apply_config "$profile" "$sender"
     echo "== diagnostics =="
     # these make the numbers in docs/WIFI-OPTIMIZATION.md measurable
     set_pref verbose_protocol_log true
@@ -178,7 +201,7 @@ for key in sorted(data):
 
 cmd_status() {
     echo "== what the receiver advertises =="
-    adb logcat -d -v brief 2>/dev/null | grep -iE "Advertising display|decoders:|Frame rate clamped" | tail -6 || true
+    adb logcat -d -v brief 2>/dev/null | grep -iE "Advertising display|The sender is told|Advertised features|decoders:|Frame rate clamped" | tail -8 || true
     echo
     echo "== the link =="
     adbs cmd wifi status 2>/dev/null | tr -d '\r' | grep -iE "Wifi is|RSSI|frequency|LinkSpeed" || true
@@ -186,11 +209,11 @@ cmd_status() {
 
 case "${1:-}" in
     show) cmd_show ;;
-    apply) apply_config "${2:-auto}"; report ;;
-    measure) apply_measure "${2:-auto}"; report ;;
+    apply) apply_config "${2:-auto}" "${3:-airplay2}"; report ;;
+    measure) apply_measure "${2:-auto}" "${3:-airplay2}"; report ;;
     status) cmd_status ;;
     *)
-        echo "usage: $0 {show|apply [profile]|measure [profile]|status}" >&2
+        echo "usage: $0 {show|apply [profile] [sender]|measure [profile] [sender]|status}" >&2
         exit 1
         ;;
 esac

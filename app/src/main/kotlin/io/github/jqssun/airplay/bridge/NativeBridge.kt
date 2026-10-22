@@ -35,6 +35,8 @@ object NativeBridge {
     external fun nativeReleaseFrameBuffer(handle: Long, index: Int)
     external fun nativeSetPlist(handle: Long, key: String, value: Int)
     external fun nativeSetH265Enabled(handle: Long, enabled: Boolean)
+    // the model name the receiver tells the sender about
+    external fun nativeSetReceiverModel(handle: Long, model: String)
     external fun nativeSetCodecs(handle: Long, alac: Boolean, aac: Boolean)
     external fun nativeSetHlsEnabled(handle: Long, enabled: Boolean)
     external fun nativeSetLang(handle: Long, lang: String)

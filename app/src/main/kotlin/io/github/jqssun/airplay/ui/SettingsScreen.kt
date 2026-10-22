@@ -53,6 +53,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val aacEnabled by viewModel.pref(Prefs.AAC_ENABLED).collectAsState()
     val resolution by viewModel.pref(Prefs.RESOLUTION).collectAsState()
     val streamProfile by viewModel.pref(Prefs.STREAM_PROFILE).collectAsState()
+    val senderProfile by viewModel.pref(Prefs.SENDER_PROFILE).collectAsState()
     val idlePreview by viewModel.pref(Prefs.IDLE_PREVIEW).collectAsState()
     val autoFullscreen by viewModel.pref(Prefs.AUTO_FULLSCREEN).collectAsState()
     val keepScreenOn by viewModel.pref(Prefs.KEEP_SCREEN_ON).collectAsState()
@@ -215,6 +216,18 @@ fun SettingsScreen(viewModel: MainViewModel) {
                 Prefs.PROFILE_CUSTOM to stringResource(R.string.chip_custom),
             ),
             onValueChange = { viewModel.set(Prefs.STREAM_PROFILE, it) }
+        )
+
+        SettingChips(
+            title = stringResource(R.string.setting_sender_profile),
+            description = stringResource(R.string.setting_sender_profile_desc),
+            value = senderProfile,
+            options = listOf(
+                Prefs.SENDER_SAFE to stringResource(R.string.sender_safe),
+                Prefs.SENDER_AIRPLAY2 to stringResource(R.string.sender_airplay2),
+                Prefs.SENDER_AIRPLAY2_4K to stringResource(R.string.sender_airplay2_4k),
+            ),
+            onValueChange = { viewModel.set(Prefs.SENDER_PROFILE, it) }
         )
 
         if (streamProfile == Prefs.PROFILE_CUSTOM) {

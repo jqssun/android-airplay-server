@@ -64,6 +64,12 @@ object Prefs {
     const val PROFILE_4K60 = "4k60"
     const val PROFILE_1080P60 = "1080p60"
     const val PROFILE_CUSTOM = "custom"
+    // what the receiver tells the sender it is: the model name and the
+    // feature bits decide which codec the sender uses and how many bits it
+    // spends on the picture
+    const val SENDER_SAFE = "safe"
+    const val SENDER_AIRPLAY2 = "airplay2"
+    const val SENDER_AIRPLAY2_4K = "airplay2_4k"
     val ADAPTIVE_PERCENTILES = intArrayOf(80, 85, 90, 95, 99)
     private val SIZE = Regex("[1-9]\\d{0,4}x[1-9]\\d{0,4}")
 
@@ -111,6 +117,12 @@ object Prefs {
     // the resolution, the frame rate and the codec settings below
     val STREAM_PROFILE = str("stream_profile", PROFILE_AUTO, restart = true) {
         it in setOf(PROFILE_AUTO, PROFILE_4K30, PROFILE_4K60, PROFILE_1080P60, PROFILE_CUSTOM)
+    }
+    // the identity the receiver tells the sender about: a receiver that
+    // announces itself as an old apple tv gets h264 and a small bitrate
+    // budget, and the picture breaks into blocks
+    val SENDER_PROFILE = str("sender_profile", SENDER_SAFE, restart = true) {
+        it in setOf(SENDER_SAFE, SENDER_AIRPLAY2, SENDER_AIRPLAY2_4K)
     }
     val OVERSCANNED = bool("overscanned", false, restart = true)
     val REQUIRE_PIN = bool("require_pin", false, restart = true)

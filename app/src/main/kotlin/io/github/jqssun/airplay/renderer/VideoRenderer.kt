@@ -10,6 +10,7 @@ import android.util.Log
 import android.view.Surface
 import io.github.jqssun.airplay.renderer.DecoderSelector.Companion.videoCaps
 import java.nio.ByteBuffer
+import java.util.Locale
 import java.util.concurrent.ArrayBlockingQueue
 
 class VideoRenderer(ctx: Context) {
@@ -190,12 +191,37 @@ class VideoRenderer(ctx: Context) {
     }
 
     private fun _emitBenchmarkLine() {
+        // the bits per pixel per frame are what the picture quality is made
+        // of: too few and the picture breaks into blocks as soon as the
+        // screen changes, no matter how many frames per second arrive
+        val pixels = videoWidth.toLong() * videoHeight
+        val bytesPerFrame = if (fps > 0 && pixels > 0) bitrateBps / 8.0 / fps else 0.0
+        val bpp = if (pixels > 0) bytesPerFrame * 8.0 / pixels else 0.0
         val msg = "fps=$fps bitrate=${bitrateBps / 1000}kbps " +
             "jitter=${framePacingJitterUs}us frames=$frameCount " +
             "dropped=$droppedFrames queuedropped=$droppedByQueue codec=$codecName " +
-            "res=${videoWidth}x${videoHeight}"
+            "res=${videoWidth}x${videoHeight} " +
+            "kB/frame=${(bytesPerFrame / 1024.0).toInt()} " +
+            "bpp=${String.format(Locale.US, "%.4f", bpp)} " +
+            "quality=${_quality(bpp)}"
         Log.i(BENCH_TAG, msg)
         benchmarkLogCallback?.invoke(msg)
+    }
+
+    /* the picture quality from the bits per pixel per frame. hevc needs
+     * about half as many bits for the same picture, so its scale is lower. */
+    private fun _quality(bpp: Double): String {
+        if (bpp <= 0.0) return "none"
+        val h265 = codecName.startsWith("H.265")
+        val clean = if (h265) 0.08 else 0.15
+        val good = if (h265) 0.04 else 0.08
+        val soft = if (h265) 0.015 else 0.03
+        return when {
+            bpp >= clean -> "clean"
+            bpp >= good -> "good"
+            bpp >= soft -> "soft"
+            else -> "blocky"
+        }
     }
 
     fun feedFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {

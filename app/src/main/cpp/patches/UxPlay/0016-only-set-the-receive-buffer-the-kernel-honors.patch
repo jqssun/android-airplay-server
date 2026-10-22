@@ -1,0 +1,96 @@
+diff --git a/lib/netutils.c b/lib/netutils.c
+index d8bb32c..a0c0df7 100644
+--- a/lib/netutils.c
++++ b/lib/netutils.c
+@@ -25,6 +25,7 @@
+ #endif
+ 
+ #include "compat.h"
++#include "netutils.h"
+ 
+ /* The receive buffer of the kernel default is small enough to cap the throughput
+  * of the tcp data connection on a wifi link: with 20 ms of round trip time a
+@@ -34,6 +35,14 @@
+ #define NETUTILS_RCVBUF (4 * 1024 * 1024)
+ #define NETUTILS_SNDBUF (1024 * 1024)
+ 
++/* Setting the receive buffer explicitly also switches off the automatic
++ * tuning of the buffer, and the kernel clamps the request to
++ * net.core.rmem_max. When the clamp is small the explicit request leaves the
++ * sender with a smaller window than the one the kernel would have grown on
++ * its own, so the kernel is asked first what it honors. */
++#define NETUTILS_RCVBUF_USEFUL (1024 * 1024)
++static int netutils_rcvbuf_effective = 0;
++
+ void
+ netutils_set_nodelay(int fd)
+ {
+@@ -43,12 +52,40 @@ netutils_set_nodelay(int fd)
+ #endif
+ }
+ 
++/* the receive buffer the kernel gives the socket, 0 when it is not known */
++int
++netutils_rcvbuf_probe(void)
++{
++    if (netutils_rcvbuf_effective != 0) {
++        return netutils_rcvbuf_effective;
++    }
++#ifndef _WIN32
++    int fd = socket(AF_INET, SOCK_STREAM, 0);
++    if (fd < 0) {
++        return -1;
++    }
++    int want = NETUTILS_RCVBUF;
++    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (char *)&want, sizeof(want));
++    int got = netutils_socket_rcvbuf(fd);
++    CLOSESOCKET(fd);
++    netutils_rcvbuf_effective = got > 0 ? got : -1;
++#else
++    netutils_rcvbuf_effective = -1;
++#endif
++    return netutils_rcvbuf_effective;
++}
++
+ static void
+ netutils_tune_socket(int fd, int use_udp)
+ {
+ #ifndef _WIN32
+-    int rcvbuf = NETUTILS_RCVBUF;
+-    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (char *)&rcvbuf, sizeof(rcvbuf));
++    /* the buffer is only set when the kernel honors the request: a clamped
++     * request would pin the window to net.core.rmem_max and stop the kernel
++     * from growing it with the traffic */
++    if (netutils_rcvbuf_probe() >= NETUTILS_RCVBUF_USEFUL) {
++        int rcvbuf = NETUTILS_RCVBUF;
++        setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (char *)&rcvbuf, sizeof(rcvbuf));
++    }
+ 
+     int sndbuf = NETUTILS_SNDBUF;
+     setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (char *)&sndbuf, sizeof(sndbuf));
+diff --git a/lib/netutils.h b/lib/netutils.h
+index 587b94c..3de1c7e 100644
+--- a/lib/netutils.h
++++ b/lib/netutils.h
+@@ -15,13 +15,21 @@
+ #ifndef NETUTILS_H
+ #define NETUTILS_H
+ 
++#ifdef __cplusplus
++extern "C" {
++#endif
++
+ int netutils_init();
+ void netutils_cleanup();
+ 
+ int netutils_init_socket(unsigned short *port, int use_ipv6, int use_udp);
+ int netutils_socket_rcvbuf(int fd);
++int netutils_rcvbuf_probe(void);
+ void netutils_set_nodelay(int fd);
+ unsigned char *netutils_get_address(void *sockaddr, int *length, unsigned int *zone_id, unsigned short *port);
+ int netutils_parse_address(int family, const char *src, void *dst, int dstlen);
+ 
++#ifdef __cplusplus
++}
++#endif
+ #endif
