@@ -441,18 +441,33 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         NativeBridge.nativeSetPlist(nativeHandle, "infoFeatures", sender.infoFeatures)
         NativeBridge.nativeSetPlist(nativeHandle, "displayFeatures", sender.displayFeatures)
         // the size comes first: the frame rate and the codec follow it
-        val (reqW, reqH) = _displaySize(clamp = false)
-        val maxFps = _profileFps(reqW, reqH)
+        var (reqW, reqH) = _displaySize(clamp = false)
+        var maxFps = _profileFps(reqW, reqH)
         // the decoders: the hevc one is picked whenever the tv has a safe
         // one, so a stream that arrives as hevc can be decoded even when the
         // sender was not asked for it. what the sender is *told* is decided
         // below, by the size.
-        val hevcReady = videoRenderer.selectDecoders(reqW, reqH, maxFps, Prefs.forced(prefs[Prefs.H265]))
+        var hevcReady = videoRenderer.selectDecoders(reqW, reqH, maxFps, Prefs.forced(prefs[Prefs.H265]))
+        // the 4k profile is only worth anything with hevc: without it the
+        // sender spreads the same small budget over four times the pixels,
+        // and the picture breaks into blocks. so it falls back to the panel's
+        // own size, where the same budget buys four times the detail.
+        if (!hevcReady && _senderProfile().forceH265) {
+            val (pw, ph) = _displaySize(clamp = false, allowForced = false)
+            log("The tv has no hevc decoder for ${reqW}x${reqH}: the picture is sent in the panel's size ${pw}x${ph}")
+            reqW = pw
+            reqH = ph
+            maxFps = _profileFps(reqW, reqH)
+            hevcReady = videoRenderer.selectDecoders(reqW, reqH, maxFps, Prefs.forced(prefs[Prefs.H265]))
+        }
+        // the size the sender is told about, clamped to what the decoder can
+        // decode: the decoders are picked now, so their caps are known
+        val (w, h) = _displaySize()
         // the feature bit 42: it tells the sender that it may send a picture
         // above 1080p at all. it follows the size the sender is told about,
         // so a 1080p panel does not get a 4k mirror. only the setting says
         // otherwise - and a tv without an hevc decoder never gets the bit.
-        val h265 = hevcReady && _profileH265(reqW, reqH)
+        val h265 = hevcReady && _profileH265(w, h)
         if (Prefs.forced(prefs[Prefs.H265]) == true && !hevcReady) {
             log("The tv has no hevc decoder: the sender is told about h264 only")
         }
@@ -489,7 +504,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
         // set display params
         lastOrientation = resources.configuration.orientation
-        val (w, h) = _displaySize()
         videoRenderer.setResolution(w, h)
         _videoResolution.value = "${w}x${h}"
         _videoAspect.value = w.toFloat() / h
@@ -579,8 +593,13 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     )
 
     private fun _profileFps(w: Int, h: Int): Int {
-        val sender = _senderProfile().fps
-        if (sender != null) return sender
+        val sender = _senderProfile()
+        // the frame rate of the sender profile belongs to the size it asks
+        // for: at the panel's own size the panel's rate is the right one
+        val forced = sender.size
+        if (sender.fps != null && forced != null && w == forced.first && h == forced.second) {
+            return sender.fps
+        }
         return StreamProfile.fps(
             prefs[Prefs.STREAM_PROFILE], prefs[Prefs.MAX_FPS], w, h
         )
@@ -600,7 +619,13 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     // hevc follows the size the sender is told about, and only the setting
     // says otherwise.
     private fun _profileH265(w: Int, h: Int): Boolean {
-        if (_senderProfile().forceH265) return true
+        val sender = _senderProfile()
+        // the hevc capability of the sender profile belongs to the size it
+        // asks for: at the panel's own size the panel is the cap again
+        val forced = sender.size
+        if (sender.forceH265 && forced != null && w == forced.first && h == forced.second) {
+            return true
+        }
         return StreamProfile.hevc(
             prefs[Prefs.H265], w, h
         )
@@ -618,12 +643,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         return if (portrait != rawH >= rawW) rawH to rawW else rawW to rawH
     }
 
-    private fun _displaySize(clamp: Boolean = true): Pair<Int, Int> {
+    private fun _displaySize(clamp: Boolean = true, allowForced: Boolean = true): Pair<Int, Int> {
         val res = _profileResolution()
         val device = _panelSize()
         // the sender profile can ask for a size above the panel's own: the tv
         // downscales it, and the sender spends more bits on the picture
-        val forced = _senderProfile().size
+        val forced = if (allowForced) _senderProfile().size else null
         if (forced != null) {
             if (!clamp) return forced
             val (maxW, maxH) = videoRenderer.maxResolution()
