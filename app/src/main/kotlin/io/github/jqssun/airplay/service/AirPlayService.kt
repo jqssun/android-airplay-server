@@ -554,8 +554,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             "hevc(bit 42)=${if (h265) "on" else "off"}")
         // everything the sender was told about, in one line: the identity it
         // reads to pick the codec and the bitrate budget, and the geometry
-        val infoFeatures = sender.infoFeatures.toLong() or (if (h265) 1L shl 42 else 0L)
-        log("The sender is told: model=${sender.model} /info features=0x${infoFeatures.toString(16)} " +
+        log("The sender is told: model=${sender.model} /info features=${sender.infoFeaturesHex(h265)} " +
             "displays[0].features=${sender.displayFeatures} size=${w}x${h}@${fps} maxFPS=$fps " +
             "hevc(bit 42)=${if (h265) "on" else "off"} profile=${prefs[Prefs.STREAM_PROFILE]} " +
             "sender=${sender.name}")

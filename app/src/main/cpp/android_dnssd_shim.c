@@ -239,6 +239,11 @@ void dnssd_set_receiver_model(dnssd_t *dnssd, const char *model) {
     if (!dnssd || !model) return;
     strncpy(dnssd->model, model, sizeof(dnssd->model) - 1);
     dnssd->model[sizeof(dnssd->model) - 1] = '\0';
+    /* the records are built when the server starts, but the model can be
+     * set later: keep the records that are already there in step with it,
+     * so that the sender never sees an old name next to new feature bits */
+    if (dnssd->raop_record.count > 0) _txt_set(&dnssd->raop_record, "am", dnssd->model);
+    if (dnssd->airplay_record.count > 0) _txt_set(&dnssd->airplay_record, "model", dnssd->model);
 }
 
 uint64_t dnssd_get_airplay_features(dnssd_t *dnssd) {

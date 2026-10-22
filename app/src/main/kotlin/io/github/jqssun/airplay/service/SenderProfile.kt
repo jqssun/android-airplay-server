@@ -19,7 +19,11 @@ data class SenderProfile(
     val name: String,
     /** the model name in the dns-sd records and in the info responses */
     val model: String,
-    /** the feature bits of the info response */
+    /**
+     * the feature bits of the info response: a bit pattern, not a count, so
+     * it is read and written with bit operations only. the value with the
+     * top bit set is negative as an int, which is fine here.
+     */
     val infoFeatures: Int,
     /** the feature bits of the display entry of the info response */
     val displayFeatures: Int,
@@ -30,6 +34,19 @@ data class SenderProfile(
     /** the hevc capability bit is set even when the size says 1080p */
     val forceH265: Boolean = false
 ) {
+    /**
+     * The feature bits as they go on the wire: the bits of the profile, with
+     * the hevc bit added when hevc is on.
+     *
+     * The bits with the top bit set are negative as an int, so they are
+     * taken as unsigned before they are printed - otherwise the hex number
+     * of the log comes out negative and cannot be compared with the value
+     * on the wire.
+     */
+    fun infoFeaturesHex(hevc: Boolean): String {
+        val bits = (infoFeatures.toLong() and 0xFFFFFFFFL) or (if (hevc) 1L shl 42 else 0L)
+        return "0x" + bits.toString(16)
+    }
     companion object {
         /**
          * The feature bits of a receiver that can do everything: the same set
@@ -53,9 +70,6 @@ data class SenderProfile(
 
         /** an apple tv 4k of 2015: hevc and a bigger bitrate budget */
         const val MODEL_AIRPLAY2 = "AppleTV6,2"
-
-        /** an apple tv 4k of 2021 */
-        const val MODEL_AIRPLAY2_NEW = "AppleTV11,1"
 
         private val ALL = listOf(
             // what the receiver used to say: nothing changes for the user

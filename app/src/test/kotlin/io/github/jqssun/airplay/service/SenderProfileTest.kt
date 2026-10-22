@@ -65,4 +65,17 @@ class SenderProfileTest {
             assertTrue(p.infoFeatures > 0)
         }
     }
+
+    @Test
+    fun `the feature bits are printed as they go on the wire`() {
+        // the bits with the top bit set are negative as an int: without the
+        // unsigned mask the hex number of the log comes out negative
+        val ap2 = SenderProfile.forName(Prefs.SENDER_AIRPLAY2)
+        assertEquals("0x5a7ffee6", ap2.infoFeaturesHex(hevc = false))
+        // bit 42 is the hevc bit
+        assertEquals("0x4005a7ffee6", ap2.infoFeaturesHex(hevc = true))
+        val safe = SenderProfile.forName(Prefs.SENDER_SAFE)
+        assertEquals("0x27f", safe.infoFeaturesHex(hevc = false))
+        assertEquals("0x4000000027f", safe.infoFeaturesHex(hevc = true))
+    }
 }
