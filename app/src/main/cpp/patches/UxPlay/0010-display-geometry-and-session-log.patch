@@ -1,0 +1,103 @@
+diff --git a/lib/raop.c b/lib/raop.c
+index 07564e1..dee4e8f 100644
+--- a/lib/raop.c
++++ b/lib/raop.c
+@@ -72,6 +72,11 @@ struct raop_s {
+     uint8_t overscanned;
+     uint8_t clientFPSdata;
+ 
++    /* physical size of the panel in mm; the sender scales the extended
++       desktop's user interface from it (0 = unknown) */
++    uint32_t displayPhysicalWidth;
++    uint32_t displayPhysicalHeight;
++
+     int audio_delay_micros;
+ 
+      /* for temporary storage of pin during pair-pin start */
+@@ -775,6 +780,18 @@ int raop_set_plist(raop_t *raop, const char *plist_item, const int value) {
+         raop->use_pin = true;
+     } else if (strcmp(plist_item, "hls") == 0) {
+         raop->hls_support = (value > 0 ? true : false);
++    } else if (strcmp(plist_item, "displayPhysicalWidth") == 0) {
++        if (value < 0) {
++            retval = -1;
++        } else {
++            raop->displayPhysicalWidth = (uint32_t) value;
++        }
++    } else if (strcmp(plist_item, "displayPhysicalHeight") == 0) {
++        if (value < 0) {
++            retval = -1;
++        } else {
++            raop->displayPhysicalHeight = (uint32_t) value;
++        }
+     } else {
+         retval = -1;
+     }	  
+diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
+index b3f3b17..148c4d8 100644
+--- a/lib/raop_handlers.h
++++ b/lib/raop_handlers.h
+@@ -32,6 +32,23 @@
+ typedef void (*raop_handler_t)(raop_conn_t *, http_request_t *,
+                                http_response_t *, char **, int *);
+ 
++/* build a stable per-device display uuid from the hardware address: the
++   sender uses it to identify the extended desktop, a fixed uuid would be
++   claimed by every receiver */
++static void
++raop_display_uuid(char *buf, size_t len, const char *hw_addr, int hw_addr_len)
++{
++    unsigned char b[16] = { 0 };
++    int n = (hw_addr_len < (int) sizeof(b)) ? hw_addr_len : (int) sizeof(b);
++    for (int i = 0; i < n; i++) {
++        b[i] = (unsigned char) hw_addr[i];
++    }
++    snprintf(buf, len,
++             "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
++             b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
++             b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
++}
++
+ 
+ static void
+ raop_handler_info(raop_conn_t *conn,
+@@ -214,9 +231,13 @@ raop_handler_info(raop_conn_t *conn,
+ 
+     plist_t displays_node = plist_new_array();
+     plist_t displays_0_node = plist_new_dict();
+-    plist_t displays_0_width_physical_node = plist_new_uint(0);
+-    plist_t displays_0_height_physical_node = plist_new_uint(0);
+-    plist_t displays_0_uuid_node = plist_new_string("e0ff8a27-6738-3d56-8a16-cc53aacee925");
++    plist_t displays_0_width_physical_node = plist_new_uint(raop->displayPhysicalWidth);
++    plist_t displays_0_height_physical_node = plist_new_uint(raop->displayPhysicalHeight);
++    /* the sender identifies the extended desktop by this id, so it has to be
++       unique per receiver: derive it from the hardware address */
++    char display_uuid[40];
++    raop_display_uuid(display_uuid, sizeof(display_uuid), hw_addr_raw, hw_addr_raw_len);
++    plist_t displays_0_uuid_node = plist_new_string(display_uuid);
+     plist_t displays_0_width_node = plist_new_uint(raop->width);
+     plist_t displays_0_height_node = plist_new_uint(raop->height);
+     plist_t displays_0_width_pixels_node = plist_new_uint(raop->width);
+@@ -620,6 +641,22 @@ raop_handler_setup(raop_conn_t *conn,
+     // Parsing bplist
+     plist_t req_root_node = NULL;
+     plist_from_bin(data, data_len, &req_root_node);
++    if (logger_debug) {
++        /* the sender's setup request shows how it wants the display set up
++           (geometry, codec, session), keep it for protocol diagnostics */
++        char *plist_xml = NULL;
++        uint32_t plist_len = 0;
++        plist_to_xml(req_root_node, &plist_xml, &plist_len);
++        if (plist_xml) {
++            char *stripped_xml = utils_strip_data_from_plist_xml(plist_xml);
++            logger_log(raop->logger, LOGGER_DEBUG, "SETUP request:\n%s",
++                       (stripped_xml ? stripped_xml : plist_xml));
++            if (stripped_xml) {
++                free(stripped_xml);
++            }
++            plist_mem_free(plist_xml);
++        }
++    }
+     plist_t req_ekey_node = plist_dict_get_item(req_root_node, "ekey");
+     plist_t req_eiv_node = plist_dict_get_item(req_root_node, "eiv");
+ 	

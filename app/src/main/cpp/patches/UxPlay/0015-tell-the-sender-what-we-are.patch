@@ -1,0 +1,215 @@
+diff --git a/lib/dnssd.c b/lib/dnssd.c
+index d041ee7..c676807 100644
+--- a/lib/dnssd.c
++++ b/lib/dnssd.c
+@@ -151,6 +151,11 @@ struct dnssd_s {
+     uint32_t features1;
+     uint32_t features2;
+ 
++    /* the model name the receiver tells the sender about; the sender reads
++       it together with the feature bits to pick the codec and the bitrate
++       budget it uses for the picture */
++    char *model;
++
+     unsigned char pin_pw;
+ };
+ 
+@@ -279,10 +284,27 @@ dnssd_destroy(dnssd_t *dnssd)
+ #elif USE_LIBDL
+         dlclose(dnssd->module);
+ #endif
++        if (dnssd->model) {
++            free(dnssd->model);
++        }
+         free(dnssd);
+     }
+ }
+ 
++/* the model name in the txt records: the sender reads it together with the
++ * feature bits to pick the codec and the bitrate budget it uses */
++void
++dnssd_set_receiver_model(dnssd_t *dnssd, const char *model)
++{
++    if (!dnssd || !model) {
++        return;
++    }
++    if (dnssd->model) {
++        free(dnssd->model);
++    }
++    dnssd->model = strdup(model);
++}
++
+ int
+ dnssd_register_raop(dnssd_t *dnssd, unsigned short port)
+ {
+@@ -290,6 +312,8 @@ dnssd_register_raop(dnssd_t *dnssd, unsigned short port)
+ 
+     char features[22] = {0};
+ 
++    const char *model = dnssd->model ? dnssd->model : GLOBAL_MODEL;
++
+     assert(dnssd);
+ 
+     snprintf(features, sizeof(features), "0x%X,0x%X", dnssd->features1, dnssd->features2);
+@@ -301,7 +325,7 @@ dnssd_register_raop(dnssd_t *dnssd, unsigned short port)
+     dnssd->TXTRecordSetValue(&dnssd->raop_record, "et", strlen(RAOP_ET), RAOP_ET);
+     dnssd->TXTRecordSetValue(&dnssd->raop_record, "vv", strlen(RAOP_VV), RAOP_VV);
+     dnssd->TXTRecordSetValue(&dnssd->raop_record, "ft", strlen(features), features);
+-    dnssd->TXTRecordSetValue(&dnssd->raop_record, "am", strlen(GLOBAL_MODEL), GLOBAL_MODEL);
++    dnssd->TXTRecordSetValue(&dnssd->raop_record, "am", strlen(model), model);
+     dnssd->TXTRecordSetValue(&dnssd->raop_record, "md", strlen(RAOP_MD), RAOP_MD);
+     dnssd->TXTRecordSetValue(&dnssd->raop_record, "rhd", strlen(RAOP_RHD), RAOP_RHD);
+     switch (dnssd->pin_pw) {
+@@ -362,6 +386,8 @@ dnssd_register_airplay(dnssd_t *dnssd, unsigned short port)
+     char device_id[3 * MAX_HWADDR_LEN];
+     char features[22] = {0};
+ 
++    const char *model = dnssd->model ? dnssd->model : GLOBAL_MODEL;
++
+     assert(dnssd);
+ 
+     snprintf(features, sizeof(features), "0x%X,0x%X", dnssd->features1, dnssd->features2);
+@@ -391,7 +417,7 @@ dnssd_register_airplay(dnssd_t *dnssd, unsigned short port)
+         dnssd->TXTRecordSetValue(&dnssd->airplay_record, "flags", 3, "0x4");
+         break;
+     }
+-    dnssd->TXTRecordSetValue(&dnssd->airplay_record, "model", strlen(GLOBAL_MODEL), GLOBAL_MODEL);
++    dnssd->TXTRecordSetValue(&dnssd->airplay_record, "model", strlen(model), model);
+     dnssd->TXTRecordSetValue(&dnssd->airplay_record, "pk", strlen(dnssd->pk), dnssd->pk);
+     dnssd->TXTRecordSetValue(&dnssd->airplay_record, "pi", strlen(AIRPLAY_PI), AIRPLAY_PI);
+     dnssd->TXTRecordSetValue(&dnssd->airplay_record, "srcvers", strlen(AIRPLAY_SRCVERS), AIRPLAY_SRCVERS);
+diff --git a/lib/dnssd.h b/lib/dnssd.h
+index c4600e8..8f5fbd8 100644
+--- a/lib/dnssd.h
++++ b/lib/dnssd.h
+@@ -46,6 +46,7 @@ DNSSD_API const char *dnssd_get_airplay_txt(dnssd_t *dnssd, int *length);
+ DNSSD_API const char *dnssd_get_name(dnssd_t *dnssd, int *length);
+ DNSSD_API const char *dnssd_get_hw_addr(dnssd_t *dnssd, int *length);
+ DNSSD_API void dnssd_set_airplay_features(dnssd_t *dnssd, int bit, int val);
++DNSSD_API void dnssd_set_receiver_model(dnssd_t *dnssd, const char *model);
+ DNSSD_API uint64_t dnssd_get_airplay_features(dnssd_t *dnssd);
+ DNSSD_API void dnssd_set_pk(dnssd_t *dnssd, char * pk_str);
+ 
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+index ddc3ab3..e1b8fff 100644
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -67,8 +67,13 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
+      * bit 42 is the hevc capability ("ScreenMultiCodec"): it tells the sender
+      * that the receiver can take a picture above 1080p. the hardcoded value
+      * above never carried it, so the sender did not know.
++     *
++     * the value is the app's choice: the dns-sd record advertises the full
++     * feature set (0x5A7FFEE6), and a sender that reads this plist instead
++     * would see a receiver that is much less capable than the one the
++     * dns-sd record describes.
+      */
+-    uint64_t features = 0x27F;
++    uint64_t features = raop->infoFeatures;
+     if (dnssd_get_airplay_features(raop->dnssd) & (1ULL << 42)) {
+         features |= (1ULL << 42);
+     }
+@@ -78,7 +83,7 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
+     plist_t mac_address_node = plist_new_string(hw_addr);
+     plist_dict_set_item(r_node, "macAddress", mac_address_node);
+ 
+-    plist_t model_node = plist_new_string(GLOBAL_MODEL);
++    plist_t model_node = plist_new_string(raop->receiverModel);
+     plist_dict_set_item(r_node, "model", model_node);
+ 
+     plist_t os_build_node = plist_new_string("12B435");
+diff --git a/lib/raop.c b/lib/raop.c
+index dee4e8f..79ab46d 100644
+--- a/lib/raop.c
++++ b/lib/raop.c
+@@ -77,6 +77,14 @@ struct raop_s {
+     uint32_t displayPhysicalWidth;
+     uint32_t displayPhysicalHeight;
+ 
++    /* the identity the receiver tells the sender about. the model name and
++       the feature bits are what the sender reads to decide which codec it
++       may use and how many bits it spends on the picture, so they are
++       configurable instead of hardcoded. */
++    char receiverModel[32];
++    uint32_t displayFeatures;
++    uint32_t infoFeatures;
++
+     int audio_delay_micros;
+ 
+      /* for temporary storage of pin during pair-pin start */
+@@ -634,6 +642,13 @@ raop_init(raop_callbacks_t *callbacks) {
+     raop->maxFPS = 30;
+     raop->overscanned = 0;
+ 
++    /* the identity the sender is told about: an old apple tv by default,
++       the app can ask for a modern one to get hevc and a bigger bitrate
++       budget out of the sender */
++    snprintf(raop->receiverModel, sizeof(raop->receiverModel), "%s", GLOBAL_MODEL);
++    raop->displayFeatures = 14;
++    raop->infoFeatures = 0x27F;
++
+     /* initialise stored pin */
+     raop->pin = 0;
+     raop->use_pin = false;
+@@ -792,12 +807,27 @@ int raop_set_plist(raop_t *raop, const char *plist_item, const int value) {
+         } else {
+             raop->displayPhysicalHeight = (uint32_t) value;
+         }
++    } else if (strcmp(plist_item, "displayFeatures") == 0) {
++        /* the feature bits of the display entry of the info response */
++        raop->displayFeatures = (uint32_t) value;
++    } else if (strcmp(plist_item, "infoFeatures") == 0) {
++        /* the feature bits of the info response */
++        raop->infoFeatures = (uint32_t) value;
+     } else {
+         retval = -1;
+     }	  
+     return retval;
+ }
+ 
++/* the model name the receiver tells the sender about: the sender reads it
++ * together with the feature bits to pick the codec and the bitrate budget */
++void raop_set_receiver_model(raop_t *raop, const char *model) {
++    if (!raop || !model) {
++        return;
++    }
++    snprintf(raop->receiverModel, sizeof(raop->receiverModel), "%s", model);
++}
++
+ void
+ raop_set_port(raop_t *raop, unsigned short port) {
+     assert(raop);
+diff --git a/lib/raop.h b/lib/raop.h
+index ac7b69c..825de21 100644
+--- a/lib/raop.h
++++ b/lib/raop.h
+@@ -129,6 +129,7 @@ RAOP_API int raop_init2(raop_t *raop, int nohold, const char *device_id, const c
+ RAOP_API void raop_set_log_level(raop_t *raop, int level);
+ RAOP_API void raop_set_log_callback(raop_t *raop, raop_log_callback_t callback, void *cls);
+ RAOP_API int raop_set_plist(raop_t *raop, const char *plist_item, const int value);
++RAOP_API void raop_set_receiver_model(raop_t *raop, const char *model);
+ RAOP_API void raop_set_port(raop_t *raop, unsigned short port);
+ RAOP_API void raop_set_lang(raop_t *raop, const char *lang);
+ RAOP_API void raop_set_udp_ports(raop_t *raop, unsigned short port[3]);
+diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
+index 148c4d8..21df5f0 100644
+--- a/lib/raop_handlers.h
++++ b/lib/raop_handlers.h
+@@ -174,7 +174,7 @@ raop_handler_info(raop_conn_t *conn,
+     plist_t keep_alive_send_stats_as_body_node = plist_new_bool(1);
+     plist_dict_set_item(res_node, "keepAliveSendStatsAsBody", keep_alive_send_stats_as_body_node);
+ 
+-    plist_t model_node = plist_new_string(GLOBAL_MODEL);
++    plist_t model_node = plist_new_string(raop->receiverModel);
+     plist_dict_set_item(res_node, "model", model_node);
+ 
+     /* dont need anything below here in the Bluetooth LE response */
+@@ -246,7 +246,7 @@ raop_handler_info(raop_conn_t *conn,
+     plist_t displays_0_refresh_rate_node = plist_new_real((double) 1.0 / raop->refreshRate);  /* set as real 0.166666  = 60hz in AppleTV gen 3 */
+     plist_t displays_0_max_fps_node = plist_new_uint(raop->maxFPS);
+     plist_t displays_0_overscanned_node = plist_new_bool(raop->overscanned);
+-    plist_t displays_0_features = plist_new_uint(14);
++    plist_t displays_0_features = plist_new_uint(raop->displayFeatures);
+ 
+     plist_dict_set_item(displays_0_node, "uuid", displays_0_uuid_node);
+     plist_dict_set_item(displays_0_node, "widthPhysical", displays_0_width_physical_node);

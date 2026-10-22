@@ -13,6 +13,8 @@ import io.github.jqssun.airplay.Pref
 import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.get
+import io.github.jqssun.airplay.net.UdpErrors
+import io.github.jqssun.airplay.net.WifiLink
 import io.github.jqssun.airplay.observe
 import io.github.jqssun.airplay.service.AirPlayService
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
@@ -55,12 +57,16 @@ data class DebugInfo(
     val videoBitrate: Long = 0,
     val videoFrames: Long = 0,
     val droppedFrames: Long = 0,
+    /* frames the decoder thread threw away because it could not keep up */
+    val queueDrops: Long = 0,
     val framePacingJitterUs: Long = 0,
     val audioCodec: String = "",
     val serverVolume: Int = 100,
     val clientVolume: Int = 100,
     val audio: AudioDebug? = null,
     val connections: Int = 0,
+    val link: WifiLink? = null,
+    val udpErrors: UdpErrors = UdpErrors(0, 0),
 ) {
     val bitrateStr: String get() {
         val kbps = videoBitrate / 1000
@@ -108,6 +114,12 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
 
     private val _videoResolution = MutableStateFlow("")
     val videoResolution: StateFlow<String> = _videoResolution.asStateFlow()
+    // geometry advertised to the sender, the extended desktop is built from it
+    private val _advertisedResolution = MutableStateFlow("")
+    val advertisedResolution: StateFlow<String> = _advertisedResolution.asStateFlow()
+    // number of active mirroring sessions (a mirror and an extended display)
+    private val _videoSessionCount = MutableStateFlow(0)
+    val videoSessionCount: StateFlow<Int> = _videoSessionCount.asStateFlow()
 
     private val _prefStates = mutableMapOf<Pref<*>, StateFlow<*>>()
 
@@ -380,6 +392,8 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             _connectionCount.value = it.connectionCount.value
             _videoAspect.value = it.videoAspect.value
             _videoResolution.value = it.videoResolution.value
+            _advertisedResolution.value = it.advertisedResolution.value
+            _videoSessionCount.value = it.videoSessionCount.value
             _audioOnly.value = it.audioOnly.value
             val videoActive = it.videoPlaybackActive.value
             val playSeq = it.videoPlaySeq.value

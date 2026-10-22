@@ -39,8 +39,11 @@ class VideoPipeline {
     @Volatile private var frameAvailable = false
     private var pendingDisplay: Surface? = null
     private var displayDirty = false
+    private var clearRequested = false
     @Volatile private var videoW = 0
     @Volatile private var videoH = 0
+    // keep the picture's aspect ratio instead of stretching it to the window
+    @Volatile var fitAspect = true
 
     fun start() = synchronized(lock) {
         if (running) return@synchronized
@@ -61,6 +64,21 @@ class VideoPipeline {
         surfaceTexture?.setDefaultBufferSize(w, h)
     }
 
+    /**
+     * Wipes the picture.
+     *
+     * The last frame of the session that is gone must not stay on the panel
+     * while the next one is still looking for its first frame - that is the
+     * "old desktop" that stays visible at the start of a broadcast.
+     */
+    fun clear() {
+        synchronized(lock) {
+            hasFrame = false
+            clearRequested = true
+            lock.notifyAll()
+        }
+    }
+
     fun release() {
         synchronized(lock) {
             if (!running) return
@@ -73,6 +91,8 @@ class VideoPipeline {
 
     private fun _loop() {
         try {
+            // the picture is drawn here, the launcher must not delay it
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
             egl = EglCore()
             _initGl()
         } catch (e: Exception) {
@@ -89,12 +109,17 @@ class VideoPipeline {
             var newDisplay: Surface? = null
             var displayChanged = false
             var doFrame = false
+            var doClear = false
             synchronized(lock) {
-                while (running && !frameAvailable && !displayDirty) lock.wait()
+                while (running && !frameAvailable && !displayDirty && !clearRequested) lock.wait()
                 if (running && displayDirty) {
                     newDisplay = pendingDisplay
                     displayChanged = true
                     displayDirty = false
+                }
+                if (running && clearRequested) {
+                    clearRequested = false
+                    doClear = true
                 }
                 if (running && frameAvailable) {
                     frameAvailable = false
@@ -103,9 +128,21 @@ class VideoPipeline {
             }
             if (!running) break
             if (displayChanged) _bindDisplay(newDisplay)
+            if (doClear) _clearWindow()
             if (doFrame) _consumeAndDraw()
         }
         _releaseGl()
+    }
+
+    /* paints the window black: the picture of the session that is gone */
+    private fun _clearWindow() {
+        val egl = egl ?: return
+        if (window == EGL14.EGL_NO_SURFACE) return
+        egl.makeCurrent(window)
+        GLES20.glViewport(0, 0, winW, winH)
+        GLES20.glClearColor(0f, 0f, 0f, 1f)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        egl.swap(window)
     }
 
     private fun _bindDisplay(surface: Surface?) {
@@ -146,8 +183,14 @@ class VideoPipeline {
     }
 
     private fun _render() {
+        // the extended desktop can have a different aspect ratio than the
+        // panel, so fit the picture instead of stretching it
+        val (vpX, vpY, vpW, vpH) = _viewport()
+        // clear the whole window first, the bars around the picture have to
+        // be black and not the leftovers of the previous frame
         GLES20.glViewport(0, 0, winW, winH)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        GLES20.glViewport(vpX, vpY, vpW, vpH)
         GLES20.glUseProgram(program)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTex)
@@ -160,6 +203,25 @@ class VideoPipeline {
         GLES20.glDisableVertexAttribArray(aPos)
         GLES20.glDisableVertexAttribArray(aTex)
         egl?.swap(window)
+    }
+
+    // letterbox/pillarbox the picture inside the window, keeping the video's
+    // aspect ratio; returns the viewport to draw into
+    private fun _viewport(): IntArray {
+        val w = winW
+        val h = winH
+        val vw = videoW
+        val vh = videoH
+        if (!fitAspect || w <= 0 || h <= 0 || vw <= 0 || vh <= 0) return intArrayOf(0, 0, w, h)
+        val videoAspect = vw.toDouble() / vh
+        val windowAspect = w.toDouble() / h
+        return if (videoAspect > windowAspect) {
+            val drawH = (w / videoAspect).toInt().coerceAtLeast(1)
+            intArrayOf(0, (h - drawH) / 2, w, drawH)
+        } else {
+            val drawW = (h * videoAspect).toInt().coerceAtLeast(1)
+            intArrayOf((w - drawW) / 2, 0, drawW, h)
+        }
     }
 
     private fun _initGl() {

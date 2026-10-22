@@ -70,9 +70,12 @@
     <!-- Dialogs -->
     <string name="dialog_pin_title">AirPlay PIN</string>
     <string name="btn_ok">OK</string>
+    <string name="back_exit_hint">Press back again to exit</string>
 
     <!-- Logs screen -->
     <string name="btn_export">Export</string>
+    <string name="btn_jump_latest">Jump to latest</string>
+    <string name="toast_connected">AirPlay connected</string>
     <string name="btn_clear">Clear</string>
     <string name="export_logs_chooser_title">Export logs</string>
 
@@ -80,6 +83,7 @@
     <string name="section_server">Server</string>
     <string name="section_connection">Connection</string>
     <string name="section_display">Display</string>
+    <string name="section_screen_extension">Screen extension</string>
     <string name="section_decode">Decode</string>
     <string name="section_developer">Developer</string>
 
@@ -124,6 +128,16 @@
     <string name="setting_discovery_usb_desc">Only advertise over USB tethering to enforce wired connection. Uses custom mDNS responder.</string>
     <string name="chip_all_networks">All networks</string>
     <string name="chip_usb_only">USB only</string>
+    <string name="setting_stream_profile">Stream profile</string>
+    <string name="setting_stream_profile_desc">Resolution, frame rate and codec in one setting. The picture quality comes first: a profile gives up frame rate before resolution, because 4K at 30 fps looks better than 1080p at 60 fps. HEVC needs about half the airtime of H.264 for the same quality, which keeps a weak wifi link from stalling.</string>
+    <string name="profile_4k30">4K 30</string>
+    <string name="profile_4k60">4K 60</string>
+    <string name="profile_1080p60">1080p 60</string>
+    <string name="setting_sender_profile">Sender identity</string>
+    <string name="setting_sender_profile_desc">What the receiver tells the sender it is. The sender reads the model name and the feature bits and picks the codec and the bitrate budget from them: a receiver that announces itself as an old Apple TV gets H.264 and a small budget, and the picture breaks into blocks as soon as the screen changes. The log line "The sender is told" shows what was announced.</string>
+    <string name="sender_safe">Safe</string>
+    <string name="sender_airplay2">AirPlay 2</string>
+    <string name="sender_airplay2_4k">AirPlay 2, 4K HEVC</string>
     <string name="setting_resolution">Resolution</string>
     <string name="setting_resolution_desc">Video resolution advertised to senders</string>
     <string name="setting_resolution_placeholder">[W]x[H]</string>
@@ -137,6 +151,21 @@
     <string name="chip_custom">Custom</string>
     <string name="chip_device_portrait">Portrait</string>
     <string name="chip_device_landscape">Landscape</string>
+
+    <!-- Settings: Screen extension -->
+    <string name="setting_separate_display">Use as separate display</string>
+    <string name="setting_separate_display_desc">Let the sender use this device as an extended display (macOS: “Use As Separate Display”)</string>
+    <string name="setting_fit_aspect">Fit picture to panel</string>
+    <string name="setting_fit_aspect_desc">Letterbox the picture instead of stretching it to the panel, the extended desktop can have a different aspect ratio</string>
+    <string name="setting_display_physical_width">Physical width (mm)</string>
+    <string name="setting_display_physical_height">Physical height (mm)</string>
+    <string name="setting_display_physical_desc">Physical size of the panel, the sender scales the extended desktop’s user interface from it. 0 leaves it unknown.</string>
+    <string name="setting_verbose_protocol_log">Verbose protocol log</string>
+    <string name="setting_verbose_protocol_log_desc">Log the sender’s setup requests and connection setup</string>
+
+    <!-- Status -->
+    <string name="advertised_display">Display %1$s</string>
+    <string name="display_sessions"> • %1$d sessions</string>
 
     <!-- Settings: Decode -->
     <string name="setting_h265">H.265 (HEVC)</string>
@@ -194,11 +223,16 @@
     <string name="debug_section_network">Network</string>
     <string name="debug_video">%1$s %2$s</string>
     <string name="debug_fps_bitrate">FPS: %1$d  Bitrate: %2$s</string>
-    <string name="debug_frames_drops">Frames: %1$d  Drops: %2$d</string>
+    <string name="debug_frames_drops">Frames: %1$d  Drops: %2$d  Queuedrops: %3$d</string>
     <string name="debug_jitter">Jitter: %1$s</string>
     <string name="debug_audio">%1$s  Receiver: %2$d%%  Sender: %3$d%%</string>
     <string name="debug_audio_buffer">Buffer: %1$d ms (tgt: %2$d ms)</string>
     <string name="debug_audio_glitch">Glitch: trim=%1$d drop=%2$d sil=%3$d ur=%4$d xrun=%5$d</string>
     <string name="debug_audio_decode">Decode: %1$s</string>
     <string name="debug_clients">Senders: %1$d</string>
+    <string name="debug_link">Link: %1$s  %2$d dBm  %3$d Mbps  (%4$s)</string>
+    <string name="debug_scan_throttled">Scans throttled: scans steal airtime mid stream</string>
+    <string name="setting_wifi_lock">Keep the wifi radio awake</string>
+    <string name="setting_wifi_lock_desc">Holds a wifi lock while the server runs so the radio does not sleep between beacons. Adds jitter when it sleeps, costs battery when it does not.</string>
+    <string name="debug_udp_errors">UDP buffer errors: rcv %1$d  snd %2$d</string>
 </resources>

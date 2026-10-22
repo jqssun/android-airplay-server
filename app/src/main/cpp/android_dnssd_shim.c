@@ -41,6 +41,11 @@ struct dnssd_s {
     uint32_t features2;
     unsigned char pin_pw;
 
+    /* the model name the receiver tells the sender about: the sender reads
+       it together with the feature bits and picks the codec and the bitrate
+       budget it uses for the picture */
+    char model[32];
+
     char codec_cn[16]; /* dynamic "cn" value, e.g. "0,1,2,3" */
 
     char raop_servname[MAX_SERVNAME];
@@ -80,6 +85,7 @@ dnssd_init(const char *name, int name_len, const char *hw_addr, int hw_addr_len,
     dnssd->features1 = (uint32_t) strtoul(FEATURES_1, NULL, 16);
     dnssd->features2 = (uint32_t) strtoul(FEATURES_2, NULL, 16);
     dnssd->pin_pw = pin_pw;
+    strncpy(dnssd->model, GLOBAL_MODEL, sizeof(dnssd->model) - 1);
     strncpy(dnssd->codec_cn, RAOP_CN, sizeof(dnssd->codec_cn) - 1);
     return dnssd;
 }
@@ -111,7 +117,7 @@ dnssd_register_raop(dnssd_t *dnssd, unsigned short port)
     _txt_set(rec, "et", RAOP_ET);
     _txt_set(rec, "vv", RAOP_VV);
     _txt_set(rec, "ft", features);
-    _txt_set(rec, "am", GLOBAL_MODEL);
+    _txt_set(rec, "am", dnssd->model);
     _txt_set(rec, "md", RAOP_MD);
     _txt_set(rec, "rhd", RAOP_RHD);
 
@@ -182,7 +188,7 @@ dnssd_register_airplay(dnssd_t *dnssd, unsigned short port)
         break;
     }
     _txt_set(rec, "flags", "0x4");
-    _txt_set(rec, "model", GLOBAL_MODEL);
+    _txt_set(rec, "model", dnssd->model);
     if (dnssd->pk) {
         _txt_set(rec, "pk", dnssd->pk);
     }
@@ -225,6 +231,19 @@ void dnssd_set_airplay_features(dnssd_t *dnssd, int bit, int val) {
     uint32_t *features = bit < 32 ? &dnssd->features1 : &dnssd->features2;
     uint32_t mask = 1u << (bit % 32);
     *features = val ? (*features | mask) : (*features & ~mask);
+}
+
+/* the model name in the txt records: the sender reads it together with the
+ * feature bits and picks the codec and the bitrate budget it uses */
+void dnssd_set_receiver_model(dnssd_t *dnssd, const char *model) {
+    if (!dnssd || !model) return;
+    strncpy(dnssd->model, model, sizeof(dnssd->model) - 1);
+    dnssd->model[sizeof(dnssd->model) - 1] = '\0';
+    /* the records are built when the server starts, but the model can be
+     * set later: keep the records that are already there in step with it,
+     * so that the sender never sees an old name next to new feature bits */
+    if (dnssd->raop_record.count > 0) _txt_set(&dnssd->raop_record, "am", dnssd->model);
+    if (dnssd->airplay_record.count > 0) _txt_set(&dnssd->airplay_record, "model", dnssd->model);
 }
 
 uint64_t dnssd_get_airplay_features(dnssd_t *dnssd) {

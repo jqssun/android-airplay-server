@@ -1,0 +1,21 @@
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -63,8 +63,16 @@
+      * 5. slideshow supported
+      * 6. (unknown)
+      * 9. audio supported.
++     *
++     * bit 42 is the hevc capability ("ScreenMultiCodec"): it tells the sender
++     * that the receiver can take a picture above 1080p. the hardcoded value
++     * above never carried it, so the sender did not know.
+      */
+-    plist_t features_node = plist_new_uint(0x27F); 
++    uint64_t features = 0x27F;
++    if (dnssd_get_airplay_features(raop->dnssd) & (1ULL << 42)) {
++        features |= (1ULL << 42);
++    }
++    plist_t features_node = plist_new_uint(features);
+     plist_dict_set_item(r_node, "features", features_node);
+ 
+     plist_t mac_address_node = plist_new_string(hw_addr);

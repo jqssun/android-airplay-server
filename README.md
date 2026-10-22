@@ -22,6 +22,7 @@ A fully featured free and open-source implementation of AirPlay for Android that
 ## Features
 
 - Screen mirroring with H.264 and H.265 (HEVC) video decoding
+- Screen extension: use the device as an extended desktop (macOS "Use As Separate Display"), see [docs/SCREEN-EXTENSION.md](docs/SCREEN-EXTENSION.md)
 - Audio streaming with AAC-ELD, AAC-LC and ALAC audio decoding
 - Video playback with support for HLS, downloads, and remote controls
 - Music playback with track information, cover art, and remote controls
@@ -30,12 +31,44 @@ A fully featured free and open-source implementation of AirPlay for Android that
 - Optional PIN authentication
 - Video resolution, overscan, and frame rate control
 - Audio latency control and support for software decoder fallback
-- Debug overlay with real-time statistics (FPS, bitrate, codec, resolution, frame count, audio volume, etc.)
+- Debug overlay with real-time statistics (FPS, bitrate, codec, resolution, frame count, audio volume, link quality, etc.)
+- Stream profiles (4K60 / 4K30 / 1080p60 / custom), tuned sockets and receive path, Wi-Fi lock while streaming - see [docs/WIFI-OPTIMIZATION.md](docs/WIFI-OPTIMIZATION.md)
 - Android native media session integration with notification controls
 - Wired secondary display for macOS/iPadOS devices over USB tethering
 
 > [!WARNING]
 > DRM content (e.g. from the Apple TV application) is not supported.
+
+## Streaming quality
+
+Mirroring and extension video arrives over **TCP**, so on a weak link the picture
+freezes instead of dropping a frame. The receiver keeps the decode off the network
+thread, sizes its sockets for 4K, raises the media threads above the launcher,
+holds a Wi-Fi lock while the server runs and reports the link (band, RSSI, link
+speed, drops) in the debug overlay.
+
+Pick a **stream profile** that fits the link - 4K30 looks better than 1080p60 on a
+constrained one, and HEVC carries about twice as much detail as H.264 at the same
+bitrate. The picture is sent in the **panel's own size**: a size the panel cannot
+show costs airtime and quality, because the sender spreads its bits over the
+pixels it sends. Prefer USB-C tethering when you can cable: it removes the radio
+from the equation entirely. What an app may and may not change on the radio, and
+how to measure before and after, is in
+[docs/WIFI-OPTIMIZATION.md](docs/WIFI-OPTIMIZATION.md).
+
+The receiver also says **what it is**: the sender reads the model name and the
+feature bits the receiver announces and picks the codec and the bitrate budget
+from them. A receiver that announces itself as an old Apple TV gets H.264 and a
+budget so small that the picture breaks into blocks. The **sender identity**
+setting (`safe`, `airplay2`, `airplay2_4k`) changes that, and the log line
+"The sender is told" shows exactly what went on the wire.
+
+The whole choice, written down and applied to a connected device:
+
+```bash
+tools/optimal-config.sh apply     # best picture, least delay
+tools/optimal-config.sh show      # what the device is set to now
+```
 
 ## Configure from ADB
 
