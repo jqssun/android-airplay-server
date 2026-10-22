@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="mirror_landscape_fill" translatable="false">横屏填满（裁边）</string>
-    <string name="mirror_original_fit" translatable="false">完整画面</string>
+    <string name="mirror_landscape_fill">Fill landscape (crop)</string>
+    <string name="mirror_original_fit">Fit full picture</string>
     <string name="debug_video_queue">Decode queue: %1$d ms · Skipped stale: %2$d</string>
     <string name="app_name">AirPlay Server</string>
 

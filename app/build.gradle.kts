@@ -71,14 +71,14 @@ android {
             isMinifyEnabled = false
             matchingFallbacks += "release"
             applicationIdSuffix = ".sonytest"
-            versionNameSuffix = "-sony.3"
+            versionNameSuffix = "-sony.4"
             signingConfig = signingConfigs.getByName("debug")
         }
         create("sonyRelease") {
             initWith(getByName("release"))
             matchingFallbacks += "release"
             applicationIdSuffix = ".sonytest"
-            versionNameSuffix = "-sony.3"
+            versionNameSuffix = "-sony.4"
             signingConfig = signingConfigs.getByName("debug")
         }
         // debuggable build with HWASan (arm64) + UBSan in native code

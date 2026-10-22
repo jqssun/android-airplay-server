@@ -21,7 +21,7 @@ The notes below retain the development history and distinguish withdrawn paths
 from the final direct-output test. Native audio/protocol code is unchanged;
 30 fps and 80 ms were device preferences, not new global defaults. Remaining work
 for general release includes safe gating of experimental GL sizing, a normal
-settings entry for direct output, localization, and validation on other vendors.
+settings entry for direct output, build-variant cleanup, and validation on other vendors.
 
 ## Reproduced on 2026-10-21
 
@@ -285,3 +285,19 @@ retained for subsequent device testing.
 The user subsequently confirmed that TV-native Douyin physically fills the screen
 normally and is not reduced to the top-left. The real mirroring/exit/native-player
 cycle therefore has both compositor evidence and physical user confirmation.
+
+### Simplified Chinese resources (sony.4, 2026-10-22)
+
+Added a complete values-zh-rCN translation of all 166 app-owned string/array
+resources, with matching resource names, format placeholders and array lengths.
+The two framing labels now have English defaults and Chinese translations. The
+Sony variant keeps the AirPlay Sony launcher label in both languages. This follows
+the existing system language and does not force a global locale change.
+
+The minified sony.4 release built and passed release lint with zero new errors
+and the same 12 warnings. It was installed over sony.3. Physical-TV screenshots
+and UI hierarchy confirmed Chinese overview and settings text without clipping;
+D-pad DOWN/CENTER entered Settings and LEFT/LEFT/CENTER returned to Overview.
+Saved server name Sony-AirPlay, 30 fps limit, direct video output, landscape fill,
+80 ms audio cushion and low-latency output remained unchanged. There were no
+video/audio implementation changes in this localization update.
