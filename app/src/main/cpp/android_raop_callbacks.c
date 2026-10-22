@@ -13,6 +13,7 @@
 
 #define TAG "AirPlayNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 static JNIEnv *_get_env(android_callback_ctx_t *ctx) {
@@ -37,6 +38,15 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->require_pin = 0;
     ctx->registered_count = 0;
     ctx->audio_engine = NULL;
+    ctx->frame_buffers = NULL;
+    ctx->frame_buffer_refs = NULL;
+    ctx->frame_buffer_busy = NULL;
+    ctx->frame_buffer_count = 0;
+    ctx->frame_buffer_capacity = 0;
+    ctx->frame_buffer_next = 0;
+    ctx->video_session_count = 0;
+    ctx->next_video_session_id = 0;
+    memset(ctx->video_sessions, 0, sizeof(ctx->video_sessions));
     memset(ctx->registered_keys, 0, sizeof(ctx->registered_keys));
 
     pthread_mutex_init(&ctx->playback_info_lock, NULL);
@@ -49,9 +59,10 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->playback_ready = 0;
 
     jclass cls = (*env)->GetObjectClass(env, callback_obj);
-    ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZ)V");
+    ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZI)V");
+    ctx->on_video_data_buffer = (*env)->GetMethodID(env, cls, "onVideoDataBuffer", "(IIJZI)V");
     ctx->on_audio_format = (*env)->GetMethodID(env, cls, "onAudioFormat", "(IIZ)V");
-    ctx->on_video_size = (*env)->GetMethodID(env, cls, "onVideoSize", "(FFFF)V");
+    ctx->on_video_size = (*env)->GetMethodID(env, cls, "onVideoSize", "(FFFFI)V");
     ctx->on_client_volume = (*env)->GetMethodID(env, cls, "onClientVolume", "(F)V");
     ctx->on_client_volume_query = (*env)->GetMethodID(env, cls, "onClientVolumeQuery", "()F");
     ctx->on_audio_teardown = (*env)->GetMethodID(env, cls, "onAudioTeardown", "()V");
@@ -76,6 +87,17 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env) {
     if (ctx->callback_obj) {
         (*env)->DeleteGlobalRef(env, ctx->callback_obj);
         ctx->callback_obj = NULL;
+    }
+    free(ctx->frame_buffers);
+    ctx->frame_buffers = NULL;
+    ctx->frame_buffer_count = 0;
+    if (ctx->frame_buffer_refs) {
+        free(ctx->frame_buffer_refs);
+        ctx->frame_buffer_refs = NULL;
+    }
+    if (ctx->frame_buffer_busy) {
+        free(ctx->frame_buffer_busy);
+        ctx->frame_buffer_busy = NULL;
     }
     for (int i = 0; i < ctx->registered_count; i++) {
         free(ctx->registered_keys[i]);
@@ -109,6 +131,108 @@ static void _audio_process(void *cls, raop_ntp_t *ntp, audio_decode_struct *data
                         (int)data->ct, (int64_t)data->ntp_time_local);
 }
 
+/* find the video session a frame belongs to, every mirroring connection has
+   its own ntp instance; a new one gets a fresh id */
+static int64_t _now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* the slot of the session that runs on the calling thread, -1 if there is
+   none: the size report of a session arrives before its first frame */
+static int _video_session_slot_by_thread(android_callback_ctx_t *ctx) {
+    pthread_t self = pthread_self();
+    for (int i = 0; i < ctx->video_session_count; i++) {
+        if (ctx->video_sessions[i].has_thread &&
+            pthread_equal(ctx->video_sessions[i].thread, self)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* a free slot, or the one that has been silent the longest */
+static int _video_session_free_slot(android_callback_ctx_t *ctx) {
+    int slot = ctx->video_session_count;
+    if (slot < MAX_VIDEO_SESSIONS) {
+        ctx->video_session_count++;
+        return slot;
+    }
+    /* all slots are taken, recycle the one that has been silent the longest
+       (its session is long gone) */
+    slot = 0;
+    for (int i = 1; i < ctx->video_session_count; i++) {
+        if (ctx->video_sessions[i].last_frame_ms < ctx->video_sessions[slot].last_frame_ms) {
+            slot = i;
+        }
+    }
+    return slot;
+}
+
+static int _video_session_new(android_callback_ctx_t *ctx, int slot, uintptr_t ntp) {
+    ctx->video_sessions[slot].ntp = ntp;
+    ctx->video_sessions[slot].thread = pthread_self();
+    ctx->video_sessions[slot].has_thread = 1;
+    /* the ids grow monotonically, so the app can tell a new session apart
+       from one that was dropped and came back */
+    ctx->video_sessions[slot].id = ++ctx->next_video_session_id;
+    ctx->video_sessions[slot].last_frame_ms = _now_ms();
+    LOGI("new video session %d", ctx->video_sessions[slot].id);
+    return ctx->video_sessions[slot].id;
+}
+
+static int _video_session_id(android_callback_ctx_t *ctx, raop_ntp_t *ntp) {
+    uintptr_t key = (uintptr_t) ntp;
+    for (int i = 0; i < ctx->video_session_count; i++) {
+        if (ctx->video_sessions[i].ntp == key) {
+            ctx->video_sessions[i].last_frame_ms = _now_ms();
+            return ctx->video_sessions[i].id;
+        }
+    }
+    /* the session was already seen by its size report, which arrives from
+       the session's own thread before the first frame */
+    int slot = _video_session_slot_by_thread(ctx);
+    if (slot >= 0) {
+        ctx->video_sessions[slot].ntp = key;
+        ctx->video_sessions[slot].last_frame_ms = _now_ms();
+        return ctx->video_sessions[slot].id;
+    }
+    return _video_session_new(ctx, _video_session_free_slot(ctx), key);
+}
+
+/* the size report comes from the session's own thread */
+static int _video_session_id_by_thread(android_callback_ctx_t *ctx) {
+    int slot = _video_session_slot_by_thread(ctx);
+    if (slot >= 0) {
+        ctx->video_sessions[slot].last_frame_ms = _now_ms();
+        return ctx->video_sessions[slot].id;
+    }
+    return _video_session_new(ctx, _video_session_free_slot(ctx), 0);
+}
+
+/* claim a frame buffer that is not in use; -1 when all of them are taken.
+   The buffer stays claimed until the app releases it, so the frame is not
+   overwritten while it is still in the decoder. */
+static int _claim_frame_buffer(android_callback_ctx_t *ctx) {
+    int count = ctx->frame_buffer_count;
+    if (!ctx->frame_buffers || !ctx->frame_buffer_busy || count <= 0) return -1;
+    int start = (int) (__atomic_fetch_add(&ctx->frame_buffer_next, 1, __ATOMIC_RELAXED) %
+                      (unsigned int) count);
+    for (int i = 0; i < count; i++) {
+        int idx = (start + i) % count;
+        if (!__atomic_exchange_n(&ctx->frame_buffer_busy[idx], 1, __ATOMIC_ACQUIRE)) {
+            return idx;
+        }
+    }
+    return -1;
+}
+
+void android_callbacks_release_frame_buffer(android_callback_ctx_t *ctx, int index) {
+    if (!ctx->frame_buffer_busy || index < 0 || index >= ctx->frame_buffer_count) return;
+    __atomic_store_n(&ctx->frame_buffer_busy[index], 0, __ATOMIC_RELEASE);
+}
+
 static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
@@ -118,12 +242,90 @@ static void _video_process(void *cls, raop_ntp_t *ntp, video_decode_struct *data
         LOGE("video packet decryption failed, dropping %d bytes", data->data_len);
         return;
     }
+    int session = _video_session_id(ctx, ntp);
+
+    /* hand the frame over through the app's direct buffer: no jbyteArray
+       allocation and no garbage collection per frame */
+    if (ctx->frame_buffers && ctx->frame_buffer_count > 0) {
+        int idx = _claim_frame_buffer(ctx);
+        if (idx >= 0) {
+            if (data->data_len <= ctx->frame_buffer_capacity) {
+                memcpy(ctx->frame_buffers[idx], data->data, (size_t) data->data_len);
+                /* the app decodes the frame on its own thread and releases the
+                   buffer when it is done with it, so the receive thread does
+                   not wait for the decoder */
+                (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_data_buffer,
+                                       (jint) idx, (jint) data->data_len,
+                                       (jlong) data->ntp_time_local, (jboolean) data->is_h265,
+                                       (jint) session);
+                return;
+            }
+            /* the frame does not fit into the buffer: give it back and copy */
+            android_callbacks_release_frame_buffer(ctx, idx);
+            LOGW("video frame of %d bytes exceeds the %d byte frame buffer, copying it over",
+                 data->data_len, ctx->frame_buffer_capacity);
+        } else {
+            /* every buffer is still in the decoder: the frame is dropped, the
+               decoder picks up again at the next keyframe */
+            ctx->video_frames_dropped++;
+            return;
+        }
+    }
 
     jbyteArray arr = (*env)->NewByteArray(env, data->data_len);
     (*env)->SetByteArrayRegion(env, arr, 0, data->data_len, (jbyte *)data->data);
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_data,
-                           arr, (jlong)data->ntp_time_local, (jboolean)data->is_h265);
+                           arr, (jlong)data->ntp_time_local, (jboolean)data->is_h265,
+                           (jint) session);
     (*env)->DeleteLocalRef(env, arr);
+}
+
+/* the app owns the buffers, so it has to keep them alive while they are in use */
+void android_callbacks_set_frame_buffers(android_callback_ctx_t *ctx, JNIEnv *env,
+                                         jobjectArray buffers, jint capacity) {
+    if (ctx->frame_buffer_refs) {
+        for (int i = 0; i < ctx->frame_buffer_count; i++) {
+            if (ctx->frame_buffer_refs[i]) {
+                (*env)->DeleteGlobalRef(env, ctx->frame_buffer_refs[i]);
+                ctx->frame_buffer_refs[i] = NULL;
+            }
+        }
+        free(ctx->frame_buffer_refs);
+        ctx->frame_buffer_refs = NULL;
+    }
+    free(ctx->frame_buffers);
+    ctx->frame_buffers = NULL;
+    ctx->frame_buffer_count = 0;
+    ctx->frame_buffer_capacity = 0;
+    ctx->frame_buffer_next = 0;
+    if (ctx->frame_buffer_busy) {
+        free(ctx->frame_buffer_busy);
+        ctx->frame_buffer_busy = NULL;
+    }
+    if (!buffers || capacity <= 0) return;
+    jsize count = (*env)->GetArrayLength(env, buffers);
+    if (count <= 0) return;
+    uint8_t **addresses = calloc((size_t) count, sizeof(uint8_t *));
+    jobject *refs = calloc((size_t) count, sizeof(jobject));
+    unsigned char *busy = calloc((size_t) count, sizeof(unsigned char));
+    if (!addresses || !refs || !busy) {
+        free(addresses);
+        free(refs);
+        free(busy);
+        return;
+    }
+    for (jsize i = 0; i < count; i++) {
+        jobject buffer = (*env)->GetObjectArrayElement(env, buffers, i);
+        if (!buffer) continue;
+        refs[i] = (*env)->NewGlobalRef(env, buffer);
+        addresses[i] = (uint8_t *) (*env)->GetDirectBufferAddress(env, buffer);
+        (*env)->DeleteLocalRef(env, buffer);
+    }
+    ctx->frame_buffers = addresses;
+    ctx->frame_buffer_refs = refs;
+    ctx->frame_buffer_busy = busy;
+    ctx->frame_buffer_count = (int) count;
+    ctx->frame_buffer_capacity = (int) capacity;
 }
 
 static void _conn_init(void *cls) {
@@ -176,8 +378,10 @@ static void _video_report_size(void *cls, float *w_src, float *h_src, float *w, 
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
+    int session = _video_session_id_by_thread(ctx);
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_size,
-                           (jfloat)*w_src, (jfloat)*h_src, (jfloat)*w, (jfloat)*h);
+                           (jfloat)*w_src, (jfloat)*h_src, (jfloat)*w, (jfloat)*h,
+                           (jint)session);
 }
 
 static void _display_pin(void *cls, char *pin) {

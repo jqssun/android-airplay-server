@@ -56,6 +56,20 @@ object Prefs {
     const val AUTO = "auto"; const val ON = "on"; const val OFF = "off"
     const val PORTRAIT = "portrait"; const val LANDSCAPE = "landscape"
     const val FALLBACK_MAC_ADDRESS = "fallback_mac_address"
+    // a stream profile bundles the resolution, the frame rate and the codec.
+    // the picture quality comes first, so the profiles give up frame rate
+    // before they give up resolution: 4k30 looks better than 1080p60
+    const val PROFILE_AUTO = "auto"
+    const val PROFILE_4K30 = "4k30"
+    const val PROFILE_4K60 = "4k60"
+    const val PROFILE_1080P60 = "1080p60"
+    const val PROFILE_CUSTOM = "custom"
+    // what the receiver tells the sender it is: the model name and the
+    // feature bits decide which codec the sender uses and how many bits it
+    // spends on the picture
+    const val SENDER_SAFE = "safe"
+    const val SENDER_AIRPLAY2 = "airplay2"
+    const val SENDER_AIRPLAY2_4K = "airplay2_4k"
     val ADAPTIVE_PERCENTILES = intArrayOf(80, 85, 90, 95, 99)
     private val SIZE = Regex("[1-9]\\d{0,4}x[1-9]\\d{0,4}")
 
@@ -99,6 +113,17 @@ object Prefs {
     val SYNC_CLIENT_VOLUME = bool("sync_client_volume", true)
     val RESOLUTION = str("resolution", AUTO, restart = true) { it in setOf(AUTO, PORTRAIT, LANDSCAPE) || SIZE.matches(it) }
     val MAX_FPS = int("max_fps", 60, 1..Int.MAX_VALUE, restart = true)
+    // resolution, frame rate and codec in one setting; the custom profile uses
+    // the resolution, the frame rate and the codec settings below
+    val STREAM_PROFILE = str("stream_profile", PROFILE_AUTO, restart = true) {
+        it in setOf(PROFILE_AUTO, PROFILE_4K30, PROFILE_4K60, PROFILE_1080P60, PROFILE_CUSTOM)
+    }
+    // the identity the receiver tells the sender about: a receiver that
+    // announces itself as an old apple tv gets h264 and a small bitrate
+    // budget, and the picture breaks into blocks
+    val SENDER_PROFILE = str("sender_profile", SENDER_SAFE, restart = true) {
+        it in setOf(SENDER_SAFE, SENDER_AIRPLAY2, SENDER_AIRPLAY2_4K)
+    }
     val OVERSCANNED = bool("overscanned", false, restart = true)
     val REQUIRE_PIN = bool("require_pin", false, restart = true)
     val ALLOW_NEW_CONN = bool("allow_new_conn", true, restart = true)
@@ -112,6 +137,19 @@ object Prefs {
     val ADVERTISE_VIDEO = bool("advertise_video", true, restart = true)
     val ADVERTISE_MIRRORING = bool("advertise_mirroring", true, restart = true)
     val ADVERTISE_AUDIO = bool("advertise_audio", true, restart = true)
+    // dns-sd feature bit 14: lets the sender offer "Use As Separate Display"
+    val SEPARATE_DISPLAY = bool("separate_display", true, restart = true)
+    // physical size of the panel in mm; the sender scales the extended
+    // desktop's ui from it, 0 leaves it unset
+    val DISPLAY_PHYSICAL_WIDTH_MM = int("display_physical_width_mm", 0, 0..10000, restart = true)
+    val DISPLAY_PHYSICAL_HEIGHT_MM = int("display_physical_height_mm", 0, 0..10000, restart = true)
+    // keep the picture's aspect ratio instead of stretching it to the panel
+    val FIT_ASPECT = bool("fit_aspect", true)
+    // log the protocol traffic (setup requests, connection setup) natively
+    val VERBOSE_PROTOCOL_LOG = bool("verbose_protocol_log", false, restart = true)
     val LAUNCH_ON_CONNECT = bool("launch_on_connect", true)
     val USB_ONLY = bool("usb_only", false, restart = true)
+    // hold a wifi lock while the server runs so the radio does not sleep
+    // between beacons; costs battery, which is why it is a setting
+    val WIFI_LOW_LATENCY_LOCK = bool("wifi_low_latency_lock", true, restart = true)
 }

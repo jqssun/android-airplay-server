@@ -38,6 +38,9 @@ import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.changes
 import io.github.jqssun.airplay.get
 import io.github.jqssun.airplay.hasLocalNetwork
+import io.github.jqssun.airplay.net.WifiTuner
+import io.github.jqssun.airplay.net.readUdpErrors
+import io.github.jqssun.airplay.net.readWifiLink
 import io.github.jqssun.airplay.observe
 import io.github.jqssun.airplay.realDisplaySize
 import io.github.jqssun.airplay.audio.DacpController
@@ -78,18 +81,35 @@ data class VideoPlaybackInfo(
 
 class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
-    private var nativeHandle = 0L
+    // the decoder thread reads it to give a frame buffer back
+    @Volatile private var nativeHandle = 0L
     private var nsdManager: NsdServiceManager? = null
     private var usbAdvertiser: UsbMdnsAdvertiser? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var foregroundStarted = false
     private var lastOrientation = Configuration.ORIENTATION_UNDEFINED
 
+    /*
+     * A Service is constructed before attachBaseContext runs, so the context is
+     * a ContextWrapper whose base is still null at this point: anything that
+     * dereferences it (applicationContext, getSystemService, packageManager)
+     * throws a NullPointerException here. Fields that need the context are
+     * therefore lazy, and the classes that take one resolve it on use.
+     * VideoRenderer is safe to build eagerly because it only stores the context.
+     */
     val videoRenderer = VideoRenderer(this)
     val audioRenderer = AudioRenderer()
+    private val wifiTuner by lazy { WifiTuner(this) }
     private val audioManager by lazy { getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     val airPlayVideoPlayer by lazy { AirPlayVideoPlayer(this) }
     val videoDownloader by lazy { VideoDownloader(this) }
+
+    init {
+        // the decoder thread tells the native side that a frame buffer is free again
+        videoRenderer.frameRelease = { index ->
+            if (nativeHandle != 0L) NativeBridge.nativeReleaseFrameBuffer(nativeHandle, index)
+        }
+    }
 
     // hls urls point at the native httpd, valid only while the session lives
     private val _videoLocation = MutableStateFlow<String?>(null)
@@ -109,6 +129,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     private val _videoResolution = MutableStateFlow("")
     val videoResolution = _videoResolution.asStateFlow()
+
+    // geometry advertised to the sender; the extended desktop is built from it
+    private val _advertisedResolution = MutableStateFlow("")
+    val advertisedResolution = _advertisedResolution.asStateFlow()
 
     private val _audioOnly = MutableStateFlow(false)
     val audioOnly = _audioOnly.asStateFlow()
@@ -345,6 +369,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
                 .debounce(SERVER_RESTART_DEBOUNCE_MS)
                 .collect { _restartServer() }
         }
+        lifecycleScope.launch {
+            prefs.observe { this[Prefs.FIT_ASPECT] }.collect {
+                videoRenderer.setFitAspect(it)
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -373,6 +402,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "airplay:server").apply { acquire() }
 
         nsdManager = NsdServiceManager(this).apply { acquireMulticastLock() }
+        // a radio that sleeps between beacons adds jitter the stream cannot get
+        // back; the lock is the one lever an app has here
+        log(wifiTuner.acquire(prefs[Prefs.WIFI_LOW_LATENCY_LOCK]))
+        wifiTuner.scanThrottled()?.let { throttled ->
+            if (throttled) log("Scan throttling is on: scans steal airtime from the stream, switch it off in the device's developer options")
+        }
 
         val hwAddr = getHwAddr()
         val keyFile = filesDir.resolve("airplay.pem").absolutePath
@@ -396,11 +431,46 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         audioRenderer.attachEngine(nativeHandle)
 
         // apply settings from preferences
-        val maxFps = prefs[Prefs.MAX_FPS]
         val overscanned = prefs[Prefs.OVERSCANNED]
         val audioLatencyMs = prefs[Prefs.AUDIO_LATENCY_MS]
-        val (reqW, reqH) = _displaySize(clamp = false)
-        val h265 = videoRenderer.selectDecoders(reqW, reqH, maxFps, Prefs.forced(prefs[Prefs.H265]))
+        // the identity the receiver tells the sender about: the model name
+        // and the feature bits are what the sender reads to pick the codec
+        // and the bitrate budget it uses for the picture
+        val sender = _senderProfile()
+        NativeBridge.nativeSetReceiverModel(nativeHandle, sender.model)
+        NativeBridge.nativeSetPlist(nativeHandle, "infoFeatures", sender.infoFeatures)
+        NativeBridge.nativeSetPlist(nativeHandle, "displayFeatures", sender.displayFeatures)
+        // the size comes first: the frame rate and the codec follow it
+        var (reqW, reqH) = _displaySize(clamp = false)
+        var maxFps = _profileFps(reqW, reqH)
+        // the decoders: the hevc one is picked whenever the tv has a safe
+        // one, so a stream that arrives as hevc can be decoded even when the
+        // sender was not asked for it. what the sender is *told* is decided
+        // below, by the size.
+        var hevcReady = videoRenderer.selectDecoders(reqW, reqH, maxFps, Prefs.forced(prefs[Prefs.H265]))
+        // the 4k profile is only worth anything with hevc: without it the
+        // sender spreads the same small budget over four times the pixels,
+        // and the picture breaks into blocks. so it falls back to the panel's
+        // own size, where the same budget buys four times the detail.
+        if (!hevcReady && _senderProfile().forceH265) {
+            val (pw, ph) = _displaySize(clamp = false, allowForced = false)
+            log("The tv has no hevc decoder for ${reqW}x${reqH}: the picture is sent in the panel's size ${pw}x${ph}")
+            reqW = pw
+            reqH = ph
+            maxFps = _profileFps(reqW, reqH)
+            hevcReady = videoRenderer.selectDecoders(reqW, reqH, maxFps, Prefs.forced(prefs[Prefs.H265]))
+        }
+        // the size the sender is told about, clamped to what the decoder can
+        // decode: the decoders are picked now, so their caps are known
+        val (w, h) = _displaySize()
+        // the feature bit 42: it tells the sender that it may send a picture
+        // above 1080p at all. it follows the size the sender is told about,
+        // so a 1080p panel does not get a 4k mirror. only the setting says
+        // otherwise - and a tv without an hevc decoder never gets the bit.
+        val h265 = hevcReady && _profileH265(w, h)
+        if (Prefs.forced(prefs[Prefs.H265]) == true && !hevcReady) {
+            log("The tv has no hevc decoder: the sender is told about h264 only")
+        }
         val alac = prefs[Prefs.ALAC_ENABLED]
         val aac = prefs[Prefs.AAC_ENABLED]
 
@@ -410,28 +480,62 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         videoRenderer.benchmarkLog = prefs[Prefs.BENCHMARK_LOG]
         videoRenderer.benchmarkLogCallback = { msg -> logCallback?.invoke(msg) }
         videoRenderer.scheduledOutputBufferRelease = prefs[Prefs.SCHEDULED_OUTPUT_BUFFER_RELEASE]
+        videoRenderer.setFitAspect(prefs[Prefs.FIT_ASPECT])
         NativeBridge.nativeSetH265Enabled(nativeHandle, h265)
         NativeBridge.nativeSetCodecs(nativeHandle, alac, aac)
         val advertiseVideo = prefs[Prefs.ADVERTISE_VIDEO]
         val advertiseMirroring = prefs[Prefs.ADVERTISE_MIRRORING]
         val advertiseAudio = prefs[Prefs.ADVERTISE_AUDIO]
+        val separateDisplay = prefs[Prefs.SEPARATE_DISPLAY]
         NativeBridge.nativeSetHlsEnabled(nativeHandle, advertiseVideo)
         NativeBridge.nativeSetLang(nativeHandle, ConfigurationCompat.getLocales(resources.configuration).toLanguageTags().replace(',', ':'))
         NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_MIRROR, advertiseMirroring)
         NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_AUDIO, advertiseAudio)
-        NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", maxFps)
+        NativeBridge.nativeSetFeature(nativeHandle, NativeBridge.FT_SEPARATE_DISPLAY, separateDisplay)
         NativeBridge.nativeSetPlist(nativeHandle, "overscanned", if (overscanned) 1 else 0)
         if (audioLatencyMs >= 0) {
             NativeBridge.nativeSetPlist(nativeHandle, "audio_delay_micros", audioLatencyMs * 1000)
         }
+        // the protocol diagnostics (setup requests, connection setup) are only
+        // logged at debug level
+        if (prefs[Prefs.VERBOSE_PROTOCOL_LOG]) {
+            NativeBridge.nativeSetLogLevel(nativeHandle, NativeBridge.LOG_LEVEL_DEBUG)
+        }
 
         // set display params
         lastOrientation = resources.configuration.orientation
-        val (w, h) = _displaySize()
         videoRenderer.setResolution(w, h)
         _videoResolution.value = "${w}x${h}"
         _videoAspect.value = w.toFloat() / h
-        NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, maxFps)
+        // the advertised frame rate has to be one the decoder can sustain at
+        // this size: a 4k30 decoder asked for 4k60 drops frames instead of
+        // decoding them, and a dropped frame in an extended desktop is a
+        // visible stutter. the size is already clamped to the decoder's cap.
+        val decoderFpsCap = videoRenderer.maxFpsAt(w, h)
+        val fps = if (decoderFpsCap in 1 until maxFps) decoderFpsCap else maxFps
+        videoRenderer.setMaxFps(fps)
+        NativeBridge.nativeSetPlist(nativeHandle, "maxFPS", fps)
+        NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, fps)
+        _setupFrameBuffers()
+        // the sender builds the extended desktop from this geometry, so it has
+        // to be the panel's native resolution to avoid an upscaled desktop
+        _advertisedResolution.value = "${w}x${h}@${fps}"
+        val (panelW, panelH) = _panelSize()
+        val (maxW, maxH) = videoRenderer.maxResolution()
+        log("Advertising display ${w}x${h}@${fps} (panel ${panelW}x${panelH}, decoder limit ${maxW}x${maxH}, profile ${prefs[Prefs.STREAM_PROFILE]})")
+        val asked = _profileResolution()
+        if (asked.contains("x") && asked != "${w}x${h}") {
+            log("The profile asks for ${asked}, the panel shows ${panelW}x${panelH}: the picture is sent in the panel's own size")
+        }
+        if (decoderFpsCap in 1 until maxFps) {
+            log("Frame rate clamped to ${decoderFpsCap}fps: the decoder cannot sustain ${maxFps}fps at ${w}x${h}")
+        }
+
+        // physical panel size, lets the sender scale the extended desktop's ui
+        val physW = prefs[Prefs.DISPLAY_PHYSICAL_WIDTH_MM]
+        val physH = prefs[Prefs.DISPLAY_PHYSICAL_HEIGHT_MM]
+        if (physW > 0) NativeBridge.nativeSetPlist(nativeHandle, "displayPhysicalWidth", physW)
+        if (physH > 0) NativeBridge.nativeSetPlist(nativeHandle, "displayPhysicalHeight", physH)
 
         val requestedPort = prefs[Prefs.SERVER_PORT]
         val port = NativeBridge.nativeStart(nativeHandle, requestedPort)
@@ -444,6 +548,16 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         // register mdns services
         val raopTxt = NativeBridge.nativeGetRaopTxtRecords(nativeHandle) ?: emptyMap()
         val airplayTxt = NativeBridge.nativeGetAirplayTxtRecords(nativeHandle) ?: emptyMap()
+        // the feature bits are what the sender reads to decide what it may
+        // send: log them, so the log shows what was on the wire
+        log("Advertised features: ft=${raopTxt["ft"] ?: "?"} features=${airplayTxt["features"] ?: "?"} " +
+            "hevc(bit 42)=${if (h265) "on" else "off"}")
+        // everything the sender was told about, in one line: the identity it
+        // reads to pick the codec and the bitrate budget, and the geometry
+        log("The sender is told: model=${sender.model} /info features=${sender.infoFeaturesHex(h265)} " +
+            "displays[0].features=${sender.displayFeatures} size=${w}x${h}@${fps} maxFPS=$fps " +
+            "hevc(bit 42)=${if (h265) "on" else "off"} profile=${prefs[Prefs.STREAM_PROFILE]} " +
+            "sender=${sender.name}")
         val raopName = NativeBridge.nativeGetRaopServiceName(nativeHandle) ?: "AirPlay"
         val resolvedName = NativeBridge.nativeGetServerName(nativeHandle) ?: effectiveName
 
@@ -468,25 +582,91 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     private fun _orientationFollowsDevice(): Boolean =
-        prefs[Prefs.RESOLUTION] == Prefs.AUTO
+        _profileResolution() == Prefs.AUTO
 
-    private fun _displaySize(clamp: Boolean = true): Pair<Int, Int> {
-        val res = prefs[Prefs.RESOLUTION]
+    // the stream profile bundles the resolution, the frame rate and the codec.
+    // the picture quality comes first: the profiles give up frame rate before
+    // they give up resolution, because 4k30 looks better than 1080p60
+    private fun _profileResolution(): String = StreamProfile.resolution(
+        prefs[Prefs.STREAM_PROFILE], prefs[Prefs.RESOLUTION]
+    )
+
+    private fun _profileFps(w: Int, h: Int): Int {
+        val sender = _senderProfile()
+        // the frame rate of the sender profile belongs to the size it asks
+        // for: at the panel's own size the panel's rate is the right one
+        val forced = sender.size
+        if (sender.fps != null && forced != null && w == forced.first && h == forced.second) {
+            return sender.fps
+        }
+        return StreamProfile.fps(
+            prefs[Prefs.STREAM_PROFILE], prefs[Prefs.MAX_FPS], w, h
+        )
+    }
+
+    // the identity the receiver tells the sender about
+    private fun _senderProfile(): SenderProfile =
+        SenderProfile.forName(prefs[Prefs.SENDER_PROFILE])
+
+    // hevc needs about half the airtime of h264 for the same quality, which is
+    // what keeps a weak link from retransmitting
+    //
+    // the dns-sd feature bit 42 is set together with it, and that bit is what
+    // tells the sender that it may send 4k at all. on a 1080p panel it would
+    // make the sender push a 4k mirror that the panel cannot show: four times
+    // the pixels, four times the decode work and no gain in the picture. so
+    // hevc follows the size the sender is told about, and only the setting
+    // says otherwise.
+    private fun _profileH265(w: Int, h: Int): Boolean {
+        val sender = _senderProfile()
+        // the hevc capability of the sender profile belongs to the size it
+        // asks for: at the panel's own size the panel is the cap again
+        val forced = sender.size
+        if (sender.forceH265 && forced != null && w == forced.first && h == forced.second) {
+            return true
+        }
+        return StreamProfile.hevc(
+            prefs[Prefs.H265], w, h
+        )
+    }
+
+    /* the panel in the orientation the picture is shown in */
+    private fun _panelSize(): Pair<Int, Int> {
+        val res = _profileResolution()
         val portrait = when (res) {
             Prefs.PORTRAIT -> true
             Prefs.LANDSCAPE -> false
             else -> resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
         }
         val (rawW, rawH) = realDisplaySize()
-        val device = if (portrait != rawH >= rawW) rawH to rawW else rawW to rawH
+        return if (portrait != rawH >= rawW) rawH to rawW else rawW to rawH
+    }
+
+    private fun _displaySize(clamp: Boolean = true, allowForced: Boolean = true): Pair<Int, Int> {
+        val res = _profileResolution()
+        val device = _panelSize()
+        // the sender profile can ask for a size above the panel's own: the tv
+        // downscales it, and the sender spends more bits on the picture
+        val forced = if (allowForced) _senderProfile().size else null
+        if (forced != null) {
+            if (!clamp) return forced
+            val (maxW, maxH) = videoRenderer.maxResolution()
+            return StreamProfile.fit(forced.first, forced.second, maxW, maxH)
+        }
         if (res == Prefs.PORTRAIT || res == Prefs.LANDSCAPE) return device
         val (w, h) = if (res.contains("x")) {
             res.split("x").let { it[0].toInt() to it[1].toInt() }
         } else device
-        if (!clamp) return w to h
+        // the panel is the cap: a size the panel cannot show makes the sender
+        // spread its bits over pixels nobody sees, and the picture breaks into
+        // blocks as soon as it changes. the custom profile is the user's own
+        // decision and is taken as it is.
+        val (panelW, panelH) = if (prefs[Prefs.STREAM_PROFILE] == Prefs.PROFILE_CUSTOM) w to h
+        else StreamProfile.fit(w, h, device.first, device.second)
+        if (!clamp) return panelW to panelH
         // strict decoders black-screen past their limits; advertised size is only upper bound for senders
         val (maxW, maxH) = videoRenderer.maxResolution()
-        return w.coerceAtMost(maxW) to h.coerceAtMost(maxH)
+        return StreamProfile.fit(panelW, panelH, maxW, maxH)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -496,11 +676,12 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         if (nativeHandle == 0L || _serverState.value != ServerState.RUNNING) return
         if (!_orientationFollowsDevice()) return
         val (w, h) = _displaySize()
-        NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, prefs[Prefs.MAX_FPS])
+        NativeBridge.nativeSetDisplaySize(nativeHandle, w, h, _profileFps(w, h))
         log("Advertising ${w}x${h} from next session")
     }
 
     private fun _failStart() {
+        wifiTuner.release()
         audioRenderer.detachEngine()
         if (nativeHandle != 0L) {
             NativeBridge.nativeDestroy(nativeHandle)
@@ -538,6 +719,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             NativeBridge.nativeDestroy(nativeHandle)
             nativeHandle = 0L
         }
+        wifiTuner.release()
         dacpController?.reset()
         usbAdvertiser?.stop()
         usbAdvertiser = null
@@ -643,8 +825,112 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     // RaopCallbackHandler (called from native threads)
 
-    override fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
-        videoRenderer.feedFrame(data, ntpTimeNs, isH265)
+    override fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean, session: Int) {
+        if (!_acceptSession(session)) return
+        // the decode runs on its own thread, the receive thread does not wait
+        videoRenderer.enqueueFrame(data, ntpTimeNs, isH265)
+    }
+
+    override fun onVideoDataBuffer(index: Int, size: Int, ntpTimeNs: Long, isH265: Boolean, session: Int) {
+        val buf = _frameBuffers?.getOrNull(index)
+        if (buf == null) {
+            NativeBridge.nativeReleaseFrameBuffer(nativeHandle, index)
+            return
+        }
+        if (!_acceptSession(session)) {
+            // the frame is not shown, but the buffer has to be given back
+            NativeBridge.nativeReleaseFrameBuffer(nativeHandle, index)
+            return
+        }
+        videoRenderer.enqueueFrame(index, buf, size, ntpTimeNs, isH265)
+    }
+
+    /* The sender can run a mirror and an extended display at the same time,
+       each in its own session. Only one of them can be shown on the panel, so
+       the frames of the other sessions are dropped instead of corrupting the
+       picture. A session that just appeared is the newer one (the sender
+       switched to the extended display) and takes the panel over; a session
+       that was shown before only takes over when the current one went quiet. */
+    private class _VideoSession {
+        var lastFrameMs = 0L
+        var suppressedUntilMs = 0L
+    }
+
+    @Volatile private var _activeVideoSession = 0
+    private val _videoSessionStates = mutableMapOf<Int, _VideoSession>()
+
+    private val _videoSessionCount = MutableStateFlow(0)
+    val videoSessionCount = _videoSessionCount.asStateFlow()
+
+    private fun _clearVideoSessions() {
+        synchronized(_videoSessionStates) {
+            _videoSessionStates.clear()
+            _activeVideoSession = 0
+            _videoSessionCount.value = 0
+        }
+    }
+
+    /* returns true when the frame belongs to the session that is shown */
+    private fun _acceptSession(session: Int): Boolean {
+        if (session <= 0) return true
+        val now = android.os.SystemClock.elapsedRealtime()
+        var isNew = false
+        var state: _VideoSession
+        synchronized(_videoSessionStates) {
+            var s = _videoSessionStates[session]
+            if (s == null) {
+                s = _VideoSession()
+                _videoSessionStates[session] = s
+                isNew = true
+            }
+            state = s
+            state.lastFrameMs = now
+            // forget the sessions that have been gone for a while
+            _videoSessionStates.entries.removeAll { it.value.lastFrameMs < now - SESSION_TIMEOUT_MS }
+            _videoSessionCount.value = _videoSessionStates.size
+        }
+        if (session == _activeVideoSession) return true
+        if (now < state.suppressedUntilMs) return false
+        if (!isNew) {
+            // the session was shown before: it only gets the panel back when
+            // the session that is shown now has gone quiet
+            val active = _activeVideoSession
+            val activeState = synchronized(_videoSessionStates) { _videoSessionStates[active] }
+            val activeQuiet = activeState == null || now - activeState.lastFrameMs > SESSION_SWITCH_MS
+            if (!activeQuiet) return false
+        }
+        _takeOverSession(session, now)
+        return true
+    }
+
+    private fun _takeOverSession(session: Int, now: Long) {
+        val previous = _activeVideoSession
+        if (previous == session) return
+        synchronized(_videoSessionStates) {
+            // keep the loser quiet for a moment, otherwise the two sessions
+            // would take the panel over from each other in turns
+            _videoSessionStates[previous]?.suppressedUntilMs = now + SESSION_SWITCH_MS
+            _videoSessionStates[session]?.suppressedUntilMs = now + SESSION_SWITCH_MS
+            _activeVideoSession = session
+        }
+        log("Display session $session takes over from $previous")
+        // the new session has its own geometry and its own keyframes
+        videoRenderer.resetSession()
+    }
+
+    // direct buffers the native side writes the frames into; keeping them
+    // here avoids allocating a byte array for every frame
+    private var _frameBuffers: Array<java.nio.ByteBuffer>? = null
+
+    private fun _setupFrameBuffers() {
+        if (nativeHandle == 0L) return
+        val capacity = FRAME_BUFFER_SIZE
+        val buffers = Array(FRAME_BUFFER_COUNT) {
+            java.nio.ByteBuffer.allocateDirect(capacity).order(java.nio.ByteOrder.nativeOrder())
+        }
+        _frameBuffers = buffers
+        NativeBridge.nativeSetFrameBuffers(nativeHandle, buffers, capacity)
+        Log.i(TAG, "frame buffers: ${buffers.size} x ${capacity / 1024}k")
     }
 
     override fun onVideoSessionPoll() {
@@ -688,8 +974,14 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         log("Audio format: ct=$ct spf=$spf screen=$usingScreen")
     }
 
-    override fun onVideoSize(srcW: Float, srcH: Float, w: Float, h: Float) {
+    override fun onVideoSize(srcW: Float, srcH: Float, w: Float, h: Float, session: Int) {
         clearPin()
+        // a size report from a session that is not shown would resize the
+        // decoder of the session that is
+        if (session > 0 && !_acceptSession(session)) {
+            log("Video size ${w.toInt()}x${h.toInt()} from session $session ignored")
+            return
+        }
         if (w > 0 && h > 0) {
             _videoAspect.value = w / h
             _videoResolution.value = "${w.toInt()}x${h.toInt()}"
@@ -816,6 +1108,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             _durationMs.value = 0
             dacpController?.reset()
             _clientVol = null
+            _clearVideoSessions()
             _mainHandler.post {
                 _clientVolDriveEnd()
                 if (_serverPreZeroIdx >= 0) {
@@ -1015,12 +1308,15 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         videoBitrate = videoRenderer.bitrateBps,
         videoFrames = videoRenderer.frameCount,
         droppedFrames = videoRenderer.droppedFrames,
+        queueDrops = videoRenderer.droppedByQueue,
         framePacingJitterUs = videoRenderer.framePacingJitterUs,
         audioCodec = audioRenderer.codecLabel,
         serverVolume = 100 * audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) / _serverVolMax(),
         clientVolume = (100 * clientVolume()).roundToInt(),
         audio = audioRenderer.audioDebug(),
         connections = _connectionCount.value,
+        link = readWifiLink(this),
+        udpErrors = readUdpErrors(),
     )
 
     // helpers
@@ -1193,6 +1489,17 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
         private const val AUDIO_CONFIG_DEBOUNCE_MS = 500L
         private const val SERVER_RESTART_DEBOUNCE_MS = 500L
+
+        // ring of direct frame buffers handed over to the native decoder:
+        // uxplay hands over one access unit per callback and its length field
+        // is 16 bit, so the buffers stay small
+        private const val FRAME_BUFFER_COUNT = 6
+        private const val FRAME_BUFFER_SIZE = 1024 * 1024
+
+        // how long a display session may stay quiet before another one gets
+        // the panel, and when a session is forgotten completely
+        private const val SESSION_SWITCH_MS = 1000L
+        private const val SESSION_TIMEOUT_MS = 30_000L
 
         // airplay volume is linear in dB along sender slider
         private fun _dbToFrac(db: Float) = if (db <= -144f) 0f else ((db + 30f) / 30f).coerceIn(0f, 1f)

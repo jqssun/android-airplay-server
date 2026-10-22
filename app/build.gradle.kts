@@ -79,6 +79,14 @@ android {
         includeInBundle = false
     }
 
+    testOptions {
+        unitTests {
+            // the framework stubs do nothing, which is what a context that is not
+            // attached yet looks like anyway
+            isReturnDefaultValues = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -107,11 +115,36 @@ tasks.register("applyUxplayPatches") {
     }
 }
 
+// the bundled openssl-cmake mirror (mirror.viaduck.org) now serves an auth page
+// instead of the tarball, which breaks the native build; patch it to the
+// official openssl release assets
+tasks.register("applyOpensslPatches") {
+    doLast {
+        fun git(vararg args: String): String {
+            val proc = ProcessBuilder("git", "-C", "$projectDir/src/main/cpp/third_party/openssl-cmake", *args)
+                .redirectErrorStream(true).start()
+            val out = proc.inputStream.bufferedReader().readText()
+            check(proc.waitFor() == 0) { "git ${args.joinToString(" ")} failed:\n$out" }
+            return out
+        }
+        val patches = file("src/main/cpp/patches/OpenSSL").listFiles { f -> f.extension == "patch" }!!.sorted()
+        val touched = patches.flatMap { git("apply", "--numstat", it.path).trim().lines() }
+            .map { it.substringAfterLast("\t") }.distinct()
+        git("checkout", "--", *touched.toTypedArray())
+        patches.forEach { git("apply", "--unidiff-zero", it.path) }
+    }
+}
+
 tasks.configureEach {
-    if (name.startsWith("configureCMake")) dependsOn("applyUxplayPatches")
+    if (name.startsWith("configureCMake")) {
+        dependsOn("applyUxplayPatches")
+        dependsOn("applyOpensslPatches")
+    }
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime)

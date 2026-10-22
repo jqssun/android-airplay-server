@@ -1,0 +1,24 @@
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+index 586f61e..69358bb 100644
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -88,6 +88,19 @@ http_handler_server_info(raop_conn_t *conn, http_request_t *request, http_respon
+     plist_t device_id_node = plist_new_string(hw_addr);
+     plist_dict_set_item(r_node, "deviceid", device_id_node);
+ 
++    /* the size of the panel the receiver draws on. the sender reads it to
++       decide how large a mirror it may send: without it the sender falls
++       back to its own idea of what the receiver can take and may push a 4k
++       mirror onto a 1080p panel */
++    plist_t width_node = plist_new_uint(raop->width);
++    plist_dict_set_item(r_node, "width", width_node);
++
++    plist_t height_node = plist_new_uint(raop->height);
++    plist_dict_set_item(r_node, "height", height_node);
++
++    plist_t max_fps_node = plist_new_uint(raop->maxFPS);
++    plist_dict_set_item(r_node, "maxFPS", max_fps_node);
++
+     plist_to_xml(r_node, response_data, (uint32_t *) response_datalen);
+ 
+     //assert(*response_datalen == strlen(*response_data));

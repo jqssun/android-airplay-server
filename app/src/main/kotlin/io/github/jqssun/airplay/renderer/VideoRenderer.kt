@@ -4,9 +4,14 @@ import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.Build
+import android.os.Process
 import android.util.Log
 import android.view.Surface
 import io.github.jqssun.airplay.renderer.DecoderSelector.Companion.videoCaps
+import java.nio.ByteBuffer
+import java.util.Locale
+import java.util.concurrent.ArrayBlockingQueue
 
 class VideoRenderer(ctx: Context) {
 
@@ -22,6 +27,28 @@ class VideoRenderer(ctx: Context) {
     private var videoWidth = 0
     private var videoHeight = 0
     private var firstFrameQueued = false
+
+    /* The frames are decoded on their own thread. The thread that receives
+       them must not wait for the decoder: a 4k frame takes 3-8 ms to decode and
+       during that time the socket is not drained, so the tcp window closes and
+       the sender stalls (a freeze of the whole picture). */
+    private val _pending = ArrayBlockingQueue<PendingFrame>(PENDING_CAPACITY)
+    private val _decodeLock = Object()
+    private var _decodeThread: Thread? = null
+    @Volatile private var _decodeRunning = false
+    /* tells the app that the frame buffer can be filled again */
+    var frameRelease: ((Int) -> Unit)? = null
+    /* frames that were dropped because the decoder could not keep up */
+    @Volatile var droppedByQueue = 0L; private set
+
+    private class PendingFrame(
+        val index: Int,
+        val data: ByteBuffer?,
+        val bytes: ByteArray?,
+        val size: Int,
+        val ntpTimeNs: Long,
+        val isH265: Boolean,
+    )
 
     // stats
     @Volatile var fps = 0; private set
@@ -53,6 +80,13 @@ class VideoRenderer(ctx: Context) {
         videoHeight = h
         pipeline.setVideoSize(w, h)
         stopCodec()
+        // the picture on the panel belongs to the old size, it must not stay
+        pipeline.clear()
+    }
+
+    // keep the picture's aspect ratio instead of stretching it to the panel
+    fun setFitAspect(fit: Boolean) {
+        pipeline.fitAspect = fit
     }
 
     // doesn't restart codec; decoder renders into pipeline's own persistent surface
@@ -75,23 +109,68 @@ class VideoRenderer(ctx: Context) {
         hevcDecoder != null
     }
 
+    // the decoder may be asked for more frames than it can sustain at the
+    // advertised size: a decoder that tops out at 4k30 cannot keep up with a
+    // 4k60 stream and drops frames instead of decoding them. the frame rate
+    // the codec reports as achievable at that size is the honest limit.
+    // 0 means the codec did not tell us, in which case nothing is clamped.
+    fun maxFpsAt(w: Int, h: Int): Int = synchronized(lock) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@synchronized 0
+        val decoder = hevcDecoder?.let { it to DecoderSelector.HEVC }
+            ?: avcDecoder?.let { it to DecoderSelector.AVC }
+            ?: return@synchronized 0
+        val caps = runCatching { decoder.first.videoCaps(decoder.second) }.getOrNull()
+            ?: return@synchronized 0
+        // some decoders only report the limit for the other orientation
+        val sizes = if (w < h) listOf(w to h, h to w) else listOf(w to h)
+        for ((cw, ch) in sizes) {
+            val upper = runCatching { caps.getAchievableFrameRatesFor(cw, ch)?.upper?.toInt() }
+                .getOrNull() ?: continue
+            if (upper <= 0) continue
+            // trust the range only when the codec confirms the rate at this size
+            val confirmed = runCatching { caps.areSizeAndRateSupported(cw, ch, upper.toDouble()) }
+                .getOrDefault(false)
+            if (confirmed) return@synchronized upper
+        }
+        0
+    }
+
+    // the frame rate the decoder is configured with has to match the rate the
+    // sender was told about, otherwise the codec runs at the wrong rate
+    fun setMaxFps(fps: Int) = synchronized(lock) { maxFps = fps }
+
     // unknown limits default to 1080p
-    fun maxResolution(): Pair<Int, Int> =
-        listOfNotNull(avcDecoder?.let { it to DecoderSelector.AVC }, hevcDecoder?.let { it to DecoderSelector.HEVC })
-            .map { (info, mime) ->
-                runCatching { info.videoCaps(mime).let { it.supportedWidths.upper to it.supportedHeights.upper } }
-                    .getOrDefault(1920 to 1080)
-            }
-            .reduceOrNull { (w1, h1), (w2, h2) -> minOf(w1, w2) to minOf(h1, h2) } ?: (1920 to 1080)
+    // the sender picks the codec from the advertised features: with h265
+    // advertised (dns-sd feature bit 42) macos prefers hevc for resolutions
+    // beyond h264 limits, so the hevc caps bound the advertised size.
+    // taking the smaller of both caps would advertise 1080p on tv sets whose
+    // h264 decoder is limited while the hevc one handles 4k, and the extended
+    // desktop would then be upscaled by the sender
+    fun maxResolution(): Pair<Int, Int> {
+        val decoder = hevcDecoder?.let { it to DecoderSelector.HEVC }
+            ?: avcDecoder?.let { it to DecoderSelector.AVC }
+            ?: return 1920 to 1080
+        return runCatching {
+            decoder.first.videoCaps(decoder.second).let { it.supportedWidths.upper to it.supportedHeights.upper }
+        }.getOrDefault(1920 to 1080)
+    }
 
     // codec per mirror session; pipeline persists across sessions
     fun startSession() = synchronized(lock) { _resetStats() }
 
-    fun stopSession() = synchronized(lock) { stopCodec() }
+    fun stopSession() {
+        // the queued frames belong to a session that is gone
+        _clearPending()
+        synchronized(lock) {
+            stopCodec()
+            // the picture on the panel is gone with the session
+            pipeline.clear()
+        }
+    }
 
     private fun _resetStats() {
         fps = 0; bitrateBps = 0; frameCount = 0; codecName = ""
-        droppedFrames = 0; framePacingJitterUs = 0
+        droppedFrames = 0; framePacingJitterUs = 0; droppedByQueue = 0
         _framesThisSec = 0; _bytesThisSec = 0
     }
 
@@ -112,22 +191,127 @@ class VideoRenderer(ctx: Context) {
     }
 
     private fun _emitBenchmarkLine() {
+        // the bits per pixel per frame are what the picture quality is made
+        // of: too few and the picture breaks into blocks as soon as the
+        // screen changes, no matter how many frames per second arrive
+        val pixels = videoWidth.toLong() * videoHeight
+        val bytesPerFrame = if (fps > 0 && pixels > 0) bitrateBps / 8.0 / fps else 0.0
+        val bpp = if (pixels > 0) bytesPerFrame * 8.0 / pixels else 0.0
         val msg = "fps=$fps bitrate=${bitrateBps / 1000}kbps " +
             "jitter=${framePacingJitterUs}us frames=$frameCount " +
-            "dropped=$droppedFrames codec=$codecName " +
-            "res=${videoWidth}x${videoHeight}"
+            "dropped=$droppedFrames queuedropped=$droppedByQueue codec=$codecName " +
+            "res=${videoWidth}x${videoHeight} " +
+            "kB/frame=${(bytesPerFrame / 1024.0).toInt()} " +
+            "bpp=${String.format(Locale.US, "%.4f", bpp)} " +
+            "quality=${_quality(bpp)}"
         Log.i(BENCH_TAG, msg)
         benchmarkLogCallback?.invoke(msg)
     }
 
+    /* the picture quality from the bits per pixel per frame. hevc needs
+     * about half as many bits for the same picture, so its scale is lower. */
+    private fun _quality(bpp: Double): String {
+        if (bpp <= 0.0) return "none"
+        val h265 = codecName.startsWith("H.265")
+        val clean = if (h265) 0.08 else 0.15
+        val good = if (h265) 0.04 else 0.08
+        val soft = if (h265) 0.015 else 0.03
+        return when {
+            bpp >= clean -> "clean"
+            bpp >= good -> "good"
+            bpp >= soft -> "soft"
+            else -> "blocky"
+        }
+    }
+
     fun feedFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
+        feedFrameBuffer(ByteBuffer.wrap(data), data.size, ntpTimeNs, isH265)
+    }
+
+    /* Hands a frame over to the decoder thread. The caller (the thread that
+       receives the frames) returns immediately, it does not wait for the
+       decoder. */
+    fun enqueueFrame(index: Int, data: ByteBuffer, size: Int, ntpTimeNs: Long, isH265: Boolean) {
+        _enqueue(PendingFrame(index, data, null, size, ntpTimeNs, isH265))
+    }
+
+    fun enqueueFrame(data: ByteArray, ntpTimeNs: Long, isH265: Boolean) {
+        _enqueue(PendingFrame(-1, null, data, data.size, ntpTimeNs, isH265))
+    }
+
+    private fun _enqueue(frame: PendingFrame) {
+        _startDecoder()
+        if (_pending.offer(frame)) return
+        /* the decoder cannot keep up: the oldest frame goes, so the delay
+           stays small instead of growing without end */
+        val dropped = _pending.poll()
+        if (dropped != null) {
+            droppedByQueue++
+            _releaseFrame(dropped)
+        }
+        if (!_pending.offer(frame)) {
+            droppedByQueue++
+            _releaseFrame(frame)
+        }
+    }
+
+    private fun _releaseFrame(frame: PendingFrame) {
+        if (frame.index < 0) return
+        frameRelease?.invoke(frame.index)
+    }
+
+    private fun _startDecoder() {
+        synchronized(_decodeLock) {
+            if (_decodeThread != null) return
+            _decodeRunning = true
+            _decodeThread = Thread({
+                // the decoder is on the critical path of the picture
+                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY)
+                while (_decodeRunning) {
+                    val frame = try {
+                        _pending.take()
+                    } catch (e: InterruptedException) {
+                        break
+                    }
+                    try {
+                        if (frame.data != null) {
+                            feedFrameBuffer(frame.data, frame.size, frame.ntpTimeNs, frame.isH265)
+                        } else if (frame.bytes != null) {
+                            feedFrame(frame.bytes, frame.ntpTimeNs, frame.isH265)
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "decode failed", e)
+                    } finally {
+                        _releaseFrame(frame)
+                    }
+                }
+            }, "VideoDecode").also { it.start() }
+        }
+    }
+
+    /* stops the decoder thread and gives the queued frames back */
+    private fun _stopDecoder() {
+        val thread = synchronized(_decodeLock) {
+            _decodeRunning = false
+            _decodeThread.also { _decodeThread = null }
+        }
+        thread?.interrupt()
+        thread?.join(500)
+        while (true) {
+            val frame = _pending.poll() ?: break
+            _releaseFrame(frame)
+        }
+    }
+
+    // the frame data is read-only for us; the buffer is owned by the caller
+    fun feedFrameBuffer(data: ByteBuffer, size: Int, ntpTimeNs: Long, isH265: Boolean) {
         synchronized(lock) {
-            _updateStats(data.size)
+            _updateStats(size)
             if (videoWidth == 0 || videoHeight == 0) return
 
             if (codec == null || isH265 != currentH265) {
                 // a stale reference frame decodes to corruption, so wait for a keyframe to (re)start
-                if (!_isKeyframe(data, isH265)) {
+                if (!_isKeyframe(data, size, isH265)) {
                     if (codec != null) stopCodec()
                     return
                 }
@@ -136,7 +320,7 @@ class VideoRenderer(ctx: Context) {
 
             try {
                 if (codec == null) startCodec(isH265)
-                _feedToCodec(data, ntpTimeNs)
+                _feedToCodec(data, size, ntpTimeNs)
                 drainOutput()
             } catch (e: Exception) {
                 Log.w(TAG, "Codec error, resetting", e)
@@ -145,7 +329,7 @@ class VideoRenderer(ctx: Context) {
         }
     }
 
-    private fun _feedToCodec(data: ByteArray, ntpTimeNs: Long) {
+    private fun _feedToCodec(data: ByteBuffer, size: Int, ntpTimeNs: Long) {
         val c = codec ?: return
         // dropping a frame desyncs decoder until the next keyframe, but source would only send one on (re)connect
         val retries = if (firstFrameQueued) FEED_RETRIES else FIRST_FEED_RETRIES
@@ -154,8 +338,14 @@ class VideoRenderer(ctx: Context) {
             if (idx >= 0) {
                 val buf = c.getInputBuffer(idx) ?: return
                 buf.clear()
+                val pos = data.position()
+                val lim = data.limit()
+                data.position(0)
+                data.limit(size)
                 buf.put(data)
-                c.queueInputBuffer(idx, 0, data.size, ntpTimeNs / 1000, 0)
+                data.position(pos)
+                data.limit(lim)
+                c.queueInputBuffer(idx, 0, size, ntpTimeNs / 1000, 0)
                 firstFrameQueued = true
                 return
             }
@@ -165,17 +355,17 @@ class VideoRenderer(ctx: Context) {
         Log.w(TAG, "Decoder input queue full; dropping frame. drops=$droppedFrames")
     }
 
-    private fun _isKeyframe(data: ByteArray, isH265: Boolean): Boolean {
-        if (data.size < 5) return false
+    private fun _isKeyframe(data: ByteBuffer, size: Int, isH265: Boolean): Boolean {
+        if (size < 5) return false
         var i = 0
-        while (i <= data.size - 5) {
-            if (data[i] == 0.toByte() && data[i + 1] == 0.toByte() &&
-                data[i + 2] == 0.toByte() && data[i + 3] == 1.toByte()) {
+        while (i <= size - 5) {
+            if (data.get(i) == 0.toByte() && data.get(i + 1) == 0.toByte() &&
+                data.get(i + 2) == 0.toByte() && data.get(i + 3) == 1.toByte()) {
                 val key = if (isH265) {
-                    val type = (data[i + 4].toInt() shr 1) and 0x3F
+                    val type = (data.get(i + 4).toInt() shr 1) and 0x3F
                     type == 19 || type == 20 || type == 21 || type == 32 || type == 33
                 } else {
-                    val type = data[i + 4].toInt() and 0x1F
+                    val type = data.get(i + 4).toInt() and 0x1F
                     type == 5 || type == 7
                 }
                 if (key) return true
@@ -286,10 +476,34 @@ class VideoRenderer(ctx: Context) {
         }
     }
 
-    fun release() = synchronized(lock) {
-        stopCodec()
-        pipeline.release()
-        _resetStats()
+    // a new session starts with its own geometry and its own keyframes
+    fun resetSession() {
+        // the queued frames belong to the session that is gone
+        _clearPending()
+        synchronized(lock) {
+            stopCodec()
+            // the old picture must not stay on the panel while the new
+            // session finds its first frame: that is the "old desktop" the
+            // user sees at the start of a broadcast
+            pipeline.clear()
+        }
+    }
+
+    fun release() {
+        _stopDecoder()
+        synchronized(lock) {
+            stopCodec()
+            pipeline.release()
+            _resetStats()
+        }
+    }
+
+    /* drops the queued frames and gives their buffers back */
+    private fun _clearPending() {
+        while (true) {
+            val frame = _pending.poll() ?: break
+            _releaseFrame(frame)
+        }
     }
 
     private fun _recordOutputFrameTime() {
@@ -324,5 +538,7 @@ class VideoRenderer(ctx: Context) {
         private const val FEED_WAIT_US = 20_000L
         private const val FEED_RETRIES = 10
         private const val FIRST_FEED_RETRIES = 50
+        // frames that wait for the decoder; the app has as many frame buffers
+        private const val PENDING_CAPACITY = 4
     }
 }

@@ -4,12 +4,15 @@ import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.os.SystemClock
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn as AndroidxOptIn
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -29,7 +32,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -87,6 +93,9 @@ private enum class Tab(val labelRes: Int, val icon: ImageVector) {
     SETTINGS(R.string.tab_settings, Icons.Default.Settings)
 }
 
+// how long the back button has to be pressed twice to leave the app
+private const val BACK_EXIT_WINDOW_MS = 2000L
+
 @Composable
 fun MainScreen(
     viewModel: MainViewModel,
@@ -98,6 +107,7 @@ fun MainScreen(
 ) {
     var tab by remember { mutableStateOf(Tab.OVERVIEW) }
     var fullscreen by remember { mutableStateOf(false) }
+    var lastBackPress by remember { mutableLongStateOf(0L) }
     val pin by viewModel.pinCode.collectAsState()
     val connections by viewModel.connectionCount.collectAsState()
     val audioOnly by viewModel.audioOnly.collectAsState()
@@ -105,6 +115,8 @@ fun MainScreen(
     val videoSessionPending by viewModel.videoSessionPending.collectAsState()
     val mirroringActive by viewModel.mirroringActive.collectAsState()
     val autoFullscreen by viewModel.pref(Prefs.AUTO_FULLSCREEN).collectAsState()
+    val context = LocalContext.current
+    val tv = isTv()
 
     // don't use movableContentOf: moving AndroidView across subcomposition boundaries makes it crash on reparent
     val video: @Composable () -> Unit = {
@@ -122,7 +134,13 @@ fun MainScreen(
         val justStarted = !prevMirroringActive && mirroringActive
         prevMirroringActive = mirroringActive
         if (justStarted && !audioOnly && !videoPlaybackActive && autoFullscreen && pin == null) {
-            fullscreen = true
+            if (tv) {
+                // going fullscreen on a tv hides the status the user was watching;
+                // say what happened instead, the fullscreen button is still there
+                Toast.makeText(context, context.getString(R.string.toast_connected), Toast.LENGTH_SHORT).show()
+            } else {
+                fullscreen = true
+            }
         }
     }
 
@@ -516,6 +534,17 @@ fun MainScreen(
             onPip = onPip
         )
     } else {
+        // back on a tv leaves the settings and the log first, the app itself last
+        BackHandler(enabled = tab != Tab.OVERVIEW) { tab = Tab.OVERVIEW }
+        BackHandler(enabled = tab == Tab.OVERVIEW) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastBackPress < BACK_EXIT_WINDOW_MS) {
+                activity?.finish()
+            } else {
+                lastBackPress = now
+                Toast.makeText(activity, R.string.back_exit_hint, Toast.LENGTH_SHORT).show()
+            }
+        }
         Scaffold(
             bottomBar = {
                 Column {
@@ -538,7 +567,24 @@ fun MainScreen(
                 }
             }
         ) { padding ->
-            Box(modifier = Modifier.padding(padding).consumeWindowInsets(padding)) {
+            val contentFocus = remember { FocusRequester() }
+            var shownTab by remember { mutableStateOf<Tab?>(null) }
+
+            // a remote has no touch: switching tabs has to carry the focus into the
+            // new screen, otherwise the user has to guess that "up" enters it
+            LaunchedEffect(tab) {
+                val was = shownTab
+                shownTab = tab
+                if (was != null && was != tab) contentFocus.requestFocus()
+            }
+
+            Box(
+                modifier = Modifier
+                    .padding(padding)
+                    .consumeWindowInsets(padding)
+                    .focusRequester(contentFocus)
+                    .focusGroup()
+            ) {
                 TabContent(
                     tab, viewModel, video,
                     onFullscreen = { fullscreen = true }, onPip = onPip, onLocalNetwork = onLocalNetwork,
@@ -604,6 +650,8 @@ private fun OverviewContent(
     val connections by viewModel.connectionCount.collectAsState()
     val serverName by viewModel.pref(Prefs.SERVER_NAME).collectAsState()
     val videoResolution by viewModel.videoResolution.collectAsState()
+    val advertisedResolution by viewModel.advertisedResolution.collectAsState()
+    val videoSessionCount by viewModel.videoSessionCount.collectAsState()
     val idlePreview by viewModel.pref(Prefs.IDLE_PREVIEW).collectAsState()
     val mirroringActive by viewModel.mirroringActive.collectAsState()
     val videoPlaybackActive by viewModel.videoPlaybackActive.collectAsState()
@@ -654,6 +702,26 @@ private fun OverviewContent(
                             textAlign = TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 24.dp)
                         )
+                        // an idle screen is what the room looks at: say what this
+                        // receiver is called and what it can show
+                        if (state == ServerState.RUNNING) {
+                            Spacer(Modifier.height(20.dp))
+                            Text(
+                                text = serverName.ifBlank { Prefs.SERVER_NAME.def },
+                                style = MaterialTheme.typography.titleLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = 24.dp)
+                            )
+                            if (advertisedResolution.isNotEmpty()) {
+                                Text(
+                                    text = stringResource(R.string.advertised_display, advertisedResolution),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
                     }
                 } else if (connecting) {
                     Text(
@@ -740,6 +808,17 @@ private fun OverviewContent(
                             style = MaterialTheme.typography.bodySmall,
                             color = statusColor
                         )
+                        if (state == ServerState.RUNNING && advertisedResolution.isNotEmpty()) {
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = stringResource(R.string.advertised_display, advertisedResolution) +
+                                    if (videoSessionCount > 1) {
+                                        stringResource(R.string.display_sessions, videoSessionCount)
+                                    } else "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
 
                     val settings = localNetwork == LocalNetworkAccess.SETTINGS
@@ -849,20 +928,37 @@ private fun HoldScanButton(
     onEnd: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // a remote has no touch: the ok button going down starts the seek and it
+    // going up stops it again. Losing focus has to stop it too, otherwise a
+    // seek that is interrupted by a key up that never arrives runs forever.
+    var held by remember { mutableStateOf(false) }
+    fun begin() { if (!held) { held = true; onBegin() } }
+    fun end() { if (held) { held = false; onEnd() } }
+
     Box(
         modifier = modifier
             .size(48.dp)
             .clip(CircleShape)
             .pointerInput(Unit) {
                 detectTapGestures(onPress = {
-                    onBegin()
+                    begin()
                     try {
                         awaitRelease()
                     } finally {
-                        onEnd()
+                        end()
                     }
                 })
-            },
+            }
+            .dpadFocus()
+            .onFocusChanged { if (!it.isFocused) end() }
+            .onKeyEvent { e ->
+                when (e.type) {
+                    KeyEventType.KeyDown -> { begin(); true }
+                    KeyEventType.KeyUp -> { end(); true }
+                    else -> false
+                }
+            }
+            .focusable(),
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, contentDescription)
@@ -1093,7 +1189,7 @@ private fun debugOverlaySections(context: Context, info: DebugInfo): List<DebugS
         if (info.videoCodec.isNotEmpty()) {
             add(context.getString(R.string.debug_video, info.videoCodec, info.videoRes))
             add(context.getString(R.string.debug_fps_bitrate, info.videoFps, info.bitrateStr))
-            add(context.getString(R.string.debug_frames_drops, info.videoFrames, info.droppedFrames))
+            add(context.getString(R.string.debug_frames_drops, info.videoFrames, info.droppedFrames, info.queueDrops))
             add(context.getString(R.string.debug_jitter, info.jitterStr))
         }
     }.takeIf { it.isNotEmpty() }?.let { add(DebugSection(context.getString(R.string.debug_section_video), it)) }
@@ -1107,7 +1203,21 @@ private fun debugOverlaySections(context: Context, info: DebugInfo): List<DebugS
         }
     }.takeIf { it.isNotEmpty() }?.let { add(DebugSection(context.getString(R.string.debug_section_audio), it)) }
 
-    add(DebugSection(context.getString(R.string.debug_section_network), listOf(context.getString(R.string.debug_clients, info.connections))))
+    buildList {
+        add(context.getString(R.string.debug_clients, info.connections))
+        info.link?.let { link ->
+            add(context.getString(
+                R.string.debug_link, link.band, link.rssiDbm, link.linkSpeedMbps, link.quality
+            ))
+            // only the user can switch this off, in the device's developer options
+            if (link.scanThrottled == true) add(context.getString(R.string.debug_scan_throttled))
+        }
+        if (info.udpErrors.rcvbuf > 0 || info.udpErrors.sndbuf > 0) {
+            add(context.getString(
+                R.string.debug_udp_errors, info.udpErrors.rcvbuf, info.udpErrors.sndbuf
+            ))
+        }
+    }.takeIf { it.isNotEmpty() }?.let { add(DebugSection(context.getString(R.string.debug_section_network), it)) }
 }
 
 // "mean/max ms held=N", or "held=N" before first latency window lands

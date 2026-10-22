@@ -1,0 +1,139 @@
+diff --git a/lib/httpd.c b/lib/httpd.c
+index 56a3742..db8f66f 100644
+--- a/lib/httpd.c
++++ b/lib/httpd.c
+@@ -308,6 +308,10 @@ httpd_accept_connection(httpd_t *httpd, int server_fd, int is_ipv6)
+         return 0;
+     }
+ 
++    /* the accepted socket does not inherit this from the listening one, and a
++     * small answer would otherwise wait for the nagle timer */
++    netutils_set_nodelay(fd);
++
+     local = netutils_get_address(&local_saddr, &local_len, &local_zone_id, &port);   
+     logger_log(httpd->logger, LOGGER_INFO, "Accepted %s client on socket %d, port %u",
+                (is_ipv6 ? "IPv6"  : "IPv4"), fd, port);
+diff --git a/lib/netutils.c b/lib/netutils.c
+index 726ab13..d8bb32c 100644
+--- a/lib/netutils.c
++++ b/lib/netutils.c
+@@ -19,8 +19,72 @@
+ #include <string.h>
+ #include <assert.h>
+ 
++#ifndef _WIN32
++#include <netinet/tcp.h>
++#include <netinet/ip.h>
++#endif
++
+ #include "compat.h"
+ 
++/* The receive buffer of the kernel default is small enough to cap the throughput
++ * of the tcp data connection on a wifi link: with 20 ms of round trip time a
++ * 200 kB window only carries about 80 Mbps, and every stall of the receiver
++ * closes the window and stops the sender. Ask for a large one, the kernel
++ * clamps it to net.core.rmem_max. */
++#define NETUTILS_RCVBUF (4 * 1024 * 1024)
++#define NETUTILS_SNDBUF (1024 * 1024)
++
++void
++netutils_set_nodelay(int fd)
++{
++#ifndef _WIN32
++    int nodelay = 1;
++    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *)&nodelay, sizeof(nodelay));
++#endif
++}
++
++static void
++netutils_tune_socket(int fd, int use_udp)
++{
++#ifndef _WIN32
++    int rcvbuf = NETUTILS_RCVBUF;
++    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (char *)&rcvbuf, sizeof(rcvbuf));
++
++    int sndbuf = NETUTILS_SNDBUF;
++    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (char *)&sndbuf, sizeof(sndbuf));
++
++    if (use_udp) {
++#ifdef IP_MTU_DISCOVER
++        /* no silent fragmentation of the rtp packets */
++        int pmtu = IP_PMTUDISC_DO;
++        setsockopt(fd, IPPROTO_IP, IP_MTU_DISCOVER, (char *)&pmtu, sizeof(pmtu));
++#endif
++#ifdef SO_BUSY_POLL
++        /* 16 us of busy polling, the kernel uses its own budget and simply
++         * ignores this when the budget is zero */
++        int busy = 16;
++        setsockopt(fd, SOL_SOCKET, SO_BUSY_POLL, (char *)&busy, sizeof(busy));
++#endif
++    } else {
++        netutils_set_nodelay(fd);
++
++        int keepalive = 1;
++        setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char *)&keepalive, sizeof(keepalive));
++    }
++#endif
++}
++
++int
++netutils_socket_rcvbuf(int fd)
++{
++    int val = 0;
++    socklen_t len = sizeof(val);
++    if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, (char *)&val, &len) != 0) {
++        return -1;
++    }
++    return val;
++}
++
+ int
+ netutils_init()
+ {
+@@ -119,6 +183,8 @@ netutils_init_socket(unsigned short *port, int use_ipv6, int use_udp)
+         goto cleanup;
+     }
+ 
++    netutils_tune_socket(server_fd, use_udp);
++
+     memset(&saddr, 0, sizeof(saddr));
+     if (use_ipv6) {
+         struct sockaddr_in6 *sin6ptr = (struct sockaddr_in6 *)&saddr;
+diff --git a/lib/netutils.h b/lib/netutils.h
+index d6b7542..587b94c 100644
+--- a/lib/netutils.h
++++ b/lib/netutils.h
+@@ -19,6 +19,8 @@ int netutils_init();
+ void netutils_cleanup();
+ 
+ int netutils_init_socket(unsigned short *port, int use_ipv6, int use_udp);
++int netutils_socket_rcvbuf(int fd);
++void netutils_set_nodelay(int fd);
+ unsigned char *netutils_get_address(void *sockaddr, int *length, unsigned int *zone_id, unsigned short *port);
+ int netutils_parse_address(int family, const char *src, void *dst, int dstlen);
+ 
+diff --git a/lib/raop_rtp.c b/lib/raop_rtp.c
+index 64eb7fb..4cd415f 100644
+--- a/lib/raop_rtp.c
++++ b/lib/raop_rtp.c
+@@ -253,6 +253,7 @@ raop_rtp_init_sockets(raop_rtp_t *raop_rtp, int use_ipv6)
+     raop_rtp->data_lport = dport;
+     logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp local control port socket %d port UDP %d", csock, cport);
+     logger_log(raop_rtp->logger, LOGGER_DEBUG, "raop_rtp local data port    socket %d port UDP %d", dsock, dport);
++    logger_log(raop_rtp->logger, LOGGER_INFO, "raop_rtp socket rcvbuf %d bytes", netutils_socket_rcvbuf(csock));
+     return 0;
+ 
+     sockets_cleanup:
+diff --git a/lib/raop_rtp_mirror.c b/lib/raop_rtp_mirror.c
+index 2efee1b..b763b30 100644
+--- a/lib/raop_rtp_mirror.c
++++ b/lib/raop_rtp_mirror.c
+@@ -885,6 +885,8 @@ raop_rtp_mirror_init_socket(raop_rtp_mirror_t *raop_rtp_mirror, int use_ipv6)
+     raop_rtp_mirror->mirror_data_lport = dport;
+     logger_log(raop_rtp_mirror->logger, LOGGER_DEBUG, "raop_rtp_mirror local data port socket %d port TCP %d",
+                dsock, dport);
++    logger_log(raop_rtp_mirror->logger, LOGGER_INFO, "raop_rtp_mirror socket rcvbuf %d bytes",
++               netutils_socket_rcvbuf(dsock));
+     return 0;
+ 
+     sockets_cleanup:

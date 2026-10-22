@@ -1,0 +1,13 @@
+diff --git i/cmake/BuildOpenSSL.cmake w/cmake/BuildOpenSSL.cmake
+index 8091a72..2ce71f0 100644
+--- i/cmake/BuildOpenSSL.cmake
++++ w/cmake/BuildOpenSSL.cmake
+@@ -179,7 +179,7 @@ else()
+ 
+     # add openssl target
+     ExternalProject_Add(openssl
+-        URL https://mirror.viaduck.org/openssl/openssl-${OPENSSL_BUILD_VERSION}.tar.gz
++        URL https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_BUILD_VERSION}/openssl-${OPENSSL_BUILD_VERSION}.tar.gz
+         ${OPENSSL_CHECK_HASH}
+         UPDATE_COMMAND ""
+ 

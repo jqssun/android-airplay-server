@@ -12,6 +12,7 @@ extern "C" {
 #include "raop.h"
 #include "dnssd.h"
 #include "logger.h"
+#include "netutils.h"
 #include "pairing.h"
 #include "android_raop_callbacks.h"
 #include "android_dnssd_shim.h"
@@ -40,6 +41,9 @@ static void _log_callback(void *cls, int level, const char *msg) {
     else if (level == LOGGER_WARNING) prio = ANDROID_LOG_WARN;
     else if (level <= LOGGER_INFO) prio = ANDROID_LOG_INFO;
     __android_log_print(prio, TAG, "%s", msg);
+    /* the protocol diagnostics are only interesting in the app's log window */
+    server_ctx_t *ctx = (server_ctx_t *) cls;
+    if (ctx && ctx->log) ctx->log->raw(prio, msg);
 }
 
 extern "C"
@@ -68,8 +72,20 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
     }
     ctx->cb_ctx.raop = ctx->raop;
 
-    raop_set_log_level(ctx->raop, LOGGER_ERR);
-    raop_set_log_callback(ctx->raop, _log_callback, NULL);
+    // the protocol diagnostics are the only way to see what the sender asked
+    // for and what the kernel gave us: the effective receive buffer of the
+    // video socket, the setup request, the geometry the sender used. errors
+    // only would hide all of it.
+    raop_set_log_level(ctx->raop, LOGGER_INFO);
+    raop_set_log_callback(ctx->raop, _log_callback, ctx);
+
+    // the receive buffer the kernel gives the video socket: a small one caps
+    // the throughput of the tcp connection and starves the encoder of the
+    // sender, and the picture breaks into blocks
+    int rcvbuf = netutils_rcvbuf_probe();
+    if (rcvbuf > 0) {
+        LOGI("The kernel gives the sockets a %d byte receive buffer", rcvbuf);
+    }
 
     const char *keyfile_c = env->GetStringUTFChars(keyFile, NULL);
     const char *name_c = env->GetStringUTFChars(name, NULL);
@@ -199,6 +215,29 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetDisplaySize(
     raop_set_plist(ctx->raop, "refreshRate", fps);
 }
 
+/* the app's direct frame buffers, the native side writes the decrypted
+   frames into them instead of allocating a byte array per frame */
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetFrameBuffers(
+        JNIEnv *env, jobject thiz, jlong handle, jobjectArray buffers, jint capacity) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx) return;
+    android_callbacks_set_frame_buffers(&ctx->cb_ctx, env, buffers, capacity);
+}
+
+/* the app is done with a frame buffer, the native side may fill it again */
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeReleaseFrameBuffer(
+        JNIEnv *env, jobject thiz, jlong handle, jint index) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx) return;
+    android_callbacks_release_frame_buffer(&ctx->cb_ctx, (int)index);
+}
+
 /* Returns a HashMap<String, String> of TXT records */
 static jobject _build_txt_map(JNIEnv *env, dnssd_t *dnssd, int is_raop) {
     jclass mapClass = env->FindClass("java/util/HashMap");
@@ -296,6 +335,25 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetH265Enabled(
     }
 }
 
+/* the model name the receiver tells the sender about: the sender reads it
+ * together with the feature bits to pick the codec and the bitrate budget it
+ * uses for the picture. it goes into the dns-sd records and into the info
+ * responses. */
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetReceiverModel(
+        JNIEnv *env, jobject thiz, jlong handle, jstring model) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx || !ctx->raop) return;
+    const char *model_c = env->GetStringUTFChars(model, NULL);
+    raop_set_receiver_model(ctx->raop, model_c);
+    if (ctx->dnssd) {
+        dnssd_set_receiver_model(ctx->dnssd, model_c);
+    }
+    env->ReleaseStringUTFChars(model, model_c);
+}
+
 /* hls plist gates raop.c's hls support; feature bits 0/4 advertise it over dns-sd */
 extern "C"
 JNIEXPORT void JNICALL
@@ -341,6 +399,18 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetCodecs(
     server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
     if (!ctx || !ctx->dnssd) return;
     android_dnssd_set_codecs(ctx->dnssd, alac ? 1 : 0, aac ? 1 : 0);
+}
+
+/* raise the native log level, the protocol diagnostics (setup requests,
+   connection setup) are only logged at debug level */
+extern "C"
+JNIEXPORT void JNICALL
+Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeSetLogLevel(
+        JNIEnv *env, jobject thiz, jlong handle, jint level) {
+
+    server_ctx_t *ctx = (server_ctx_t *)(intptr_t)handle;
+    if (!ctx || !ctx->raop) return;
+    raop_set_log_level(ctx->raop, level);
 }
 
 extern "C"
