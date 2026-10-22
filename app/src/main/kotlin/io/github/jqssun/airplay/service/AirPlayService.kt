@@ -333,6 +333,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
                 .collect { audioRenderer.updateConfig(it) }
         }
         lifecycleScope.launch {
+            prefs.observe { this[Prefs.MIRROR_FILL_LANDSCAPE] }.collect {
+                videoRenderer.setFillLandscape(it)
+            }
+        }
+        lifecycleScope.launch {
             prefs.observe { this[Prefs.SYNC_CLIENT_VOLUME] }.collect {
                 _syncClientVol = it
                 _clientVolDriveEnd()
@@ -397,6 +402,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
         // apply settings from preferences
         val maxFps = prefs[Prefs.MAX_FPS]
+        videoRenderer.preferDirectOutput = prefs[Prefs.DIRECT_VIDEO_OUTPUT]
         val overscanned = prefs[Prefs.OVERSCANNED]
         val audioLatencyMs = prefs[Prefs.AUDIO_LATENCY_MS]
         val (reqW, reqH) = _displaySize(clamp = false)
@@ -567,8 +573,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         log("Server stopped")
     }
 
-    fun setVideoSurface(surface: Surface) {
-        videoRenderer.setSurface(surface)
+    fun setVideoSurface(surface: Surface, width: Int = 0, height: Int = 0) {
+        videoRenderer.setSurface(surface, width, height)
     }
 
     fun clearVideoSurface(surface: Surface) {
@@ -1016,6 +1022,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         videoFrames = videoRenderer.frameCount,
         droppedFrames = videoRenderer.droppedFrames,
         framePacingJitterUs = videoRenderer.framePacingJitterUs,
+        staleVideoFrames = videoRenderer.staleOutputFrames,
+        videoBacklogMs = videoRenderer.outputBacklogMs,
         audioCodec = audioRenderer.codecLabel,
         serverVolume = 100 * audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) / _serverVolMax(),
         clientVolume = (100 * clientVolume()).roundToInt(),

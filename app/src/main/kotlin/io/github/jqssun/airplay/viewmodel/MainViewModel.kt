@@ -56,6 +56,8 @@ data class DebugInfo(
     val videoFrames: Long = 0,
     val droppedFrames: Long = 0,
     val framePacingJitterUs: Long = 0,
+    val staleVideoFrames: Long = 0,
+    val videoBacklogMs: Long = 0,
     val audioCodec: String = "",
     val serverVolume: Int = 100,
     val clientVolume: Int = 100,
@@ -276,8 +278,8 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
         service?.stopServer()
     }
 
-    fun onSurfaceAvailable(surface: Surface) {
-        service?.setVideoSurface(surface)
+    fun onSurfaceAvailable(surface: Surface, width: Int = 0, height: Int = 0) {
+        service?.setVideoSurface(surface, width, height)
     }
 
     fun onSurfaceDestroyed(surface: Surface) {

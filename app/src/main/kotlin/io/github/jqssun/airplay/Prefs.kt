@@ -99,6 +99,8 @@ object Prefs {
     val SYNC_CLIENT_VOLUME = bool("sync_client_volume", true)
     val RESOLUTION = str("resolution", AUTO, restart = true) { it in setOf(AUTO, PORTRAIT, LANDSCAPE) || SIZE.matches(it) }
     val MAX_FPS = int("max_fps", 60, 1..Int.MAX_VALUE, restart = true)
+    val MIRROR_FILL_LANDSCAPE = bool("mirror_fill_landscape", false)
+    val DIRECT_VIDEO_OUTPUT = bool("direct_video_output", false, restart = true)
     val OVERSCANNED = bool("overscanned", false, restart = true)
     val REQUIRE_PIN = bool("require_pin", false, restart = true)
     val ALLOW_NEW_CONN = bool("allow_new_conn", true, restart = true)
