@@ -53,7 +53,7 @@ echo "== collecting =="
 # the summary first: it is what the log is read for, the rest is the detail
 {
     echo "### what the receiver advertises"
-    adb logcat -d -v brief 2>/dev/null | grep -iE "Advertising display|Advertised features|profile asks for|decoders:|Frame rate clamped|server started|Listening|wifi lock" | tail -14 || true
+    adb logcat -d -v brief 2>/dev/null | grep -iE "Advertising display|Advertised features|profile asks for|decoders:|Frame rate clamped|server started|Listening|wifi lock|rcvbuf" | tail -16 || true
 } >> "$OUT"
 
 {
@@ -80,6 +80,10 @@ echo "== collecting =="
     adbs cmd wifi status 2>/dev/null | tr -d '\r' | head -20 || true
     echo
     adbs cat /proc/net/snmp 2>/dev/null | grep -A 1 "^Udp:" || true
+    echo
+    # the kernel caps the socket buffer at this value, so the effective
+    # SO_RCVBUF of the video socket cannot be larger than it
+    echo "net.core.rmem_max = $(adbs cat /proc/sys/net/core/rmem_max 2>/dev/null | tr -d '\r')"
 } >> "$OUT"
 
 {
