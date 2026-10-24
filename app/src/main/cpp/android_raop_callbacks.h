@@ -38,6 +38,9 @@ typedef struct {
     int require_pin;
     char *registered_keys[16];
     int registered_count;
+    /* file the registered client keys are kept in, one per line, so paired senders stay
+       paired across receiver restarts and reboots; NULL keeps them in memory only */
+    char *registered_path;
     /* playback info snapshot pushed by kotlin, read on the native httpd thread */
     pthread_mutex_t playback_info_lock;
     double playback_position;
@@ -52,6 +55,7 @@ typedef struct {
 } android_callback_ctx_t;
 
 void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject callback_obj);
+void android_callbacks_load_registered(android_callback_ctx_t *ctx, const char *path);
 void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env);
 void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx);
 void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double position,

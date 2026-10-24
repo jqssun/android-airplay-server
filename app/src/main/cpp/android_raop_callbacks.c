@@ -3,6 +3,7 @@
  * All callbacks fire from RAOP's internal pthreads, so we AttachCurrentThread.
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -13,6 +14,7 @@
 
 #define TAG "AirPlayNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 static JNIEnv *_get_env(android_callback_ctx_t *ctx) {
@@ -36,6 +38,7 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->h265_enabled = 1;
     ctx->require_pin = 0;
     ctx->registered_count = 0;
+    ctx->registered_path = NULL;
     ctx->audio_engine = NULL;
     memset(ctx->registered_keys, 0, sizeof(ctx->registered_keys));
 
@@ -82,6 +85,8 @@ void android_callbacks_destroy(android_callback_ctx_t *ctx, JNIEnv *env) {
         ctx->registered_keys[i] = NULL;
     }
     ctx->registered_count = 0;
+    free(ctx->registered_path);
+    ctx->registered_path = NULL;
     pthread_cond_destroy(&ctx->play_ready_cond);
     pthread_mutex_destroy(&ctx->playback_info_lock);
 }
@@ -289,6 +294,37 @@ static void _register_client(void *cls, const char *device_id, const char *pk_st
     }
     ctx->registered_keys[ctx->registered_count++] = strdup(pk_str);
     LOGI("registered client pk (slot %d)", ctx->registered_count);
+    if (ctx->registered_path) {
+        FILE *f = fopen(ctx->registered_path, "a");
+        if (f) {
+            fprintf(f, "%s\n", pk_str);
+            fclose(f);
+        } else {
+            LOGW("could not save registered client to %s", ctx->registered_path);
+        }
+    }
+}
+
+/* Reads the client keys saved by _register_client, so a sender that paired with the PIN once is
+   admitted again after the receiver restarts, as on an Apple TV. */
+void android_callbacks_load_registered(android_callback_ctx_t *ctx, const char *path) {
+    free(ctx->registered_path);
+    ctx->registered_path = path ? strdup(path) : NULL;
+    if (!path) return;
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[1024];
+    while (ctx->registered_count < 16 && fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        if (!line[0]) continue;
+        bool known = false;
+        for (int i = 0; i < ctx->registered_count; i++) {
+            if (strcmp(ctx->registered_keys[i], line) == 0) { known = true; break; }
+        }
+        if (!known) ctx->registered_keys[ctx->registered_count++] = strdup(line);
+    }
+    fclose(f);
+    LOGI("loaded %d registered client(s)", ctx->registered_count);
 }
 
 static bool _check_register(void *cls, const char *pk_str) {

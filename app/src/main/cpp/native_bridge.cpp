@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <memory>
+#include <string>
 #include <android/log.h>
 
 extern "C" {
@@ -72,6 +73,11 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
     raop_set_log_callback(ctx->raop, _log_callback, NULL);
 
     const char *keyfile_c = env->GetStringUTFChars(keyFile, NULL);
+    {
+        /* paired senders are kept beside the server key: <keyfile>.clients */
+        std::string registered = std::string(keyfile_c) + ".clients";
+        android_callbacks_load_registered(&ctx->cb_ctx, registered.c_str());
+    }
     const char *name_c = env->GetStringUTFChars(name, NULL);
 
     char device_id[18];
