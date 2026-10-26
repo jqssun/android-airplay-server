@@ -39,6 +39,9 @@ bool audio_engine_start(AudioEngine *engine);
 /* pause playout, releases audio output devices while paused; idempotent */
 void audio_engine_pause(AudioEngine *engine);
 
+/* discard decoder/timeline history after sender FLUSH; same thread as decode */
+void audio_engine_flush(AudioEngine *engine);
+
 /* refresh + copy packed debug struct into dst; false if engine NULL or dstLen too small */
 bool audio_engine_get_debug(AudioEngine *engine, void *dst, size_t dstLen);
 

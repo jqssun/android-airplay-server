@@ -24,6 +24,15 @@ public:
         return mWrite.load(std::memory_order_acquire) - mRead.load(std::memory_order_acquire);
     }
 
+    // producer: snapshot the end of audio that belongs to the old timeline
+    size_t writePosition() const { return mWrite.load(std::memory_order_acquire); }
+
+    // consumer: discard only old audio; preserve samples written after the snapshot
+    void discardThrough(size_t position) {
+        const size_t r = mRead.load(std::memory_order_relaxed);
+        if (position > r) skip(position - r);
+    }
+
     // producer: push up to n samples, drops what doesn't fit
     size_t write(const int16_t *src, size_t n) {
         const size_t w = mWrite.load(std::memory_order_relaxed);
@@ -128,6 +137,13 @@ public:
     // reset clock base after discontinuity or clock shift/resync so it doesn't poison
     // jitter calculations; producer-thread only (same as observe())
     void reanchor() { mHaveBase = false; }
+
+    // producer: a seek/new clip starts a new jitter history too
+    void reset() {
+        mHaveBase = false;
+        std::fill(std::begin(mHist), std::end(mHist), 0);
+        mTuned.store(mFloor, std::memory_order_relaxed);
+    }
 
     // latest tuned cushion in samples; any thread
     size_t target() const { return mTuned.load(std::memory_order_relaxed); }
@@ -260,6 +276,13 @@ public:
 
     // consumer: pop frames*channels samples into out, silence-padded on underrun
     void read(int16_t *out, int32_t frames) {
+        if (mFlushRequested.exchange(false, std::memory_order_acquire)) {
+            mRing.discardThrough(mFlushThrough.load(std::memory_order_acquire));
+            mPriming = true;
+            mPrimeSilenceFrames = 0;
+            mAboveCapSinceNs = 0;
+            mLastTrimBlockNs = 0;
+        }
         const size_t need = (size_t)frames * mChannels;
         const size_t tuned = mTracker.target();
         const int64_t now = monoNs();
@@ -318,6 +341,16 @@ public:
     // call after discontinuity or clock shift/resync; producer-side, must not run
     // concurrently with write()
     void reanchorTracker() { mTracker.reanchor(); }
+
+    // producer only, after the old decoder's drain thread has stopped. Let the
+    // consumer move its own ring cursor, without stopping/reopening the device.
+    void flush() {
+        mExpectedPtsNs = 0;
+        mUnderran.store(false, std::memory_order_relaxed);
+        mTracker.reset();
+        mFlushThrough.store(mRing.writePosition(), std::memory_order_release);
+        mFlushRequested.store(true, std::memory_order_release);
+    }
 
     // rebuild prebuffer cushion before resuming, e.g. after output stream restart;
     // must not run concurrently with read()
@@ -380,6 +413,8 @@ private:
     int64_t mLastTrimBlockNs = 0;        // consumer-only: last trim/underrun time (trim throttle)
     int64_t mAboveCapSinceNs = 0;        // consumer-only: when backlog first exceeded cap (0 = under)
     std::atomic<bool> mUnderran{false};  // consumer->producer: underrun happened
+    std::atomic<size_t> mFlushThrough{0}; // producer->consumer: end of old audio
+    std::atomic<bool> mFlushRequested{false};
 
     int64_t mExpectedPtsNs = 0;          // presentation time expected at write head
 };

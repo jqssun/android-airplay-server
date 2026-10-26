@@ -89,6 +89,15 @@ struct AudioEngine {
         }
     }
 
+    // RAOP receive thread, serialized with decode(). Destruction joins the old
+    // MediaCodec drain thread before resetting producer-owned timing state.
+    void flush() {
+        mDecoder = {};
+        mRetryAtNs = 0;
+        if (mTimeline) mTimeline->flush();
+        mLog->info("Audio FLUSH: decoder and timeline reset");
+    }
+
     // touches decoder: must not run concurrently with decode()
     void stop() {
         if (mOutput) mOutput->stop();
@@ -254,6 +263,10 @@ bool audio_engine_start(AudioEngine *engine) {
 
 void audio_engine_pause(AudioEngine *engine) {
     if (engine) engine->pause();
+}
+
+void audio_engine_flush(AudioEngine *engine) {
+    if (engine) engine->flush();
 }
 
 bool audio_engine_get_debug(AudioEngine *engine, void *dst, size_t dstLen) {
