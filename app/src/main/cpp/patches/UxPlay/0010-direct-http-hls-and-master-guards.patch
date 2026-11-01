@@ -1,0 +1,53 @@
+diff --git a/lib/airplay_video.c b/lib/airplay_video.c
+index 6f0d797..3ca7b5a 100644
+--- a/lib/airplay_video.c
++++ b/lib/airplay_video.c
+@@ -838,6 +838,19 @@ char *adjust_master_playlist (char *fcup_response_data, int fcup_response_datale
+         ptr = strstr(ptr, uri_prefix);
+     }
+ 
++    /* No URI carries the prefix (e.g. relative media URIs): the copy loop below would never run and
++       the caller would get an unfilled buffer. Return the playlist unchanged instead. */
++    if (counter == 0) {
++        char *copy = (char *) malloc(fcup_response_datalen + 1);
++        if (!copy) {
++            printf("Memory allocation failure (new_master)\n");
++            exit(1);
++        }
++        memcpy(copy, fcup_response_data, fcup_response_datalen);
++        copy[fcup_response_datalen] = '\0';
++        return copy;
++    }
++
+     size_t len = uri_local_prefix_len - uri_prefix_len;
+     len *= counter;
+     len += fcup_response_datalen;
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+index 586f61e..d1de9b8 100644
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -945,7 +945,12 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
+ 
+     /* we only support HLS if the playback location is terminated by "/master.m3u8" */
+     const char *uri_suffix = strstr(playback_location, "/master.m3u8");
+-    if (uri_suffix) {
++    /* A plain http(s) master playlist (e.g. a website video sent from Safari) is fetched by the player
++       directly, as an Apple TV does. Only other schemes (the YouTube app's) need the sender to relay
++       the playlists over FCUP, whose prefix rewriting cannot handle relative media URIs. */
++    bool direct_url = !strncmp(playback_location, "http://", strlen("http://")) ||
++                      !strncmp(playback_location, "https://", strlen("https://"));
++    if (uri_suffix && !direct_url) {
+         size_t len = strlen(get_uri_local_prefix(airplay_video)) + strlen(uri_suffix);
+         char *location = (char *) calloc(len + 1, sizeof(char));
+         if (!location) {
+@@ -1034,7 +1039,9 @@ http_handler_hls(raop_conn_t *conn,  http_request_t *request, http_response_t *r
+     }
+     airplay_video_t *airplay_video = (airplay_video_t *) hls_get_current_video(raop);
+     assert(airplay_video);
+-    if (!strcmp(url, "/master.m3u8")){
++    /* match the path only: the sender's master URL may carry a query string ("/master.m3u8?t=...") */
++    size_t master_len = strlen("/master.m3u8");
++    if (!strncmp(url, "/master.m3u8", master_len) && (url[master_len] == '\0' || url[master_len] == '?')) {
+         char * master_playlist  = get_master_playlist(airplay_video);
+         if (master_playlist) {
+             *response_data = master_playlist;

@@ -311,6 +311,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         }
         airPlayVideoPlayer.onTitle = { _videoTitle.value = it ?: "" }
         airPlayVideoPlayer.onEnded = { _endVideoPlayback("AirPlay Video stopped (player)") }
+        airPlayVideoPlayer.onError = { log(it) }
         airPlayVideoPlayer.onPlaybackInfo = { snapshot ->
             if (nativeHandle != 0L) {
                 NativeBridge.nativeUpdatePlaybackInfo(nativeHandle, snapshot.position, snapshot.duration, snapshot.rate, snapshot.ready)
@@ -663,7 +664,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         airPlayVideoPlayer.play(location, startPositionSeconds)
         // claim media-button routing for keys that arrive as media-session events
         mediaSession?.isActive = true
-        log("AirPlay Video play: $location @ ${startPositionSeconds}s")
+        val source = android.net.Uri.parse(location)
+        log("AirPlay Video play: ${source.scheme}://${source.host}/[private path hidden] @ ${startPositionSeconds}s")
     }
 
     override fun onVideoScrub(positionSeconds: Float) {

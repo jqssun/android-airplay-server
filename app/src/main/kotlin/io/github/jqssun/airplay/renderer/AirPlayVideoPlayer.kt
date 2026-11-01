@@ -13,6 +13,12 @@ import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import okhttp3.ConnectionSpec
+import okhttp3.OkHttpClient
+import java.util.Locale
 
 // rate is 0 while buffering; speed is the configured rate regardless of pause state
 // native reads the effective rate, overlay reads playWhenReady + speed + skipSilence
@@ -34,11 +40,40 @@ class AirPlayVideoPlayer(private val context: Context) {
     private var player: ExoPlayer? = null
     private var pendingSurface: Surface? = null
     private var clientGain = 1f
+    private val mediaHttp by lazy {
+        OkHttpClient.Builder()
+            .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS))
+            .followSslRedirects(false)
+            .build()
+    }
+
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    private fun mediaSourceFactory(location: String): DefaultMediaSourceFactory {
+        // One HTTP/2-capable stack for HTTPS media on every CDN host.
+        // Other sources retain the pre-existing platform path (including the local AirPlay relay).
+        if (!android.net.Uri.parse(location).scheme.equals("https", ignoreCase = true)) {
+            return DefaultMediaSourceFactory(context)
+        }
+        val http = OkHttpDataSource.Factory(mediaHttp)
+            .setUserAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
+        return DefaultMediaSourceFactory(context)
+            .setDataSourceFactory(DefaultDataSource.Factory(context, http))
+    }
+
+    private fun tokenTimeState(uri: android.net.Uri?): String {
+        if (uri == null || !uri.isHierarchical) return "unavailable"
+        val expires = listOf("validto", "expires", "exp")
+            .firstNotNullOfOrNull { uri.getQueryParameter(it)?.toLongOrNull() }
+        return expires?.let { if (it >= System.currentTimeMillis() / 1000) "current" else "expired" }
+            ?: "unavailable"
+    }
+
 
     var onPlaybackInfo: ((PlaybackSnapshot) -> Unit)? = null
     var onVideoSize: ((width: Int, height: Int, aspect: Float) -> Unit)? = null
     var onTitle: ((String?) -> Unit)? = null
     var onEnded: (() -> Unit)? = null
+    var onError: ((String) -> Unit)? = null
 
     private val _reportTick = object : Runnable {
         override fun run() {
@@ -48,8 +83,29 @@ class AirPlayVideoPlayer(private val context: Context) {
     }
 
     private val _listener = object : Player.Listener {
+        @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-            Log.w(TAG, "playback error", error)
+            // Only error codes, HTTP status and exception types: never log signed
+            // media URLs, cookies, headers, response bodies or exception messages.
+            val causes = generateSequence<Throwable>(error) { it.cause }.take(8).toList()
+            val httpError = causes.filterIsInstance<androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException>()
+                .firstOrNull()
+            val status = httpError?.responseCode
+            val failed = httpError?.dataSpec?.uri
+            val last = failed?.lastPathSegment?.lowercase(Locale.ROOT).orEmpty()
+            val stage = when {
+                last == "master.m3u8" -> "master_playlist"
+                last.endsWith(".m3u8") -> "media_playlist"
+                last.endsWith(".ts") || last.endsWith(".m4s") || last.endsWith(".mp4") -> "media_segment"
+                else -> "other"
+            }
+            val host = failed?.host?.takeIf { it.matches(Regex("[A-Za-z0-9.-]{1,253}")) } ?: "unknown"
+            val summary = "AirPlay Video error: ${error.errorCodeName} (${error.errorCode})" +
+                (status?.let { "; HTTP $it" } ?: "") +
+                "; stage=" + stage + "; host=" + host + "; token=" + tokenTimeState(failed) +
+                "; causes=" + causes.map { it.javaClass.simpleName }.distinct().joinToString(" > ")
+            Log.w(TAG, summary)
+            onError?.invoke(summary)
             onEnded?.invoke()
         }
         override fun onPlaybackStateChanged(state: Int) {
@@ -72,7 +128,7 @@ class AirPlayVideoPlayer(private val context: Context) {
     fun play(location: String, startPositionSeconds: Float) = mainHandler.post {
         // recycling must not report the stopped sentinel: senders poll right after /play
         _stopInternal(reportStopped = false)
-        val p = ExoPlayer.Builder(context).build().also {
+        val p = ExoPlayer.Builder(context).setMediaSourceFactory(mediaSourceFactory(location)).build().also {
             it.addListener(_listener)
             pendingSurface?.let { s -> it.setVideoSurface(s) }
             it.volume = clientGain
