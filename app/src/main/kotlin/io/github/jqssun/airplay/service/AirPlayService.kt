@@ -61,7 +61,9 @@ import java.security.SecureRandom
 import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.filter
@@ -103,6 +105,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     private val _connectionCount = MutableStateFlow(0)
     val connectionCount = _connectionCount.asStateFlow()
+
+    // UI brought up by a sender (launch on connect) steps aside once the last sender leaves
+    private var _launchedForConnection = false
+    private val _dismissUi = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val dismissUi = _dismissUi.asSharedFlow()
 
     private val _videoAspect = MutableStateFlow(16f / 9f)
     val videoAspect = _videoAspect.asStateFlow()
@@ -797,7 +804,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         val firstConnection = _connectionCount.value == 0
         _connectionCount.value++
         log("Sender connected (${_connectionCount.value})")
-        if (firstConnection && shouldLaunchOnConnect()) launchMainActivity()
+        if (firstConnection && shouldLaunchOnConnect()) {
+            _launchedForConnection = true
+            launchMainActivity()
+        }
     }
 
     override fun onConnectionDestroy() {
@@ -827,6 +837,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             mediaSession?.isActive = false
             _refreshDacpPlayer()
             _updateMediaNotification()
+            if (_launchedForConnection) {
+                _launchedForConnection = false
+                _dismissUi.tryEmit(Unit)
+            }
         }
         log("Sender disconnected (${_connectionCount.value})")
     }
