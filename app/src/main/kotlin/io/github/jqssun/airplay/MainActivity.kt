@@ -48,6 +48,8 @@ class MainActivity : ComponentActivity() {
             svc.logCallback = logCallback
             svc.pinCallback = pinCallback
             viewModel.bindService(svc)
+            // opened by a sender and the sender is gone: return to whatever was on screen before
+            lifecycleScope.launch { svc.dismissUi.collect { moveTaskToBack(true) } }
             if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) _refreshForeground()
             _autoStart()
         }
