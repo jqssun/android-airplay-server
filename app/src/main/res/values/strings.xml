@@ -25,6 +25,10 @@
     <string name="stopped_label">Stopped</string>
     <string name="btn_start">Start</string>
     <string name="btn_stop">Stop</string>
+    <string name="btn_allow">Allow</string>
+    <string name="btn_open_settings">Open settings</string>
+    <string name="local_network_label">Nearby devices access needed</string>
+    <string name="local_network_desc">Allow access to nearby devices so AirPlay devices can find and connect to this device</string>
     <string name="unknown_track">Unknown</string>
 
     <!-- Content descriptions -->
@@ -35,9 +39,9 @@
     <string name="cd_play_pause">Play/Pause</string>
     <string name="cd_rewind">Rewind</string>
     <string name="cd_fast_forward">Fast forward</string>
-    <string name="cd_volume_down">Volume down</string>
-    <string name="cd_volume_up">Volume up</string>
-    <string name="cd_mute">Mute</string>
+    <string name="volume_server">Receiver volume</string>
+    <string name="volume_client">Sender volume</string>
+    <string name="volume_value">%1$d%%</string>
     <string name="cd_download">Download video</string>
     <string name="cd_cancel_download">Cancel download</string>
 
@@ -85,7 +89,7 @@
 
     <!-- Settings: Server -->
     <string name="setting_server_name">Server name</string>
-    <string name="setting_server_name_desc">Name shown to AirPlay clients; leave empty to use the device name</string>
+    <string name="setting_server_name_desc">Name shown to AirPlay senders; leave empty to use the device name</string>
     <string name="setting_server_port">Server port</string>
     <string name="setting_server_port_desc">Port for the AirPlay server</string>
     <string name="setting_auto_start">Start server automatically</string>
@@ -99,19 +103,21 @@
     <string name="setting_require_pin">Require PIN (Beta)</string>
     <string name="setting_require_pin_desc">Require 4-digit PIN for each new connection</string>
     <string name="setting_allow_new_conn">Allow new connections</string>
-    <string name="setting_allow_new_conn_desc">Drop current client when a new one connects</string>
+    <string name="setting_allow_new_conn_desc">Drop current sender when a new one connects</string>
 
     <!-- Settings: Display -->
     <string name="setting_idle_preview">Idle screen preview</string>
     <string name="setting_idle_preview_desc">Show video surface while waiting for a connection</string>
     <string name="setting_auto_fullscreen">Enter fullscreen automatically</string>
-    <string name="setting_auto_fullscreen_desc">Enter fullscreen when a client connects</string>
+    <string name="setting_auto_fullscreen_desc">Enter fullscreen when a sender connects</string>
     <string name="setting_keep_screen_on">Keep screen on</string>
-    <string name="setting_keep_screen_on_desc">Prevent sleeping while a client is connected</string>
+    <string name="setting_keep_screen_on_desc">Prevent sleeping while a sender is connected</string>
     <string name="setting_auto_audio_mode">Enter audio mode automatically</string>
     <string name="setting_auto_audio_mode_desc">Skip the prompt when switching to audio mode</string>
     <string name="setting_advertise_video">Advertise AirPlay video support</string>
     <string name="setting_advertise_video_desc">When off, videos are cast as audio only streams</string>
+    <string name="setting_advertise_mirroring">Advertise AirPlay mirroring support</string>
+    <string name="setting_advertise_mirroring_desc">When off, the device is hidden from mirroring</string>
     <string name="setting_advertise_audio">Advertise AirPlay audio support</string>
     <string name="setting_advertise_audio_desc">When off, the device can only be used for mirroring and will be hidden from media players</string>
     <string name="setting_alac">Advertise ALAC codec</string>
@@ -119,17 +125,22 @@
     <string name="setting_aac">Advertise AAC codec</string>
     <string name="setting_aac_desc">Offer AAC-ELD/AAC-LC in the mDNS record; used for screen mirroring audio</string>
     <string name="setting_launch_on_connect">Open this application on connect</string>
-    <string name="setting_launch_on_connect_desc">Show the screen when a client connects</string>
+    <string name="setting_launch_on_connect_desc">Show the screen when a sender connects</string>
     <string name="setting_return_to_previous_app">Return to previous app after casting</string>
     <string name="setting_return_to_previous_app_desc">When casting ends, switch back to the previously used app</string>
     <string name="setting_launch_on_connect_no_permission">Tap to grant Display over other apps permission</string>
+    <string name="setting_discovery">Discoverable over</string>
+    <string name="setting_discovery_all_desc">Advertise on all usable interfaces. Uses NsdManager.</string>
+    <string name="setting_discovery_usb_desc">Only advertise over USB tethering to enforce wired connection. Uses custom mDNS responder.</string>
+    <string name="chip_all_networks">All networks</string>
+    <string name="chip_usb_only">USB only</string>
     <string name="setting_resolution">Resolution</string>
-    <string name="setting_resolution_desc">Video resolution advertised to clients</string>
+    <string name="setting_resolution_desc">Video resolution advertised to senders</string>
     <string name="setting_resolution_placeholder">[W]x[H]</string>
     <string name="setting_resolution_width">Width</string>
     <string name="setting_resolution_height">Height</string>
     <string name="setting_max_fps">Maximum FPS</string>
-    <string name="setting_max_fps_desc">Maximum frame rate advertised to clients</string>
+    <string name="setting_max_fps_desc">Maximum frame rate advertised to senders</string>
     <string name="setting_max_fps_placeholder">FPS</string>
     <string name="setting_overscanned">Overscanned</string>
     <string name="setting_overscanned_desc">Add pixel boundary for full-screen overscan displays</string>
@@ -139,11 +150,15 @@
 
     <!-- Settings: Decode -->
     <string name="setting_h265">H.265 (HEVC)</string>
-    <string name="setting_h265_desc">Enable H.265 video decoding if device supports it</string>
+    <string name="setting_h265_desc">Auto only uses H.265 decoders known to work</string>
     <string name="setting_enforce_sdr">MediaFormat.KEY_COLOR_TRANSFER</string>
     <string name="setting_enforce_sdr_desc">Tag video as limited SDR; disable to allow HDR sources to pass through</string>
     <string name="setting_sw_alac">Force software ALAC decoder</string>
-    <string name="setting_sw_alac_desc">Always use software ALAC decoder instead of hardware decoder, may affect audio latency</string>
+    <string name="setting_sw_alac_desc">Always use software ALAC decoder instead of system decoder, may affect latency</string>
+    <string name="setting_sw_aac">Force software AAC decoder</string>
+    <string name="setting_sw_aac_desc">Always use software AAC decoder instead of system decoder, may affect latency</string>
+    <string name="setting_sync_client_volume">Sync sender volume</string>
+    <string name="setting_sync_client_volume_desc">Use sender volume for receiver volume automatically</string>
 
     <!-- Settings: Developer -->
     <string name="setting_developer_options">Developer options</string>
@@ -162,7 +177,7 @@
     <string name="setting_scheduled_output_buffer_release">Aligned frame pacing</string>
     <string name="setting_scheduled_output_buffer_release_desc">Schedule each decoded frame to the VSYNC matching its presentation timestamp</string>
     <string name="setting_audio_delay">Override audio delay</string>
-    <string name="setting_audio_delay_desc">Set a custom audio latency reported to client</string>
+    <string name="setting_audio_delay_desc">Set a custom audio latency reported to sender</string>
     <string name="audio_delay_value">%dms</string>
     <string name="setting_audio_auto_buffer">Automatic software audio buffer size</string>
     <string name="setting_audio_auto_buffer_desc">Adaptively tune the software audio buffer according to network conditions and device performance; slider adjusts how much jitter the buffer can absorb</string>
@@ -191,9 +206,9 @@
     <string name="debug_fps_bitrate">FPS: %1$d  Bitrate: %2$s</string>
     <string name="debug_frames_drops">Frames: %1$d  Drops: %2$d</string>
     <string name="debug_jitter">Jitter: %1$s</string>
-    <string name="debug_audio">%1$s  Vol: %2$d%%</string>
+    <string name="debug_audio">%1$s  Receiver: %2$d%%  Sender: %3$d%%</string>
     <string name="debug_audio_buffer">Buffer: %1$d ms (tgt: %2$d ms)</string>
     <string name="debug_audio_glitch">Glitch: trim=%1$d drop=%2$d sil=%3$d ur=%4$d xrun=%5$d</string>
     <string name="debug_audio_decode">Decode: %1$s</string>
-    <string name="debug_clients">Clients: %1$d</string>
+    <string name="debug_clients">Senders: %1$d</string>
 </resources>

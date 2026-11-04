@@ -1,5 +1,5 @@
 diff --git a/lib/http_handlers.h b/lib/http_handlers.h
-index dd55290..7123c96 100644
+index 96c9ec1..4d431c4 100644
 --- a/lib/http_handlers.h
 +++ b/lib/http_handlers.h
 @@ -152,6 +152,7 @@
@@ -10,7 +10,7 @@ index dd55290..7123c96 100644
      raop->callbacks.on_video_stop(raop->callbacks.cls);
  }
  
-@@ -916,6 +917,8 @@
+@@ -978,6 +979,8 @@
          goto play_error;
      }
  
@@ -20,7 +20,7 @@ index dd55290..7123c96 100644
  
      if (req_root_node) {
 diff --git a/lib/raop.c b/lib/raop.c
-index b6fc8f3..c86393f 100644
+index 7098fae..86db001 100644
 --- a/lib/raop.c
 +++ b/lib/raop.c
 @@ -89,3 +89,4 @@
@@ -28,7 +28,7 @@ index b6fc8f3..c86393f 100644
      bool hls_pending;
 +    void *video_play_conn;
    
-@@ -551,6 +552,13 @@
+@@ -549,6 +550,13 @@
      raop_t *raop = conn->raop;
      logger_log(raop->logger, LOGGER_DEBUG, "Destroying connection");
  
@@ -42,7 +42,7 @@ index b6fc8f3..c86393f 100644
      if (raop->callbacks.conn_destroy) {
          raop->callbacks.conn_destroy(raop->callbacks.cls);
      }
-@@ -640,6 +648,7 @@
+@@ -638,6 +646,7 @@
  
      raop->hls_support = false;
      raop->hls_pending = false;
@@ -50,7 +50,7 @@ index b6fc8f3..c86393f 100644
      
      raop->nonce = NULL;
  
-@@ -848,6 +857,7 @@
+@@ -854,6 +863,7 @@
  }
  
  void raop_remove_hls_connections(raop_t * raop) {
@@ -58,13 +58,13 @@ index b6fc8f3..c86393f 100644
      httpd_remove_connections_by_type(raop->httpd, CONNECTION_TYPE_HLS);
      httpd_remove_connections_by_type(raop->httpd, CONNECTION_TYPE_PTTH);
      httpd_remove_connections_by_type(raop->httpd, CONNECTION_TYPE_AIRPLAY);
-@@ -874,3 +884,4 @@
+@@ -880,3 +890,4 @@
      assert (id >= 0);
      raop_destroy_airplay_video(raop, id);
      raop->current_video = -1;
 +    raop->video_play_conn = NULL;
 diff --git a/lib/raop.h b/lib/raop.h
-index d659134..c6dc8ae 100644
+index d654d0f..bed2ded 100644
 --- a/lib/raop.h
 +++ b/lib/raop.h
 @@ -65,7 +65,8 @@

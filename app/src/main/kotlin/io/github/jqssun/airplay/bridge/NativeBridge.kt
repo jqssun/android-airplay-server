@@ -1,6 +1,9 @@
 package io.github.jqssun.airplay.bridge
 
 object NativeBridge {
+    const val FT_MIRROR = 7
+    const val FT_AUDIO = 9
+
     init {
         System.loadLibrary("airplay_native")
     }
@@ -23,8 +26,8 @@ object NativeBridge {
     external fun nativeSetH265Enabled(handle: Long, enabled: Boolean)
     external fun nativeSetCodecs(handle: Long, alac: Boolean, aac: Boolean)
     external fun nativeSetHlsEnabled(handle: Long, enabled: Boolean)
-    external fun nativeSetLang(handle: Long, requested: String, subtitles: String, system: String)
-    external fun nativeSetAudioEnabled(handle: Long, enabled: Boolean)
+    external fun nativeSetLang(handle: Long, lang: String)
+    external fun nativeSetFeature(handle: Long, bit: Int, enabled: Boolean)
 
     // AirPlay Video (HLS) playback info snapshot, polled by native httpd thread
     external fun nativeUpdatePlaybackInfo(
@@ -39,10 +42,11 @@ object NativeBridge {
     external fun nativeSetDefaultStreamValues(sampleRate: Int, framesPerBurst: Int)
     external fun nativeServerAudioConfigure(handle: Long, cushionMs: Int, percentilePct: Int,
                                             oboeBufferFrames: Int, forceSwAlac: Boolean,
-                                            realtimePriority: Boolean, lowLatency: Boolean,
-                                            benchmarkLog: Boolean): Boolean
+                                            forceSwAac: Boolean, realtimePriority: Boolean,
+                                            lowLatency: Boolean, benchmarkLog: Boolean): Boolean
     external fun nativeServerAudioStart(handle: Long): Boolean
     external fun nativeServerAudioStop(handle: Long)
+    external fun nativeServerAudioSetClientGain(handle: Long, gain: Float)
     external fun nativeServerAudioFormat(handle: Long, ct: Int, spf: Int)
     // fills direct buffer with packed debug snapshot; false if audio isn't running
     external fun nativeServerAudioDebug(handle: Long, buf: java.nio.ByteBuffer): Boolean

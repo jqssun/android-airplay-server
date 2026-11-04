@@ -11,7 +11,7 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action !in BOOT_ACTIONS) return
 
         val prefs = context.getSharedPreferences(Prefs.NAME, Context.MODE_PRIVATE)
-        if (!prefs.getBoolean(Prefs.BOOT_AUTO_START, Prefs.DEF_BOOT_AUTO_START)) return
+        if (!prefs[Prefs.BOOT_AUTO_START]) return
 
         val serviceIntent = Intent(context, AirPlayService::class.java)
             .setAction(AirPlayService.ACTION_START_SERVER)

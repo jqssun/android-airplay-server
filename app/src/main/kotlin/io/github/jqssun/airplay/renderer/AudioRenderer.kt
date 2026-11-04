@@ -9,6 +9,7 @@ class AudioRenderer {
     @Volatile var config = AudioConfig(); private set
 
     @Volatile var codecLabel = ""; private set
+    @Volatile var clientGain = 1f; private set
 
     private var serverHandle = 0L
 
@@ -16,6 +17,7 @@ class AudioRenderer {
     fun attachEngine(server: Long) {
         serverHandle = server
         pushConfig()
+        NativeBridge.nativeServerAudioSetClientGain(serverHandle, clientGain)
     }
 
     @Synchronized
@@ -40,6 +42,12 @@ class AudioRenderer {
     }
 
     @Synchronized
+    fun setClientGain(gain: Float) {
+        clientGain = gain
+        if (serverHandle != 0L) NativeBridge.nativeServerAudioSetClientGain(serverHandle, gain)
+    }
+
+    @Synchronized
     fun updateConfig(newConfig: AudioConfig) {
         config = newConfig
         pushConfig()
@@ -49,7 +57,8 @@ class AudioRenderer {
         if (serverHandle == 0L) return
         NativeBridge.nativeServerAudioConfigure(
             serverHandle, config.cushionMs, config.percentilePct, config.oboeBufferFrames,
-            config.forceSwAlac, config.realtimePriority, config.lowLatency, config.benchmarkLog)
+            config.forceSwAlac, config.forceSwAac, config.realtimePriority, config.lowLatency,
+            config.benchmarkLog)
     }
 
     private val debugBuf = java.nio.ByteBuffer.allocateDirect(DEBUG_BUF_BYTES)

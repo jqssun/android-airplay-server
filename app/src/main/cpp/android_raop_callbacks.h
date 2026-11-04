@@ -19,8 +19,8 @@ typedef struct {
     jmethodID on_video_data;
     jmethodID on_audio_format;
     jmethodID on_video_size;
-    jmethodID on_volume_change;
     jmethodID on_client_volume;
+    jmethodID on_client_volume_query;
     jmethodID on_audio_teardown;
     jmethodID on_conn_init;
     jmethodID on_conn_destroy;

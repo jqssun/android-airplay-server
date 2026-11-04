@@ -55,8 +55,8 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->on_video_data = (*env)->GetMethodID(env, cls, "onVideoData", "([BJZ)V");
     ctx->on_audio_format = (*env)->GetMethodID(env, cls, "onAudioFormat", "(IIZ)V");
     ctx->on_video_size = (*env)->GetMethodID(env, cls, "onVideoSize", "(FFFF)V");
-    ctx->on_volume_change = (*env)->GetMethodID(env, cls, "onVolumeChange", "(F)V");
-    ctx->on_client_volume = (*env)->GetMethodID(env, cls, "onClientVolume", "()F");
+    ctx->on_client_volume = (*env)->GetMethodID(env, cls, "onClientVolume", "(F)V");
+    ctx->on_client_volume_query = (*env)->GetMethodID(env, cls, "onClientVolumeQuery", "()F");
     ctx->on_audio_teardown = (*env)->GetMethodID(env, cls, "onAudioTeardown", "()V");
     ctx->on_conn_init = (*env)->GetMethodID(env, cls, "onConnectionInit", "()V");
     ctx->on_conn_destroy = (*env)->GetMethodID(env, cls, "onConnectionDestroy", "()V");
@@ -172,7 +172,7 @@ static void _audio_set_volume(void *cls, float volume) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
     if (!env) return;
-    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_volume_change, (jfloat)volume);
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_client_volume, (jfloat)volume);
 }
 
 static void _audio_get_format(void *cls, unsigned char *ct, unsigned short *spf,
@@ -259,7 +259,7 @@ static double _audio_set_client_volume(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     JNIEnv *env = _get_env(ctx);
     if (!env) return 0.0;
-    return (double)(*env)->CallFloatMethod(env, ctx->callback_obj, ctx->on_client_volume);
+    return (double)(*env)->CallFloatMethod(env, ctx->callback_obj, ctx->on_client_volume_query);
 }
 static void _audio_set_metadata(void *cls, const void *buf, int len) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
@@ -340,8 +340,12 @@ static void _video_play(void *cls, const char *location, const float start_posit
     jstring jloc = (*env)->NewStringUTF(env, location);
     (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_video_play, jloc, (jfloat)start_position);
     (*env)->DeleteLocalRef(env, jloc);
-    /* self-driven senders (macOS) latch their scrubber timeline at /play; hold the response
-       until the player reports ready so that read must carry the real duration */
+}
+
+/* self-driven senders (macOS) latch their scrubber timeline at /play; hold the response
+   until the player reports ready so that read must carry the real duration */
+static void _video_wait_ready(void *cls) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += 10; // hold for max 10s
@@ -440,6 +444,7 @@ void android_callbacks_fill(raop_callbacks_t *cbs, android_callback_ctx_t *ctx) 
     cbs->display_pin = _display_pin;
     cbs->video_set_codec = _video_set_codec;
     cbs->on_video_play = _video_play;
+    cbs->on_video_wait_ready = _video_wait_ready;
     cbs->on_video_scrub = _video_scrub;
     cbs->on_video_rate = _video_rate;
     cbs->on_video_stop = _video_stop;

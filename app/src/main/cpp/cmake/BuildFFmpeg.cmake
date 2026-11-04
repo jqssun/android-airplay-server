@@ -1,4 +1,4 @@
-# build minimal static ffmpeg (libavcodec + libavutil + ALAC decoder) and expose under ffmpeg::avcodec and ffmpeg::avutil
+# build minimal static ffmpeg (libavcodec + libavutil + ALAC + AAC decoders) and expose under ffmpeg::avcodec and ffmpeg::avutil
 
 include(ExternalProject)
 include(ProcessorCount)
@@ -53,7 +53,7 @@ ExternalProject_Add(ffmpeg_ep
         --sysroot=${CMAKE_SYSROOT}
         --enable-pic --disable-asm --disable-x86asm
         --disable-all --disable-debug --disable-network --disable-autodetect
-        --enable-avcodec --enable-decoder=alac --enable-static --disable-shared
+        --enable-avcodec --enable-decoder=alac,aac --enable-static --disable-shared
         ${_ffmpeg_sanitize}
     BUILD_COMMAND make -j${_ffmpeg_jobs}
     INSTALL_COMMAND make install

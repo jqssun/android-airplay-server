@@ -6,12 +6,13 @@ import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.util.Log
 
+data class MdnsService(val name: String, val type: String, val port: Int, val txt: Map<String, String>)
+
 class NsdServiceManager(private val ctx: Context) {
 
     private val nsdManager = ctx.getSystemService(Context.NSD_SERVICE) as NsdManager
     private var multicastLock: WifiManager.MulticastLock? = null
-    private var raopRegistration: NsdManager.RegistrationListener? = null
-    private var airplayRegistration: NsdManager.RegistrationListener? = null
+    private val registrations = mutableListOf<NsdManager.RegistrationListener>()
 
     fun acquireMulticastLock() {
         val wifi = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
@@ -21,69 +22,38 @@ class NsdServiceManager(private val ctx: Context) {
         }
     }
 
-    fun registerRaop(serviceName: String, port: Int, txtRecords: Map<String, String>) {
-        val info = NsdServiceInfo().apply {
-            this.serviceName = serviceName
-            serviceType = "_raop._tcp"
-            this.port = port
-            txtRecords.forEach { (k, v) -> setAttribute(k, v) }
-        }
+    fun register(services: List<MdnsService>) = services.forEach(::_register)
 
-        raopRegistration = object : NsdManager.RegistrationListener {
+    private fun _register(s: MdnsService) {
+        val info = NsdServiceInfo().apply {
+            serviceName = s.name
+            serviceType = s.type
+            port = s.port
+            s.txt.forEach { (k, v) -> setAttribute(k, v) }
+        }
+        val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) {
-                Log.i(TAG, "RAOP registered: ${info.serviceName}")
+                Log.i(TAG, "${s.type} registered: ${info.serviceName}")
             }
             override fun onRegistrationFailed(info: NsdServiceInfo, code: Int) {
-                Log.e(TAG, "RAOP registration failed: $code")
+                Log.e(TAG, "${s.type} registration failed: $code")
             }
             override fun onServiceUnregistered(info: NsdServiceInfo) {
-                Log.i(TAG, "RAOP unregistered")
+                Log.i(TAG, "${s.type} unregistered")
             }
             override fun onUnregistrationFailed(info: NsdServiceInfo, code: Int) {
-                Log.e(TAG, "RAOP unregister failed: $code")
+                Log.e(TAG, "${s.type} unregister failed: $code")
             }
         }
-        nsdManager.registerService(info, NsdManager.PROTOCOL_DNS_SD, raopRegistration)
-    }
-
-    fun registerAirplay(serviceName: String, port: Int, txtRecords: Map<String, String>) {
-        val info = NsdServiceInfo().apply {
-            this.serviceName = serviceName
-            serviceType = "_airplay._tcp"
-            this.port = port
-            txtRecords.forEach { (k, v) -> setAttribute(k, v) }
-        }
-
-        airplayRegistration = object : NsdManager.RegistrationListener {
-            override fun onServiceRegistered(info: NsdServiceInfo) {
-                Log.i(TAG, "AirPlay registered: ${info.serviceName}")
-            }
-            override fun onRegistrationFailed(info: NsdServiceInfo, code: Int) {
-                Log.e(TAG, "AirPlay registration failed: $code")
-            }
-            override fun onServiceUnregistered(info: NsdServiceInfo) {
-                Log.i(TAG, "AirPlay unregistered")
-            }
-            override fun onUnregistrationFailed(info: NsdServiceInfo, code: Int) {
-                Log.e(TAG, "AirPlay unregister failed: $code")
-            }
-        }
-        nsdManager.registerService(info, NsdManager.PROTOCOL_DNS_SD, airplayRegistration)
-    }
-
-    fun unregisterAll() {
-        raopRegistration?.let {
-            try { nsdManager.unregisterService(it) } catch (_: Exception) {}
-            raopRegistration = null
-        }
-        airplayRegistration?.let {
-            try { nsdManager.unregisterService(it) } catch (_: Exception) {}
-            airplayRegistration = null
-        }
+        nsdManager.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
+        registrations += listener
     }
 
     fun release() {
-        unregisterAll()
+        registrations.forEach {
+            try { nsdManager.unregisterService(it) } catch (_: Exception) {}
+        }
+        registrations.clear()
         multicastLock?.release()
         multicastLock = null
     }

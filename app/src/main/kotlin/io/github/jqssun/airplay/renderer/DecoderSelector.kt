@@ -53,6 +53,7 @@ class DecoderSelector(private val ctx: Context) {
             if (Build.VERSION.SDK_INT >= 26 && Build.DEVICE.startsWith("BRAVIA_")) add("omx.mtk")
             if (Build.VERSION.SDK_INT >= 28 && !Build.DEVICE.equals("sabrina", ignoreCase = true)) add("omx.amlogic")
             if (Build.VERSION.SDK_INT >= 28) add("omx.realtek")
+            add("omx.hisi")
             add("c2.")
             if (adreno >= 400) addAll(qti)
             if (fireOs) { add("omx.mtk"); add("omx.amlogic") }
@@ -62,9 +63,9 @@ class DecoderSelector(private val ctx: Context) {
 
     fun avc(): MediaCodecInfo? = _probableSafe(AVC, CodecProfileLevel.AVCProfileHigh) ?: _first(AVC)
 
-    fun hevc(avc: MediaCodecInfo?, w: Int, h: Int, fps: Int): MediaCodecInfo? {
+    fun hevc(avc: MediaCodecInfo?, w: Int, h: Int, fps: Int, force: Boolean): MediaCodecInfo? {
         val info = _probableSafe(HEVC, -1) ?: return null
-        if (_hevcWhitelisted(info)) return info
+        if (force || _hevcWhitelisted(info)) return info
         Log.i(TAG, "hevc decoder not whitelisted: ${info.name}")
         val avcCaps = avc?.videoCaps(AVC) ?: return null
         return info.takeIf { !_canMeet(avcCaps, w, h, fps) && _canMeet(info.videoCaps(HEVC), w, h, fps) }
@@ -195,6 +196,6 @@ class DecoderSelector(private val ctx: Context) {
             listOf("omx.amlogic", "c2.amlogic") to mapOf("vendor.low-latency.enable" to 1),
         )
 
-        fun MediaCodecInfo.videoCaps(mime: String): VideoCapabilities = getCapabilitiesForType(mime).videoCapabilities
+        fun MediaCodecInfo.videoCaps(mime: String): VideoCapabilities = getCapabilitiesForType(mime).videoCapabilities!!
     }
 }

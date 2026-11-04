@@ -4,8 +4,10 @@ interface RaopCallbackHandler {
     fun onVideoData(data: ByteArray, ntpTimeNs: Long, isH265: Boolean)
     fun onAudioFormat(ct: Int, spf: Int, usingScreen: Boolean)
     fun onVideoSize(srcW: Float, srcH: Float, w: Float, h: Float)
-    fun onVolumeChange(volume: Float)
-    fun onClientVolume(): Float
+    // airplay volume in dB: -30..0, -144 = mute
+    fun onClientVolume(db: Float)
+    // /info initialVolume
+    fun onClientVolumeQuery(): Float
     fun onAudioTeardown()
     fun onConnectionInit()
     fun onConnectionDestroy()

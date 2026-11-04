@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
@@ -16,7 +15,7 @@ val allAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
 
 android {
     namespace = "io.github.jqssun.airplay"
-    compileSdk = 36
+    compileSdk = 37
     ndkVersion = "27.0.12077973"
 
     if (localProps.containsKey("storeFile")) {
@@ -32,10 +31,10 @@ android {
 
     defaultConfig {
         applicationId = "io.github.jqssun.airplay"
-        minSdk = 24
-        targetSdk = 36
-        versionCode = 31
-        versionName = "0.0.31"
+        minSdk = 23
+        targetSdk = 37
+        versionCode = 36
+        versionName = "0.0.36"
 
         externalNativeBuild {
             cmake {
@@ -85,10 +84,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     buildFeatures {
         compose = true
         prefab = true
@@ -114,11 +109,6 @@ tasks.register("applyUxplayPatches") {
 
 tasks.configureEach {
     if (name.startsWith("configureCMake")) dependsOn("applyUxplayPatches")
-}
-
-tasks.withType<Zip>().configureEach {
-    isReproducibleFileOrder = true
-    isPreserveFileTimestamps = false
 }
 
 dependencies {

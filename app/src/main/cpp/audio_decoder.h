@@ -6,12 +6,14 @@
 #include <media/NdkMediaFormat.h>
 #include <atomic>
 #include <climits>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -19,6 +21,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/common.h>
 #include <libavutil/log.h>
 #include <libavutil/mem.h>
 #include <libavutil/samplefmt.h>
@@ -59,8 +62,8 @@ public:
 
     // packed: nests into AudioDebugData with fixed layout
     struct __attribute__((packed)) Debug {
-        int32_t meanUs, maxUs;  // latency in us
-        uint16_t held;          // operations in flight
+        int32_t meanUs, maxUs;
+        uint16_t held;  // operations in flight
     };
     Debug debugInfo() const {
         Debug d{};
@@ -74,7 +77,7 @@ private:
     static constexpr int64_t UPDATE_FREQ = 200;
 
     const char *mName;
-    LogSink &mLog;                                       // not owned
+    LogSink &mLog;
     std::atomic<bool> mLogging{false};
     int64_t mN = 0, mSumNs = 0, mMinNs = 0, mMaxNs = 0;  // producer-thread accumulators
     std::atomic<int32_t> mMeanUs{0}, mMaxUs{0};
@@ -158,6 +161,47 @@ static inline void buildAlacAtomCookie(uint8_t out[36], int sampleRate, int chan
     buildAlacMagicCookie(out + 12, sampleRate, channels, spf);
 }
 
+// request the in process AAC decoder when available
+static constexpr const char *AAC_INPROC_DECODER = "c2.android.inproc.aac.decoder";
+
+struct CodecConfig {
+    const char *mime;
+    const char *preferName;
+    AVCodecID ffmpegId;
+    int aacProfile;
+    int sampleRate, channels;
+    uint8_t csd[36];
+    size_t csdLen;
+};
+
+static inline std::optional<CodecConfig> codecConfig(int ct, int spf, int sampleRate, int channels) {
+    CodecConfig c{};
+    c.sampleRate = sampleRate;
+    c.channels = channels;
+    if (ct == CT_ALAC) {
+        c.mime = "audio/alac";
+        c.ffmpegId = AV_CODEC_ID_ALAC;
+        buildAlacAtomCookie(c.csd, sampleRate, channels, spf);
+        c.csdLen = 36;
+        return c;
+    }
+    c.mime = "audio/mp4a-latm";
+    c.preferName = AAC_INPROC_DECODER;
+    c.ffmpegId = AV_CODEC_ID_AAC;
+    if (ct == CT_AAC_ELD) {
+        // AAC-ELD AudioSpecificConfig: AOT=39, 44100, stereo, then ELDSpecificConfig
+        c.aacProfile = 39; c.csd[0] = 0xF8; c.csd[1] = 0xE8;
+        c.csd[2] = (spf == 512) ? 0x40 : 0x50; c.csd[3] = 0x00; c.csdLen = 4;
+    } else if (ct == CT_AAC_LC) {
+        // AAC-LC AudioSpecificConfig: AOT=2, 44100, stereo, then GASpecificConfig
+        c.aacProfile = 2; c.csd[0] = 0x12;
+        c.csd[1] = (spf == 960) ? 0x14 : 0x10; c.csdLen = 2;
+    } else {
+        return std::nullopt;
+    }
+    return c;
+}
+
 // AMediaCodec decoder; output dequeued on separate thread, shaves ~10ms latency
 class MediaCodecDecoder : public Decoder {
 public:
@@ -203,7 +247,7 @@ private:
             uint8_t *out = AMediaCodec_getOutputBuffer(mCodec, (size_t)oi, &osz);
             if (out && info.size > 0) {
                 mTimeline.write((const int16_t *)(out + info.offset),
-                                (size_t)info.size / sizeof(int16_t),  // bytes -> samples
+                                (size_t)info.size / sizeof(int16_t),
                                 (int64_t)info.presentationTimeUs * 1000);
             }
             const int64_t nowNs = monoNs();
@@ -214,15 +258,14 @@ private:
         }
     }
 
-    AMediaCodec *mCodec;                  // owned
-    TimelineBuffer &mTimeline;            // not owned
-    LatencyReporter &mLat;                // not owned
+    AMediaCodec *mCodec;  // owned
+    TimelineBuffer &mTimeline;
+    LatencyReporter &mLat;
     LatencyProbe mProbe;
     std::thread mDrainThread;
-    std::atomic<bool> mDrainRun{false};   // drain thread stop signal
+    std::atomic<bool> mDrainRun{false};
 };
 
-// route ffmpeg warnings/errors to logcat
 static inline void installFfmpegLogcat() {
     static std::once_flag once;
     std::call_once(once, [] {
@@ -235,102 +278,108 @@ static inline void installFfmpegLogcat() {
     });
 }
 
-// software ALAC via ffmpeg libavcodec; synchronous, decodes on caller's thread
-class FfmpegAlacDecoder : public Decoder {
+// synchronous
+class FfmpegDecoder : public Decoder {
 public:
     // returns nullptr if codec can't be created/opened
-    static std::unique_ptr<FfmpegAlacDecoder> make(int sampleRate, int channels, int spf,
-                                                   TimelineBuffer &timeline, LatencyReporter &lat,
-                                                   LogSink &log) {
+    static std::unique_ptr<FfmpegDecoder> make(const CodecConfig &c, TimelineBuffer &timeline,
+                                               LatencyReporter &lat, LogSink &log) {
         installFfmpegLogcat();
-        auto dec = std::unique_ptr<FfmpegAlacDecoder>(new FfmpegAlacDecoder(timeline, lat, log));
-        if (!dec->init(sampleRate, channels, spf)) return nullptr;
+        auto dec = std::unique_ptr<FfmpegDecoder>(new FfmpegDecoder(timeline, lat, log));
+        if (!dec->init(c)) return nullptr;
         return dec;
     }
 
-    ~FfmpegAlacDecoder() override {
-        if (mFrame) av_frame_free(&mFrame);
-        if (mPkt) av_packet_free(&mPkt);
-        if (mCtx) avcodec_free_context(&mCtx);
+    ~FfmpegDecoder() override {
+        av_frame_free(&mFrame);
+        av_packet_free(&mPkt);
+        avcodec_free_context(&mCtx);
     }
 
     bool decode(const uint8_t *data, size_t len, int64_t ptsNs) override {
         if (len == 0 || len > INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE) return false;
         const int64_t t0 = monoNs();
 
-        if (mPkt->size < (int)len) {
-            if (av_grow_packet(mPkt, (int)len - mPkt->size) < 0) return false;
-        } else {
-            av_shrink_packet(mPkt, (int)len);
-        }
-        memcpy(mPkt->data, data, len);
-
+        // not refcounted
+        mPkt->data = const_cast<uint8_t *>(data);
+        mPkt->size = (int)len;
         if (avcodec_send_packet(mCtx, mPkt) < 0) return false;
 
         int64_t pts = ptsNs;
-        // the current libavcodec ALAC decoder always produces exactly 1 output
-        // frame for each input packet, this loop is only for completeness
-        while (avcodec_receive_frame(mCtx, mFrame) == 0) {
+        int ret;
+        while ((ret = avcodec_receive_frame(mCtx, mFrame)) == 0) {
             const int n = mFrame->nb_samples;
             if (n <= 0) continue;
-            if (mFrame->format == AV_SAMPLE_FMT_S16) {
-                // this branch is not used as current libavcodec decoder cannot produce AV_SAMPLE_FMT_S16
-                mTimeline.write((const int16_t *)mFrame->data[0], (size_t)n * mChannels, pts);
-            } else if (mFrame->format == AV_SAMPLE_FMT_S16P) {
-                // timeline expects packed/interleaved (AV_SAMPLE_FMT_S16), decoder gives planar
-                if (mPcm.size() < (size_t)n * mChannels) mPcm.resize((size_t)n * mChannels);
-                for (int c = 0; c < mChannels; c++) {
-                    const int16_t *p = (const int16_t *)mFrame->data[c];
-                    for (int i = 0; i < n; i++) mPcm[(size_t)i * mChannels + c] = p[i];
-                }
-                mTimeline.write(mPcm.data(), (size_t)n * mChannels, pts);
-            } else {
-                mLog.error("ffmpeg ALAC: unsupported sample format %d", mFrame->format);
+            if (!toPcm(n)) {
+                mLog.error("ffmpeg %s: unsupported output (fmt=%d ch=%d)", mCtx->codec->name,
+                           mFrame->format, mFrame->ch_layout.nb_channels);
                 return false;
             }
+            mTimeline.write(mPcm.data(), (size_t)n * mChannels, pts);
             pts += (int64_t)n * NS_PER_SEC / mCtx->sample_rate;
         }
 
         mLat.record(monoNs() - t0);
         mLat.setHeld(0);
-        return true;
+        return ret == AVERROR(EAGAIN);
     }
 
 private:
-    FfmpegAlacDecoder(TimelineBuffer &timeline, LatencyReporter &lat, LogSink &log)
+    FfmpegDecoder(TimelineBuffer &timeline, LatencyReporter &lat, LogSink &log)
         : mTimeline(timeline), mLat(lat), mLog(log) {}
 
-    bool init(int sampleRate, int channels, int spf) {
-        const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_ALAC);
-        if (!codec) { mLog.error("ffmpeg ALAC decoder not compiled in"); return false; }
+    bool init(const CodecConfig &c) {
+        const AVCodec *codec = avcodec_find_decoder(c.ffmpegId);
+        if (!codec) {
+            mLog.error("ffmpeg %s decoder not compiled in", avcodec_get_name(c.ffmpegId));
+            return false;
+        }
         mCtx = avcodec_alloc_context3(codec);
         if (!mCtx) return false;
 
-        // decoder expects atom + magic cookie via extradata
         // extradata must be alloced with av_malloc* and have AV_INPUT_BUFFER_PADDING_SIZE of
         // 0-padding at the end
-        mCtx->extradata = (uint8_t *)av_mallocz(36 + AV_INPUT_BUFFER_PADDING_SIZE);
+        mCtx->extradata = (uint8_t *)av_mallocz(c.csdLen + AV_INPUT_BUFFER_PADDING_SIZE);
         if (!mCtx->extradata) return false;
-        buildAlacAtomCookie(mCtx->extradata, sampleRate, channels, spf);
-        mCtx->extradata_size = 36;
+        memcpy(mCtx->extradata, c.csd, c.csdLen);
+        mCtx->extradata_size = (int)c.csdLen;
 
-        mCtx->sample_rate = sampleRate;
-        av_channel_layout_default(&mCtx->ch_layout, channels);
+        mCtx->sample_rate = c.sampleRate;
+        av_channel_layout_default(&mCtx->ch_layout, c.channels);
         mCtx->thread_count = 1;
 
         if (avcodec_open2(mCtx, codec, nullptr) < 0) {
-            mLog.error("ffmpeg ALAC open failed (rate=%d ch=%d spf=%d)", sampleRate, channels, spf);
+            mLog.error("ffmpeg %s open failed (rate=%d ch=%d)", codec->name, c.sampleRate, c.channels);
             return false;
         }
 
         mPkt = av_packet_alloc();
         mFrame = av_frame_alloc();
-        if (!mPkt || !mFrame) return false;
-        // alloc packet buffer, sized for largest possible ALAC packet ("escape" frame + 8-byte header).
-        if (av_new_packet(mPkt, spf * channels * (int)sizeof(int16_t) + 8) < 0) return false;
-        mChannels = channels;
-        mPcm.resize((size_t)spf * channels);
-        return true;
+        mChannels = c.channels;
+        return mPkt && mFrame;
+    }
+
+    bool toPcm(int n) {
+        if (mFrame->ch_layout.nb_channels != mChannels) return false;
+        if (mPcm.size() < (size_t)n * mChannels) mPcm.resize((size_t)n * mChannels);
+        switch (mFrame->format) {
+            case AV_SAMPLE_FMT_S16P:  // alac
+                interleave<int16_t>(n, [](int16_t s) { return s; });
+                return true;
+            case AV_SAMPLE_FMT_FLTP:  // aac, same conversion as libswresample
+                interleave<float>(n, [](float s) { return av_clip_int16(lrintf(s * (1 << 15))); });
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    template <typename T, typename Conv>
+    void interleave(int n, Conv conv) {
+        for (int c = 0; c < mChannels; c++) {
+            const T *p = (const T *)mFrame->data[c];
+            for (int i = 0; i < n; i++) mPcm[(size_t)i * mChannels + c] = conv(p[i]);
+        }
     }
 
     AVCodecContext *mCtx = nullptr;  // owned
@@ -344,103 +393,69 @@ private:
 };
 
 // ---- decoder factories ----
-// create + configure + start AMediaCodec for `mime` with `fmt` (consumes fmt); tries
-// `preferName` first if set, falls back to platform default; nullptr if none start
-static inline AMediaCodec *startCodec(const char *mime, const char *preferName, AMediaFormat *fmt,
+// create + configure + start; nullptr on failure
+static inline AMediaCodec *startCodec(const char *mime, const char *name, AMediaFormat *fmt,
                                       LogSink &log) {
-    AMediaCodec *codec = preferName ? AMediaCodec_createCodecByName(preferName) : nullptr;
-    bool ok = codec &&
-              AMediaCodec_configure(codec, fmt, nullptr, nullptr, 0) == AMEDIA_OK &&
-              AMediaCodec_start(codec) == AMEDIA_OK;
-    if (ok) {
-        log.info("%s decoder started (%s)", mime, preferName);
-    } else {
-        if (codec) { AMediaCodec_delete(codec); codec = nullptr; }
-        codec = AMediaCodec_createDecoderByType(mime);
-        ok = codec &&
-             AMediaCodec_configure(codec, fmt, nullptr, nullptr, 0) == AMEDIA_OK &&
-             AMediaCodec_start(codec) == AMEDIA_OK;
-        if (ok) log.info("%s decoder started (default)", mime);
+    const char *label = name ? name : "default";
+    AMediaCodec *codec = name ? AMediaCodec_createCodecByName(name) : AMediaCodec_createDecoderByType(mime);
+    if (!codec) {
+        log.warn("%s decoder (%s) create failed", mime, label);
+        return nullptr;
     }
-    AMediaFormat_delete(fmt);
-    if (!ok && codec) { AMediaCodec_delete(codec); codec = nullptr; }
-    return ok ? codec : nullptr;
+    const char *step = "configure";
+    media_status_t st = AMediaCodec_configure(codec, fmt, nullptr, nullptr, 0);
+    if (st == AMEDIA_OK) {
+        step = "start";
+        st = AMediaCodec_start(codec);
+    }
+    if (st != AMEDIA_OK) {
+        log.warn("%s decoder (%s) %s failed (%d)", mime, label, step, (int)st);
+        AMediaCodec_delete(codec);
+        return nullptr;
+    }
+    log.info("%s decoder started (%s)", mime, label);
+    return codec;
 }
 
-// default AAC decoder runs sandboxed on newer devices; sandbox IPC costs ~15-30ms
-// (Pixel 10), so request the in-process AAC decoder when available
-static constexpr const char *AAC_INPROC_DECODER = "c2.android.inproc.aac.decoder";
-
-// priority=0 requests realtime scheduling; low-latency=1 minimizes decoder buffering
-static inline void setSchedulingHints(AMediaFormat *fmt, bool realtimePriority, bool lowLatency) {
+// tries c.preferName first if set, then platform default
+static inline AMediaCodec *startMediaCodec(const CodecConfig &c, LogSink &log, bool realtimePriority,
+                                           bool lowLatency) {
+    AMediaFormat *fmt = AMediaFormat_new();
+    AMediaFormat_setString(fmt, "mime", c.mime);
+    AMediaFormat_setInt32(fmt, "sample-rate", c.sampleRate);
+    AMediaFormat_setInt32(fmt, "channel-count", c.channels);
+    if (c.aacProfile) {
+        AMediaFormat_setInt32(fmt, "aac-profile", c.aacProfile);
+        AMediaFormat_setInt32(fmt, "is-adts", 0);
+    }
+    // priority=0 requests realtime scheduling; low-latency=1 minimizes decoder buffering
     if (realtimePriority) AMediaFormat_setInt32(fmt, "priority", 0);
     if (lowLatency) AMediaFormat_setInt32(fmt, "low-latency", 1);
-}
-
-static inline AMediaCodec *startAacCodec(int ct, int spf, int sampleRate, int channels, LogSink &log,
-                                         bool realtimePriority, bool lowLatency) {
-    uint8_t csd[4]; size_t csdLen; int profile;
-    if (ct == CT_AAC_ELD) {
-        // AAC-ELD AudioSpecificConfig: AOT=39, 44100, stereo, then ELDSpecificConfig whose
-        // first bit is frameLengthFlag (byte2 bit3): 1 = 480 samples/frame (0x50), 0 = 512 (0x40)
-        profile = 39; csd[0] = 0xF8; csd[1] = 0xE8;
-        csd[2] = (spf == 512) ? 0x40 : 0x50; csd[3] = 0x00; csdLen = 4;
-    } else if (ct == CT_AAC_LC) {
-        // AAC-LC AudioSpecificConfig: AOT=2, 44100, stereo, then GASpecificConfig whose
-        // first bit is frameLengthFlag (byte1 bit5): 0 = 1024 samples/frame (0x10), 1 = 960 (0x14)
-        profile = 2; csd[0] = 0x12;
-        csd[1] = (spf == 960) ? 0x14 : 0x10; csdLen = 2;
-    } else {
-        log.error("Unknown audio ct=%d", ct); return nullptr;
-    }
-    AMediaFormat *fmt = AMediaFormat_new();
-    AMediaFormat_setString(fmt, "mime", "audio/mp4a-latm");
-    AMediaFormat_setInt32(fmt, "sample-rate", sampleRate);
-    AMediaFormat_setInt32(fmt, "channel-count", channels);
-    AMediaFormat_setInt32(fmt, "aac-profile", profile);
-    AMediaFormat_setInt32(fmt, "is-adts", 0);
-    setSchedulingHints(fmt, realtimePriority, lowLatency);
-    AMediaFormat_setBuffer(fmt, "csd-0", csd, csdLen);
-    return startCodec("audio/mp4a-latm", AAC_INPROC_DECODER, fmt, log);
-}
-
-static inline AMediaCodec *startAlacHwCodec(int sampleRate, int channels, int spf, LogSink &log,
-                                            bool realtimePriority, bool lowLatency) {
-    AMediaFormat *fmt = AMediaFormat_new();
-    AMediaFormat_setString(fmt, "mime", "audio/alac");
-    AMediaFormat_setInt32(fmt, "sample-rate", sampleRate);
-    AMediaFormat_setInt32(fmt, "channel-count", channels);
-    setSchedulingHints(fmt, realtimePriority, lowLatency);
-    uint8_t csd[36];
-    buildAlacAtomCookie(csd, sampleRate, channels, spf);
-    AMediaFormat_setBuffer(fmt, "csd-0", csd, sizeof(csd));
-    return startCodec("audio/alac", nullptr, fmt, log);
+    AMediaFormat_setBuffer(fmt, "csd-0", c.csd, c.csdLen);
+    AMediaCodec *codec = c.preferName ? startCodec(c.mime, c.preferName, fmt, log) : nullptr;
+    if (!codec) codec = startCodec(c.mime, nullptr, fmt, log);
+    AMediaFormat_delete(fmt);
+    return codec;
 }
 
 static inline std::unique_ptr<Decoder> makeDecoder(int ct, int spf, int sampleRate, int channels,
                                                    TimelineBuffer &timeline, LatencyReporter &lat,
-                                                   LogSink &log, bool forceSwAlac,
+                                                   LogSink &log, bool forceSw,
                                                    bool realtimePriority, bool lowLatency) {
-    if (ct == CT_ALAC) {
-        if (!forceSwAlac) {
-            if (AMediaCodec *codec = startAlacHwCodec(sampleRate, channels, spf, log,
-                                                      realtimePriority, lowLatency)) {
-                log.info("ALAC: hardware decoder");
-                return std::make_unique<MediaCodecDecoder>(codec, timeline, lat);
-            }
-        }
-        if (auto sw = FfmpegAlacDecoder::make(sampleRate, channels, spf, timeline, lat, log)) {
-            log.info("ALAC: software decoder (ffmpeg)%s", forceSwAlac ? " (forced)" : "");
-            return sw;
-        }
-        log.error("ALAC init failed (hw and sw)");
+    const auto c = codecConfig(ct, spf, sampleRate, channels);
+    if (!c) {
+        log.error("Unknown audio ct=%d", ct);
         return nullptr;
     }
-    if (AMediaCodec *codec = startAacCodec(ct, spf, sampleRate, channels, log,
-                                           realtimePriority, lowLatency)) {
-        return std::make_unique<MediaCodecDecoder>(codec, timeline, lat);
+    if (!forceSw) {
+        if (AMediaCodec *codec = startMediaCodec(*c, log, realtimePriority, lowLatency))
+            return std::make_unique<MediaCodecDecoder>(codec, timeline, lat);
     }
-    log.error("AAC codec init failed (ct=%d)", ct);
+    if (auto sw = FfmpegDecoder::make(*c, timeline, lat, log)) {
+        log.info("%s decoder started (ffmpeg%s)", c->mime, forceSw ? ", forced" : "");
+        return sw;
+    }
+    log.error("%s decoder init failed (ct=%d)", c->mime, ct);
     return nullptr;
 }
 

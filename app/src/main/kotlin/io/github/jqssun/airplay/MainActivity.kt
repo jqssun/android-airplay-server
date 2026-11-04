@@ -27,6 +27,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import io.github.jqssun.airplay.service.AirPlayService
 import io.github.jqssun.airplay.ui.MainScreen
 import io.github.jqssun.airplay.ui.theme.AirPlayTheme
+import io.github.jqssun.airplay.viewmodel.LocalNetworkAccess
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Job
@@ -84,9 +85,8 @@ class MainActivity : ComponentActivity() {
             svc.pinCallback = pinCallback
             viewModel.bindService(svc)
             watchSessionEnd(svc)
-            if (viewModel.autoStart.value && svc.serverState.value == AirPlayService.ServerState.STOPPED) {
-                viewModel.startServer()
-            }
+            if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) _refreshForeground()
+            _autoStart()
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             sessionEndJob?.cancel()
@@ -96,9 +96,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val notifPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { /* granted or not, service works either way */ }
+    private val permissions = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { if (it.isNotEmpty()) _syncLocalNetwork(requested = true) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -111,10 +111,13 @@ class MainActivity : ComponentActivity() {
             ?: (intent?.getBooleanExtra(EXTRA_SESSION_SUMMON, false) == true)
         Log.i(TAG_SUMMON, "onCreate: summoned=$summonedBySession restored=${savedInstanceState != null}")
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        val missing = buildList {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !_granted(Manifest.permission.POST_NOTIFICATIONS)) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            if (!hasLocalNetwork()) add(Manifest.permission.ACCESS_LOCAL_NETWORK)
         }
+        if (missing.isNotEmpty()) permissions.launch(missing.toTypedArray())
 
         bindService(Intent(this, AirPlayService::class.java), connection, BIND_AUTO_CREATE)
 
@@ -129,7 +132,7 @@ class MainActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                combine(viewModel.keepScreenOn, viewModel.connectionCount) { keep, conns ->
+                combine(viewModel.pref(Prefs.KEEP_SCREEN_ON), viewModel.connectionCount) { keep, conns ->
                     keep && conns > 0
                 }.collect { on ->
                     if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -146,7 +149,7 @@ class MainActivity : ComponentActivity() {
                 var wasConnected = viewModel.connectionCount.value > 0
                 viewModel.connectionCount.collect { conns ->
                     val isConnected = conns > 0
-                    if (wasConnected && !isConnected && viewModel.launchOnConnect.value) {
+                    if (wasConnected && !isConnected && viewModel.pref(Prefs.LAUNCH_ON_CONNECT).value) {
                         moveTaskToBack(true)
                     }
                     wasConnected = isConnected
@@ -174,7 +177,8 @@ class MainActivity : ComponentActivity() {
                     isInPip = isInPip.value,
                     onSurfaceAvailable = { viewModel.onSurfaceAvailable(it) },
                     onSurfaceDestroyed = { viewModel.onSurfaceDestroyed(it) },
-                    onPip = { enterPip() }
+                    onPip = { enterPip() },
+                    onLocalNetwork = ::_requestLocalNetwork
                 )
             }
         }
@@ -247,8 +251,8 @@ class MainActivity : ComponentActivity() {
     // whatever the user had on screen before
     private fun onSessionEnded(svc: AirPlayService) {
         Log.i(TAG_SUMMON, "session ended: summoned=$summonedBySession " +
-            "returnToPrevious=${viewModel.returnToPreviousApp.value} pip=${isInPip.value}")
-        if (!summonedBySession || !viewModel.returnToPreviousApp.value || isInPip.value) return
+            "returnToPrevious=${viewModel.pref(Prefs.RETURN_TO_PREVIOUS_APP).value} pip=${isInPip.value}")
+        if (!summonedBySession || !viewModel.pref(Prefs.RETURN_TO_PREVIOUS_APP).value || isInPip.value) return
         Log.i(TAG_SUMMON, "return-to-previous scheduled in ${SESSION_END_RETURN_GRACE_MS}ms")
         lifecycleScope.launch {
             // grace period: senders switching queue items stop one video and play
@@ -271,6 +275,51 @@ class MainActivity : ComponentActivity() {
             Log.i(TAG_SUMMON, "moveTaskToBack: returning to previous app")
             moveTaskToBack(true)
         }
+    }
+
+    private fun _granted(permission: String) =
+        ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+    private fun _autoStart() {
+        val svc = service ?: return
+        if (viewModel.pref(Prefs.AUTO_START).value && svc.serverState.value == AirPlayService.ServerState.STOPPED && hasLocalNetwork()) {
+            viewModel.startServer()
+        }
+    }
+    
+    private fun _refreshForeground() {
+        if (service?.serverState?.value == AirPlayService.ServerState.RUNNING) {
+            startService(Intent(this, AirPlayService::class.java))
+        }
+    }
+
+    private fun _syncLocalNetwork(requested: Boolean = false) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.CINNAMON_BUN) return
+        val p = Manifest.permission.ACCESS_LOCAL_NETWORK
+        val prev = viewModel.localNetwork.value
+        val now = when {
+            hasLocalNetwork() -> LocalNetworkAccess.GRANTED
+            shouldShowRequestPermissionRationale(p) -> LocalNetworkAccess.ASK
+            requested || prev == LocalNetworkAccess.SETTINGS -> LocalNetworkAccess.SETTINGS
+            else -> LocalNetworkAccess.ASK
+        }
+        viewModel.setLocalNetwork(now)
+        if (now == LocalNetworkAccess.GRANTED && prev != LocalNetworkAccess.GRANTED) _autoStart()
+    }
+
+    private fun _requestLocalNetwork() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.CINNAMON_BUN) return
+        if (viewModel.localNetwork.value == LocalNetworkAccess.SETTINGS) {
+            startActivity(appSettingsIntent())
+        } else {
+            permissions.launch(arrayOf(Manifest.permission.ACCESS_LOCAL_NETWORK))
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        _syncLocalNetwork()
+        _refreshForeground()
     }
 
     fun enterPip() {
@@ -310,10 +359,10 @@ class MainActivity : ComponentActivity() {
     // device/path (and PiP itself can be dismissed).
     override fun onStop() {
         super.onStop()
-        if (!viewModel.runInBackground.value &&
-            !isChangingConfigurations &&
-            viewModel.connectionCount.value == 0 &&
-            viewModel.serverState.value == AirPlayService.ServerState.RUNNING) {
+        // never stop mid-session
+        if (!viewModel.pref(Prefs.RUN_IN_BACKGROUND).value && !isChangingConfigurations &&
+            viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&
+            viewModel.connectionCount.value == 0) {
             viewModel.stopServer()
         }
     }

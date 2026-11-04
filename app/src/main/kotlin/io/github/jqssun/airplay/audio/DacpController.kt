@@ -25,6 +25,8 @@ class DacpController(ctx: Context) {
     @Volatile private var host = ""
     @Volatile private var port = 0
 
+    val ready: Boolean get() = host.isNotEmpty() && activeRemote.isNotEmpty()
+
     fun update(dacpId: String, activeRemote: String) {
         this.dacpId = dacpId
         this.activeRemote = activeRemote
@@ -37,7 +39,6 @@ class DacpController(ctx: Context) {
     fun prevItem() = _send("/ctrl-int/1/previtem")
     fun volumeUp() = _send("/ctrl-int/1/volumeup")
     fun volumeDown() = _send("/ctrl-int/1/volumedown")
-    fun muteToggle() = _send("/ctrl-int/1/mutetoggle")
     fun beginFastForward() = _send("/ctrl-int/1/beginff")
     fun beginRewind() = _send("/ctrl-int/1/beginrew")
     fun playResume() = _send("/ctrl-int/1/playresume")
@@ -79,7 +80,7 @@ class DacpController(ctx: Context) {
 
     private fun _send(path: String): ListenableFuture<Unit> {
         val result = SettableFuture.create<Unit>()
-        if (host.isEmpty() || activeRemote.isEmpty()) {
+        if (!ready) {
             result.setException(IOException("dacp endpoint not resolved"))
             return result
         }

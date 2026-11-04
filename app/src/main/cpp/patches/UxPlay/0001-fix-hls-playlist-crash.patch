@@ -1,10 +1,10 @@
 diff --git a/lib/airplay_video.c b/lib/airplay_video.c
-index 8fa87ff..56ba9d0 100644
+index 19505b2..fa32679 100644
 --- a/lib/airplay_video.c
 +++ b/lib/airplay_video.c
-@@ -73,3 +73,15 @@
-     char type;
- } slice_t;
+@@ -64,3 +64,15 @@
+     int num_uri;
+ };
  
 +static char *_raw_copy_playlist(const char *s) {
 +    size_t len = strlen(s);
@@ -18,7 +18,25 @@ index 8fa87ff..56ba9d0 100644
 +    return copy;
 +}
 +
-@@ -968,9 +980,11 @@
+@@ -393,7 +405,7 @@
+     *slices = count + 2;
+ 
+     int copies = 0;
+-    for (int i = 1; i < count; i++) {
++    for (int i = 1; i <= count; i++) {
+         if (!strcmp(languages[i].code, languages[1].code)) {
+             copies++;
+         }
+@@ -428,7 +440,7 @@
+ 
+     assert(airplay_video);
+     printf("%d available languages:\n\n", language_count);
+-    int i_default = -1;
++    int i_default = 1;
+     
+     const char *language_name = get_language_name(airplay_video);
+     for (int i = 1; i <= language_count; i ++) {
+@@ -632,9 +644,11 @@
      for (int i = 0; i < num ; i++) {
          if (strcmp(media_data_store[i].uri, media_data_store[num].uri) == 0) {
 -            assert(strcmp(media_data_store[i].playlist, media_playlist) == 0);
@@ -34,7 +52,7 @@ index 8fa87ff..56ba9d0 100644
          }
      }
      media_item_t *media_item = &media_data_store[num];
-@@ -1122,4 +1136,18 @@
+@@ -791,4 +805,18 @@
      return new_master;
  }
  
@@ -53,7 +71,7 @@ index 8fa87ff..56ba9d0 100644
 +}
 +
  char *adjust_yt_condensed_playlist(const char *media_playlist) {
-@@ -1130,49 +1158,21 @@
+@@ -799,49 +827,21 @@
  
 -    const char *base_uri_begin;
 -    const char *params_begin;
@@ -118,7 +136,7 @@ index 8fa87ff..56ba9d0 100644
 +        return _raw_copy_playlist(media_playlist);
 +    }
  
-@@ -1217,8 +1217,7 @@
+@@ -886,8 +886,7 @@
      }
  
      size_t old_size = strlen(media_playlist);
@@ -126,42 +144,42 @@ index 8fa87ff..56ba9d0 100644
 -    new_len += count * (base_uri_len + params_len);
 +    size_t new_len = old_size + (size_t) count * (base_uri_len + params_len + 2 * nparams + 2);
  
+     int byte_count = 0;
      char * new_playlist = (char *) malloc(new_len + 1);
-     if (!new_playlist) {
-@@ -1230,4 +1229,4 @@
+@@ -900,4 +899,4 @@
      char *new_pos = new_playlist;
      ptr = old_pos;
      ptr = strstr(old_pos, "#EXTINF:");
 -    size_t len = ptr - old_pos;
 +    size_t len = (ptr ? ptr : old_pos + strlen(old_pos)) - old_pos;
-@@ -1240,3 +1239,4 @@
+@@ -911,3 +910,4 @@
          const char *end = NULL;
          const char *start = strstr(ptr, prefix);
 +        if (!start) break;
          len = start - ptr;
-@@ -1269,6 +1269,7 @@
-             *new_pos = '/';
+@@ -945,6 +945,7 @@
+             byte_count++;
              new_pos++;
  
 +            if (!end) end = old_pos + strlen(old_pos);
              len = end - old_pos;
              end++;
  
-@@ -1287,6 +1288,9 @@
+@@ -965,7 +966,8 @@
      new_pos += len;
      old_pos += len;
  
-+    *new_pos = '\0';
-+    assert(new_pos <= new_playlist + new_len);
-+
+-    assert(byte_count == (int) new_len);
++    new_playlist[byte_count] = '\0';
++    assert(byte_count <= (int) new_len);
+ 
      free (prefix);
      free (base_uri);
-     free (params);
 diff --git a/lib/http_handlers.h b/lib/http_handlers.h
-index b92bf75..13c9685 100644
+index 7984be8..aa985bf 100644
 --- a/lib/http_handlers.h
 +++ b/lib/http_handlers.h
-@@ -397,7 +397,6 @@
+@@ -468,7 +468,6 @@
  
      raop_t *raop = conn->raop;
      airplay_video_t *airplay_video = (airplay_video_t *) hls_get_current_video(raop);
@@ -169,7 +187,7 @@ index b92bf75..13c9685 100644
      bool data_is_plist = false;
      plist_t req_root_node = NULL;
      uint64_t uint_val = 0;
-@@ -405,6 +404,7 @@
+@@ -476,6 +475,7 @@
      int fcup_response_statuscode = 0;
      char *type = NULL;
      bool logger_debug = (logger_get_level(raop->logger) >= LOGGER_DEBUG);

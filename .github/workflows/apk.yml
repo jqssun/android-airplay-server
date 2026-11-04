@@ -10,32 +10,21 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
-    inputs:
-      version:
-        description: "v*.*.*"
-        required: true
-        type: string
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Set TAG
-        if: github.event_name == 'push'
         run: |
-          echo "version=$(echo '${{ github.ref_name }}' | awk -F 'v' '{print $2}')" >> $GITHUB_ENV
-
-      - name: Set TAG
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          echo "version=$(echo '${{ inputs.version }}' | awk -F 'v' '{print $2}')" >> $GITHUB_ENV
+          echo "version=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' ${{ env.main_project_module }}/build.gradle.kts)" >> $GITHUB_ENV
 
       - name: Use JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: "zulu"
           java-version: "21"
@@ -51,7 +40,7 @@ jobs:
           rm upload.jks local.properties
 
       - name: Publish (GitHub)
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           name: v${{ env.version }}

@@ -97,7 +97,6 @@ set(AIRPLAY_SOURCES
     ${UXPLAY_LIB}/byteutils.c
     ${UXPLAY_LIB}/compat.c
     ${UXPLAY_LIB}/crypto.c
-    ${UXPLAY_LIB}/dnssd.c
     ${UXPLAY_LIB}/fairplay_playfair.c
     ${UXPLAY_LIB}/http_request.c
     ${UXPLAY_LIB}/http_response.c

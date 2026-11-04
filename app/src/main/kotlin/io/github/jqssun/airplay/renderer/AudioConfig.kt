@@ -9,6 +9,7 @@ data class AudioConfig(
     val percentilePct: Int = 95,
     val oboeBufferFrames: Int = 0,    // 0 = auto (two bursts)
     val forceSwAlac: Boolean = false,
+    val forceSwAac: Boolean = false,
     val realtimePriority: Boolean = true,
     val lowLatency: Boolean = true,
     val benchmarkLog: Boolean = false,

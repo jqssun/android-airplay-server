@@ -9,3 +9,4 @@
 - Audio latency control and support for software decoder fallback
 - Debug overlay with real-time statistics (FPS, bitrate, codec, resolution, frame count, audio volume, etc.)
 - Android native media session integration with notification controls
+- Wired secondary display over USB tethering

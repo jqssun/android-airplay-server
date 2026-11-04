@@ -47,10 +47,12 @@ class VideoRenderer(ctx: Context) {
     private var _ptsBaseUs = Long.MIN_VALUE
     private var _wallBaseNs = 0L
 
-    fun setResolution(w: Int, h: Int) {
+    fun setResolution(w: Int, h: Int) = synchronized(lock) {
+        if (w == videoWidth && h == videoHeight) return@synchronized
         videoWidth = w
         videoHeight = h
         pipeline.setVideoSize(w, h)
+        stopCodec()
     }
 
     // doesn't restart codec; decoder renders into pipeline's own persistent surface
@@ -65,9 +67,9 @@ class VideoRenderer(ctx: Context) {
         pipeline.setDisplaySurface(null)
     }
 
-    fun selectDecoders(w: Int, h: Int, fps: Int, h265: Boolean): Boolean = synchronized(lock) {
+    fun selectDecoders(w: Int, h: Int, fps: Int, h265: Boolean?): Boolean = synchronized(lock) {
         avcDecoder = selector.avc()
-        hevcDecoder = if (h265) selector.hevc(avcDecoder, w, h, fps) else null
+        hevcDecoder = if (h265 != false) selector.hevc(avcDecoder, w, h, fps, force = h265 == true) else null
         maxFps = fps
         Log.i(TAG, "decoders: avc=${avcDecoder?.name} hevc=${hevcDecoder?.name}")
         hevcDecoder != null

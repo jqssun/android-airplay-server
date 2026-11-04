@@ -35,6 +35,7 @@ struct AudioConfig {
     const int percentilePct;     // adaptive tuner target percentile
     const int oboeBufferFrames;  // 0 = auto, two bursts in low-latency mode, oboe default in power save
     const bool forceSwAlac;      // embedded ffmpeg software ALAC even when HW available
+    const bool forceSwAac;       // embedded ffmpeg software AAC-LC/ELD
     const bool realtimePriority; // decoder: request realtime priority
     const bool lowLatency;       // low-latency decoder + oboe low-latency output
     const bool benchmarkLog;     // periodically log decoder stats
@@ -95,6 +96,12 @@ struct AudioEngine {
         mDecoder = {};
     }
 
+    void setClientGain(float g) {
+        std::lock_guard<std::mutex> lk(mRebuildLock);
+        mClientGain = g;
+        if (mOutput) mOutput->setClientGain(g);
+    }
+
     void onFormat(int ct, int spf) {
         const int i = ctIndex(ct);
         if (i < 0 || spf <= 0) return;
@@ -140,7 +147,8 @@ struct AudioEngine {
             mDecoder = {}; // release old decoder first to free resources
             mDecoder = {ct, wantConfig,
                         makeDecoder(ct, wantConfig.spf, mSampleRate, mChannels, *mTimeline,
-                                    mDecLatency, *mLog, mApplied->forceSwAlac,
+                                    mDecLatency, *mLog,
+                                    ct == CT_ALAC ? mApplied->forceSwAlac : mApplied->forceSwAac,
                                     mApplied->realtimePriority, mApplied->lowLatency)};
             mRetryAtNs = mDecoder.decoder ? 0 : monoNs() + DECODER_RETRY_NS;
             // codec switch is definitely a discontinuity
@@ -166,6 +174,7 @@ private:
                                                      cfg.staticCushionMs, cfg.percentilePct);
         mOutput = AudioOutput::create(mSampleRate, mChannels, cfg.oboeBufferFrames,
                                       cfg.lowLatency, mTimeline, mLog);
+        mOutput->setClientGain(mClientGain);  // carry current level across rebuild
         mApplied = std::make_unique<AudioConfig>(cfg);
     }
 
@@ -183,6 +192,7 @@ private:
     std::shared_ptr<AudioOutput> mOutput;      // guarded by mRebuildLock
     bool mRunning = false;                     // requested output state, guarded by mRebuildLock
     bool mOutputActive = false;                // actual output state, guarded by mRebuildLock
+    float mClientGain = 1.0f;                  // last-set sender gain, guarded by mRebuildLock
 
     LatencyReporter mDecLatency{"decode", *mLog};
     // decoder + codec/config it was built with
@@ -223,11 +233,15 @@ void audio_engine_set_default_stream_values(int sampleRate, int framesPerBurst) 
 }
 
 bool audio_engine_configure(AudioEngine *engine, int cushionMs, int percentilePct,
-                            int oboeBufferFrames, bool forceSwAlac, bool realtimePriority,
-                            bool lowLatency, bool benchmarkLog) {
+                            int oboeBufferFrames, bool forceSwAlac, bool forceSwAac,
+                            bool realtimePriority, bool lowLatency, bool benchmarkLog) {
     if (!engine) return false;
-    return engine->configure({cushionMs, percentilePct, oboeBufferFrames, forceSwAlac,
+    return engine->configure({cushionMs, percentilePct, oboeBufferFrames, forceSwAlac, forceSwAac,
                               realtimePriority, lowLatency, benchmarkLog});
+}
+
+void audio_engine_set_client_gain(AudioEngine *engine, float gain) {
+    if (engine) engine->setClientGain(gain);
 }
 
 void audio_engine_on_format(AudioEngine *engine, int ct, int spf) {

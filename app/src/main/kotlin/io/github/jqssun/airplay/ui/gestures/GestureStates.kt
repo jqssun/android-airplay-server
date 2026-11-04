@@ -133,23 +133,32 @@ class SeekGestureState(private val viewModel: MainViewModel) {
 }
 
 @Stable
-class VolumeState(private val context: Context) {
+class ServerVolumeState(private val context: Context) {
     private val audioManager = context.getSystemService(AudioManager::class.java)
     private val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
 
-    var percentage by mutableIntStateOf(0)
+    var percentage by mutableIntStateOf(_current())
         private set
 
+    private fun _current() = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / maxVolume
+
     fun sync() {
-        percentage = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / maxVolume
+        percentage = _current()
     }
 
     fun update(newPercentage: Int) {
         percentage = newPercentage.coerceIn(0, 100)
-        // surface the system panel when a headset is connected
-        val flags = if (_isHeadsetOn()) AudioManager.FLAG_SHOW_UI else 0
-        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, percentage * maxVolume / 100, flags)
+        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, percentage * maxVolume / 100, _flags())
     }
+
+    fun adjust(up: Boolean) {
+        audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC,
+            if (up) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, _flags())
+        sync()
+    }
+
+    // surface the system panel when a headset is connected
+    private fun _flags() = if (_isHeadsetOn()) AudioManager.FLAG_SHOW_UI else 0
 
     // keeps the indicator in sync with volume-key presses during a gesture
     fun handleLifecycle(scope: DisposableEffectScope): DisposableEffectResult = with(scope) {
@@ -204,14 +213,14 @@ enum class VerticalGesture { VOLUME, BRIGHTNESS }
 // left half = brightness, right half = volume
 @Stable
 class VolumeAndBrightnessGestureState(
-    private val volumeState: VolumeState,
+    private val serverVolume: ServerVolumeState,
     private val brightnessState: BrightnessState?,
     private val scope: CoroutineScope,
 ) {
     var activeGesture: VerticalGesture? by mutableStateOf(null)
         private set
     private var startY = 0f
-    private var startVolume = 0
+    private var startServerVolume = 0
     private var startBrightness = 0
     private var hideJob: Job? = null
 
@@ -223,15 +232,15 @@ class VolumeAndBrightnessGestureState(
             VerticalGesture.VOLUME
         }
         startY = offset.y
-        volumeState.sync()
-        startVolume = volumeState.percentage
+        serverVolume.sync()
+        startServerVolume = serverVolume.percentage
         startBrightness = brightnessState?.percentage ?: 0
     }
 
     fun onDrag(change: PointerInputChange, dragAmount: Float) {
         val delta = ((startY - change.position.y) * SENSITIVITY).toInt()
         when (activeGesture ?: return) {
-            VerticalGesture.VOLUME -> volumeState.update(startVolume + delta)
+            VerticalGesture.VOLUME -> serverVolume.update(startServerVolume + delta)
             VerticalGesture.BRIGHTNESS -> brightnessState?.update(startBrightness + delta)
         }
     }

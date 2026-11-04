@@ -1,8 +1,8 @@
 diff --git a/lib/raop_handlers.h b/lib/raop_handlers.h
-index 8dbd21b..b779ece 100644
+index cc5b3c2..168bb3f 100644
 --- a/lib/raop_handlers.h
 +++ b/lib/raop_handlers.h
-@@ -1129,11 +1129,11 @@
+@@ -1134,11 +1134,11 @@
      if (!strcmp(content_type, "text/parameters")) {
          char *datastr = NULL;
          datastr = calloc(1, datalen + 1);
@@ -16,7 +16,7 @@ index 8dbd21b..b779ece 100644
 +                if (conn->raop_rtp && raop_rtp_is_running(conn->raop_rtp)) {
                      raop_rtp_set_volume(conn->raop_rtp, vol);
                  } else if (raop->callbacks.audio_set_volume) {
-@@ -1141,12 +1141,14 @@
+@@ -1146,12 +1146,14 @@
                      raop->callbacks.audio_set_volume(raop->callbacks.cls, vol);
                  }
              } else if ((datalen >= 10) && !strncmp(datastr, "progress: ", 10)) {
