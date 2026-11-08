@@ -1,0 +1,59 @@
+diff --git a/lib/airplay_video.c b/lib/airplay_video.c
+index 6f0d797..767774c 100644
+--- a/lib/airplay_video.c
++++ b/lib/airplay_video.c
+@@ -455,12 +455,16 @@ char * select_master_playlist_language(airplay_video_t *airplay_video, char *mas
+     assert(airplay_video);
+     printf("%d available languages:\n\n", language_count);
+     int i_default = 1;
+-    
++    int sender_choice = 0;
++
++    /* a language selected by the client (MediaSelectionOptions) takes priority
++       over the preferred languages list */
+     const char *language_name = get_language_name(airplay_video);
+     for (int i = 1; i <= language_count; i ++) {
+         if (language_name) {
+             if (!strcmp(language_name, languages[i].name)) {
+                 i_default = i;
++                sender_choice = 1;
+             }
+         } else if (languages[i].is_default) {
+             i_default = i;
+@@ -470,7 +474,7 @@ char * select_master_playlist_language(airplay_video_t *airplay_video, char *mas
+     printf("\n");
+     assert(i_default >= 0);
+ 
+-    const char *ptrc = airplay_video->lang;;
++    const char *ptrc = sender_choice ? NULL : airplay_video->lang;
+     code = NULL;
+     name = NULL;
+     while (ptrc){
+@@ -498,7 +502,7 @@ char * select_master_playlist_language(airplay_video_t *airplay_video, char *mas
+     if (!code) {
+         code = languages[i_default].code;
+         name = languages[i_default].name; 
+-        if (airplay_video->lang) {
++        if (airplay_video->lang && !sender_choice) {
+             printf("no match with prefered language list %s\n", airplay_video->lang);
+         }
+         if (language_name) {
+diff --git a/lib/http_handlers.h b/lib/http_handlers.h
+index 586f61e..4e89822 100644
+--- a/lib/http_handlers.h
++++ b/lib/http_handlers.h
+@@ -180,8 +180,13 @@ http_handler_set_property(raop_conn_t *conn,
+     */
+ 
+     airplay_video_t *airplay_video = (airplay_video_t *) hls_get_current_video(raop);
+-    assert(airplay_video);
+     if (!strcmp(property, "selectedMediaArray")) {
++        /* the client may send a language choice (e.g. after an audio track change)
++           while no video is current; ignore it instead of crashing */
++        if (!airplay_video) {
++            logger_log(raop->logger, LOGGER_INFO, "setProperty selectedMediaArray ignored: no current video");
++            goto post_error;
++        }
+         /* verify that this request contains a binary plist*/
+         char *header_str = NULL;
+         int request_datalen = 0;
