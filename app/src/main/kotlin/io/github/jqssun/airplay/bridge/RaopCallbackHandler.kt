@@ -25,4 +25,6 @@ interface RaopCallbackHandler {
     fun onVideoStop()
     // fired per sender GET /playback-info poll; polling starts before /play
     fun onVideoSessionPoll()
+    // fired when a sender completes PIN pairing; carries stable device identifier and name
+    fun onPairedClient(deviceId: String, name: String)
 }

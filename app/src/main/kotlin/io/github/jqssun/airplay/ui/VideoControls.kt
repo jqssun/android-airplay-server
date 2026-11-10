@@ -36,21 +36,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AspectRatio
-import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.CropLandscape
-import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.FastForward
 import androidx.compose.material.icons.rounded.FitScreen
 import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.LockOpen
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PhotoSizeSelectActual
-import androidx.compose.material.icons.rounded.PictureInPictureAlt
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.ripple.RippleAlpha
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
@@ -85,13 +79,11 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
@@ -214,34 +206,6 @@ fun VideoControlsTop(
             PlayerButton(onClick = onSpeedClick) {
                 Icon(Icons.Rounded.Speed, contentDescription = stringResource(R.string.select_playback_speed))
             }
-            if (videoUrl != null) {
-                val clipboard = LocalClipboardManager.current
-                PlayerButton(onClick = { clipboard.setText(AnnotatedString(videoUrl)) }) {
-                    Icon(Icons.Rounded.ContentCopy, contentDescription = stringResource(R.string.cd_copy_url))
-                }
-            }
-            if (showDownload) {
-                PlayerButton(onClick = onDownloadClick) {
-                    when {
-                        downloadProgress == null -> Icon(
-                            Icons.Rounded.Download,
-                            contentDescription = stringResource(R.string.cd_download)
-                        )
-                        downloadProgress < 0 -> CircularProgressIndicator(
-                            color = Color.White,
-                            strokeWidth = 3.dp,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        else -> CircularProgressIndicator(
-                            progress = { downloadProgress / 100f },
-                            color = Color.White,
-                            trackColor = Color.White.copy(alpha = 0.3f),
-                            strokeWidth = 3.dp,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
-            }
         }
     }
 }
@@ -300,13 +264,6 @@ fun VideoControlsBottom(
                 )
             }
             Spacer(modifier = Modifier.weight(1f))
-            PlayerButton(modifier = Modifier.size(30.dp), onClick = onRotateClick) {
-                Icon(
-                    Icons.Rounded.ScreenRotation,
-                    contentDescription = stringResource(R.string.cd_rotate),
-                    modifier = Modifier.size(20.dp),
-                )
-            }
         }
         PlayerSeekbar(
             positionMs = positionMs,
@@ -322,16 +279,8 @@ fun VideoControlsBottom(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp, alignment = Alignment.Start),
         ) {
-            PlayerButton(onClick = onLockClick) {
-                Icon(Icons.Rounded.LockOpen, contentDescription = stringResource(R.string.cd_lock_controls))
-            }
             PlayerButton(onClick = onContentScaleClick) {
                 Icon(contentScale.icon(), contentDescription = stringResource(contentScale.nameRes()))
-            }
-            if (isPipSupported) {
-                PlayerButton(onClick = onPipClick) {
-                    Icon(Icons.Rounded.PictureInPictureAlt, contentDescription = stringResource(R.string.cd_pip))
-                }
             }
         }
     }

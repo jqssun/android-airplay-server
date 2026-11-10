@@ -4,36 +4,40 @@
     android:viewportWidth="320"
     android:viewportHeight="180">
 
+    <!-- solid dark background (Fire TV friendly, no gradient to maximize compatibility) -->
     <path
-        android:fillColor="#FFFFFF"
+        android:fillColor="#FF101820"
         android:pathData="M0,0h320v180H0z" />
 
+    <!-- AirPlay glyph: TV monitor + upward triangle -->
     <group
-        android:scaleX="0.1875"
-        android:scaleY="0.1875"
-        android:translateX="70">
-        <group
-            android:pivotX="480"
-            android:pivotY="480"
-            android:scaleX="0.5"
-            android:scaleY="0.5">
-            <group
-                android:translateX="16"
-                android:translateY="16">
-                <path
-                    android:fillColor="#C0C0C0"
-                    android:pathData="m240,840 l240,-240 l240,240L240,840ZM80,680v-480q0,-33 23.5,-56.5T160,120h640q33,0 56.5,23.5T880,200v480q0,33 -23.5,56.5T800,760H680v-80h120v-480H160v480h120v80H160q-33,0 -56.5,-23.5T80,680Zm400,-200Z" />
-            </group>
-            <group
-                android:translateX="12"
-                android:translateY="12">
-                <path
-                    android:fillColor="#9E9E9E"
-                    android:pathData="m240,840 l240,-240 l240,240L240,840ZM80,680v-480q0,-33 23.5,-56.5T160,120h640q33,0 56.5,23.5T880,200v480q0,33 -23.5,56.5T800,760H680v-80h120v-480H160v480h120v80H160q-33,0 -56.5,-23.5T80,680Zm400,-200Z" />
-            </group>
-            <path
-                android:fillColor="#424242"
-                android:pathData="m240,840 l240,-240 l240,240L240,840ZM80,680v-480q0,-33 23.5,-56.5T160,120h640q33,0 56.5,23.5T880,200v480q0,33 -23.5,56.5T800,760H680v-80h120v-480H160v480h120v80H160q-33,0 -56.5,-23.5T80,680Zm400,-200Z" />
-        </group>
+        android:translateX="40"
+        android:translateY="36">
+        <!-- monitor outline -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M8,0h88a8,8 0 0 1 8,8v60a8,8 0 0 1 -8,8h-16v-10h16v-56h-88v56h16v10h-16a8,8 0 0 1 -8,-8v-60a8,8 0 0 1 8,-8z" />
+        <!-- upward triangle (cast indicator) -->
+        <path
+            android:fillColor="#FF00A8E1"
+            android:pathData="M52,46 L80,80 L24,80 Z" />
+    </group>
+
+    <!-- wordmark "AirPlay" simplified to a stable path group -->
+    <group
+        android:translateX="170"
+        android:translateY="70">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M0,30 L10,0 L18,0 L28,30 L22,30 L20,24 L8,24 L6,30 Z M10,19 L18,19 L14,8 Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M34,0 L40,0 L40,30 L34,30 Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M46,30 L46,0 L58,0 Q66,0 66,8 Q66,14 60,15 L68,30 L61,30 L55,17 L52,17 L52,30 Z M52,12 L56,12 Q60,12 60,8 Q60,4 56,4 L52,4 Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M72,0 L78,0 L78,18 Q78,24 82,24 Q86,24 86,18 L86,0 L92,0 L92,18 Q92,30 82,30 Q72,30 72,18 Z" />
     </group>
 </vector>

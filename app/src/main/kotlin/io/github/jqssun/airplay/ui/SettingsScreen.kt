@@ -135,6 +135,27 @@ fun SettingsScreen(viewModel: MainViewModel) {
             checked = requirePin,
             onCheckedChange = { viewModel.set(Prefs.REQUIRE_PIN, it) }
         )
+        
+        // Paired devices management
+        var showPairedDevicesDialog by remember { mutableStateOf(false) }
+        val pairedDevices by viewModel.pairingManager.pairedDevices.collectAsState()
+        
+        SettingButton(
+            title = stringResource(R.string.setting_manage_paired_devices),
+            description = stringResource(R.string.setting_manage_paired_devices_desc),
+            buttonText = stringResource(R.string.paired_devices),
+            badge = if (pairedDevices.isNotEmpty()) pairedDevices.size.toString() else null,
+            onClick = { showPairedDevicesDialog = true }
+        )
+        
+        if (showPairedDevicesDialog) {
+            PairedDevicesDialog(
+                devices = pairedDevices,
+                onDismiss = { showPairedDevicesDialog = false },
+                onRemoveDevice = { deviceId -> viewModel.pairingManager.removeDevice(deviceId) },
+                onRemoveAll = { viewModel.pairingManager.removeAllDevices() }
+            )
+        }
 
         SettingSwitch(
             title = stringResource(R.string.setting_allow_new_conn),
@@ -157,7 +178,7 @@ fun SettingsScreen(viewModel: MainViewModel) {
         val autoLaunch = launchOnConnect && hasOverlayPermission
         ListItem(
             modifier = Modifier
-                .dpadFocus(RectangleShape)
+                .dpadFocusNoScale(RectangleShape)
                 .toggleable(
                     value = autoLaunch,
                     role = Role.Switch,
@@ -525,7 +546,7 @@ private fun SettingResolution(
                             label = { Text(stringResource(R.string.setting_resolution_width)) },
                             keyboardOptions = KeyboardOptions(
                                 keyboardType = KeyboardType.Number,
-                                imeAction = ImeAction.Next
+                                imeAction = ImeAction.Done
                             ),
                             modifier = Modifier.weight(1f)
                         )
@@ -569,28 +590,89 @@ private fun SettingTextField(
     description: String? = null,
     range: IntRange? = null
 ) {
-    var text by remember(value) { mutableStateOf(value) }
-    val valid = range == null || text.toIntOrNull()?.let { it in range } == true
-    fun save() {
-        if (valid && text != value) onCommit(text)
-    }
-    OutlinedTextField(
-        value = text,
-        onValueChange = { text = if (range == null) it else it.filter { c -> c.isDigit() }.take(6) },
-        label = { Text(label) },
-        supportingText = description?.let { { Text(it) } },
-        singleLine = true,
-        isError = !valid,
-        keyboardOptions = KeyboardOptions(
-            keyboardType = if (range == null) KeyboardType.Text else KeyboardType.Number,
-            imeAction = ImeAction.Done
-        ),
-        keyboardActions = doneAndHide(::save),
+    // TV-friendly: the row itself is a non-editable focusable button. The on-screen
+    // IME fullscreen editor only opens after the user presses OK on the row.
+    var showDialog by remember { mutableStateOf(false) }
+    ListItem(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .padding(bottom = 8.dp)
-            .onFocusChanged { if (!it.isFocused) save() }
+            .dpadFocusNoScale(RectangleShape)
+            .toggleable(value = false, role = Role.Button, onValueChange = { showDialog = true }),
+        headlineContent = { Text(label) },
+        supportingContent = {
+            Column {
+                if (description != null) Text(description)
+                Text(
+                    text = value.ifBlank { "—" },
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    )
+    if (showDialog) {
+        SettingEditDialog(
+            title = label,
+            initial = value,
+            range = range,
+            description = description,
+            onDismiss = { showDialog = false },
+            onCommit = {
+                onCommit(it)
+                showDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun SettingEditDialog(
+    title: String,
+    initial: String,
+    range: IntRange?,
+    description: String?,
+    onDismiss: () -> Unit,
+    onCommit: (String) -> Unit
+) {
+    var draft by remember(initial) { mutableStateOf(initial) }
+    val valid = range == null || draft.toIntOrNull()?.let { it in range } == true
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                if (description != null) {
+                    Text(description)
+                    Spacer(Modifier.height(8.dp))
+                }
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = {
+                        draft = if (range == null) it else it.filter { c -> c.isDigit() }.take(6)
+                    },
+                    singleLine = true,
+                    isError = !valid,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = if (range == null) KeyboardType.Text else KeyboardType.Number,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = doneAndHide {
+                        if (valid && draft != initial) onCommit(draft) else onDismiss()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = valid,
+                onClick = { if (draft != initial) onCommit(draft) else onDismiss() }
+            ) { Text(stringResource(R.string.btn_ok)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.btn_cancel))
+            }
+        }
     )
 }
 
@@ -729,10 +811,43 @@ private fun SettingSwitch(
 ) {
     ListItem(
         modifier = Modifier
-            .dpadFocus(RectangleShape)
+            .dpadFocusNoScale(RectangleShape)  // No scale to avoid clipping
             .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange),
         headlineContent = { Text(title) },
         supportingContent = { Text(description) },
         trailingContent = { Switch(checked = checked, onCheckedChange = null) }
+    )
+}
+
+@Composable
+private fun SettingButton(
+    title: String,
+    description: String,
+    buttonText: String,
+    badge: String? = null,
+    onClick: () -> Unit
+) {
+    ListItem(
+        modifier = Modifier.dpadFocusNoScale(RectangleShape),
+        headlineContent = { Text(title) },
+        supportingContent = { Text(description) },
+        trailingContent = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (badge != null) {
+                    Badge {
+                        Text(badge)
+                    }
+                }
+                Button(
+                    onClick = onClick,
+                    modifier = Modifier.dpadFocus()
+                ) {
+                    Text(buttonText)
+                }
+            }
+        }
     )
 }

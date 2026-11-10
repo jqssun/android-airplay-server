@@ -48,6 +48,11 @@
     <!-- Video download -->
     <string name="download_saved">Saved to %1$s</string>
     <string name="download_failed">Download failed</string>
+    
+    <!-- TV UI additions -->
+    <string name="status">Status</string>
+    <string name="resolution">Resolution</string>
+    <string name="airplay_instructions">Open Control Center on your iPhone or iPad and tap Screen Mirroring to connect</string>
 
     <!-- Player gestures -->
     <string name="gesture_seek_seconds">%1$d seconds</string>
@@ -201,4 +206,23 @@
     <string name="debug_audio_glitch">Glitch: trim=%1$d drop=%2$d sil=%3$d ur=%4$d xrun=%5$d</string>
     <string name="debug_audio_decode">Decode: %1$s</string>
     <string name="debug_clients">Senders: %1$d</string>
+
+    <!-- Pairing Management -->
+    <string name="paired_devices">Paired Devices</string>
+    <string name="paired_devices_title">Paired Devices</string>
+    <string name="paired_devices_subtitle">%1$d device(s) paired</string>
+    <string name="no_paired_devices">No devices paired yet.\n\nDevices will appear here after first connection with PIN enabled.</string>
+    <string name="remove_device_title">Remove Device?</string>
+    <string name="remove_device_message">Remove \"%1$s\"?\n\nThis device will need to pair again with PIN on next connection.</string>
+    <string name="remove_all_devices">Remove All</string>
+    <string name="remove_all_devices_title">Remove All Devices?</string>
+    <string name="remove_all_devices_message">Remove all %1$d paired devices?\n\nAll devices will need to pair again with PIN.</string>
+    <string name="last_seen">Last seen: %1$s</string>
+    <string name="btn_close">Close</string>
+    <string name="btn_remove">Remove</string>
+    <string name="btn_remove_all">Remove All</string>
+    <string name="btn_cancel">Cancel</string>
+    <string name="cd_remove_device">Remove device</string>
+    <string name="setting_manage_paired_devices">Manage paired devices</string>
+    <string name="setting_manage_paired_devices_desc">View and remove devices that are paired with this server</string>
 </resources>

@@ -110,14 +110,26 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             AirPlayTheme {
-                MainScreen(
-                    viewModel = viewModel,
-                    isInPip = isInPip.value,
-                    onSurfaceAvailable = { viewModel.onSurfaceAvailable(it) },
-                    onSurfaceDestroyed = { viewModel.onSurfaceDestroyed(it) },
-                    onPip = { enterPip() },
-                    onLocalNetwork = ::_requestLocalNetwork
-                )
+                // Use TV-optimized UI on Fire TV / Android TV devices
+                if (io.github.jqssun.airplay.ui.isTv()) {
+                    io.github.jqssun.airplay.ui.TvMainScreen(
+                        viewModel = viewModel,
+                        isInPip = isInPip.value,
+                        onSurfaceAvailable = { viewModel.onSurfaceAvailable(it) },
+                        onSurfaceDestroyed = { viewModel.onSurfaceDestroyed(it) },
+                        onPip = { enterPip() },
+                        onLocalNetwork = ::_requestLocalNetwork
+                    )
+                } else {
+                    MainScreen(
+                        viewModel = viewModel,
+                        isInPip = isInPip.value,
+                        onSurfaceAvailable = { viewModel.onSurfaceAvailable(it) },
+                        onSurfaceDestroyed = { viewModel.onSurfaceDestroyed(it) },
+                        onPip = { enterPip() },
+                        onLocalNetwork = ::_requestLocalNetwork
+                    )
+                }
             }
         }
     }

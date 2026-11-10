@@ -14,6 +14,7 @@ import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.audio.TrackInfo
 import io.github.jqssun.airplay.get
 import io.github.jqssun.airplay.observe
+import io.github.jqssun.airplay.pairing.PairingManager
 import io.github.jqssun.airplay.service.AirPlayService
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -82,6 +83,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val logFile = File(app.filesDir, "airplay_logs.txt")
     private var service: AirPlayService? = null
     val dacpPlayer: Player? get() = service?.dacpPlayer
+
+    // Pairing management - singleton instance
+    val pairingManager = PairingManager.getInstance(app)
 
     fun audioScanBegin(forward: Boolean) {
         service?.dacpController?.let { if (forward) it.beginFastForward() else it.beginRewind() }

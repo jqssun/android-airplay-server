@@ -84,6 +84,9 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private var wakeLock: PowerManager.WakeLock? = null
     private var foregroundStarted = false
     private var lastOrientation = Configuration.ORIENTATION_UNDEFINED
+    
+    // Pairing management
+    private var pairingManager: io.github.jqssun.airplay.pairing.PairingManager? = null
 
     val videoRenderer = VideoRenderer(this)
     val audioRenderer = AudioRenderer()
@@ -190,6 +193,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     var logCallback: ((String) -> Unit)? = null
 
     @Volatile private var _lastPin: String? = null
+    @Volatile private var _pendingPairedClient: Pair<String, String>? = null
     var pinCallback: ((String?) -> Unit)? = null
         set(value) {
             field = value
@@ -218,6 +222,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        
+        // Initialize pairing manager - use singleton instance
+        pairingManager = io.github.jqssun.airplay.pairing.PairingManager.getInstance(this)
+        
         dacpController = DacpController(this)
         dacpPlayer = DacpPlayer(
             mainLooper,
@@ -310,7 +318,14 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             _videoPlaybackSize.value = width to height
         }
         airPlayVideoPlayer.onTitle = { _videoTitle.value = it ?: "" }
-        airPlayVideoPlayer.onEnded = { _endVideoPlayback("AirPlay Video stopped (player)") }
+        airPlayVideoPlayer.onEnded = {
+            // Natural end of an HLS clip (e.g., a YouTube Short completing). Do NOT run
+            // _endVideoPlayback here: that releases ExoPlayer and emits the duration=-1 sentinel,
+            // which iOS interprets as "we're done" and responds with a full RTSP TEARDOWN,
+            // killing the mirror session too. Instead stay in paused-at-end and wait for the
+            // sender's next /play (next Short) or explicit stop.
+            log("AirPlay Video ended (player) - staying ready for next clip")
+        }
         airPlayVideoPlayer.onPlaybackInfo = { snapshot ->
             if (nativeHandle != 0L) {
                 NativeBridge.nativeUpdatePlaybackInfo(nativeHandle, snapshot.position, snapshot.duration, snapshot.rate, snapshot.ready)
@@ -691,12 +706,15 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     override fun onVideoSize(srcW: Float, srcH: Float, w: Float, h: Float) {
         clearPin()
         if (w > 0 && h > 0) {
-            _videoAspect.value = w / h
+            // Aspect from sender's native screen (portrait-aware for Shorts/TikTok via mirroring);
+            // decoder keeps using stream dimensions since those match the encoded frames.
+            val displayAspect = if (srcW > 0 && srcH > 0) srcW / srcH else w / h
+            _videoAspect.value = displayAspect
             _videoResolution.value = "${w.toInt()}x${h.toInt()}"
             videoRenderer.setResolution(w.toInt(), h.toInt())
             _mirroringActive.value = true
         }
-        log("Video size: ${srcW}x${srcH} -> ${w}x${h}")
+        log("Video size: src=${srcW}x${srcH} stream=${w}x${h} aspect=${if (srcW > 0 && srcH > 0) srcW / srcH else w / h}")
     }
 
     override fun onClientVolume(db: Float) {
@@ -797,7 +815,31 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         val firstConnection = _connectionCount.value == 0
         _connectionCount.value++
         log("Sender connected (${_connectionCount.value})")
+
+        // Auto-register paired device if PIN was shown. Uses stable id+name from native
+        // (via onPairedClient) when available; falls back to a timestamp for senders that
+        // never call register_client.
+        if (_lastPin != null) {
+            val info = _pendingPairedClient
+            val deviceId = info?.first ?: "device_${System.currentTimeMillis()}"
+            val deviceName = info?.second?.takeIf { it.isNotBlank() }
+                ?: "Device ${java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}"
+            pairingManager?.registerDevice(deviceId, deviceName)
+            log("Registered paired device: id=$deviceId name=$deviceName")
+            _pendingPairedClient = null
+        } else {
+            // Not a pairing connection: refresh lastSeen for the matching known device, if any
+            _pendingPairedClient?.first?.let { pairingManager?.updateLastSeen(it) }
+        }
+
         if (firstConnection && shouldLaunchOnConnect()) launchMainActivity()
+    }
+
+    override fun onPairedClient(deviceId: String, name: String) {
+        if (deviceId.isBlank()) return
+        _pendingPairedClient = deviceId to name
+        // Keep lastSeen fresh even if this is a re-connection of a known device
+        pairingManager?.updateLastSeen(deviceId)
     }
 
     override fun onConnectionDestroy() {
@@ -837,8 +879,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     override fun onDisplayPin(pin: String) {
         if (_lastPin == pin) return
-        _lastPin = pin
-        pinCallback?.invoke(pin)
+        _lastPin = if (pin.isEmpty()) null else pin // Clear lastPin when dismissed
+        pinCallback?.invoke(if (pin.isEmpty()) null else pin)
         _updateMediaNotification()
     }
 

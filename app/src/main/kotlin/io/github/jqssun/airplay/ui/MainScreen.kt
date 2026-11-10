@@ -211,8 +211,18 @@ fun MainScreen(
         DisposableEffect(brightnessState) {
             onDispose { brightnessState?.clearOverride() }
         }
-        // orientation follows the video aspect; manual rotate holds until the next video
-        LaunchedEffect(videoPlaybackAspect) {
+        // orientation follows the video aspect on phones. SKIP on TV devices (Fire TV, Android TV):
+        // their display is fixed landscape, and requesting SENSOR_PORTRAIT would force Android
+        // to lay the activity out as portrait inside a landscape window, which stretches the
+        // whole UI horizontally.
+        val ctxForOrientation = LocalContext.current
+        val isTvUi = remember(ctxForOrientation) {
+            ctxForOrientation.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+                (ctxForOrientation.resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK) ==
+                Configuration.UI_MODE_TYPE_TELEVISION
+        }
+        LaunchedEffect(videoPlaybackAspect, isTvUi) {
+            if (isTvUi) return@LaunchedEffect
             activity?.requestedOrientation = if (videoPlaybackAspect < 1f) {
                 ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
             } else {
@@ -664,12 +674,6 @@ private fun OverviewContent(
                 }
                 if (state == ServerState.RUNNING && mirroringActive) {
                     Row(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
-                        IconButton(onClick = onPip, modifier = Modifier.dpadFocus()) {
-                            Icon(
-                                painterResource(R.drawable.ic_pip), contentDescription = stringResource(R.string.cd_pip),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                            )
-                        }
                         IconButton(onClick = onFullscreen, modifier = Modifier.dpadFocus()) {
                             Icon(
                                 Icons.Default.Fullscreen, contentDescription = stringResource(R.string.cd_fullscreen),
@@ -802,12 +806,6 @@ private fun FullscreenVideo(
             modifier = Modifier.align(Alignment.TopEnd)
         ) {
             Row(modifier = Modifier.padding(8.dp)) {
-                IconButton(onClick = onPip, modifier = Modifier.dpadFocus()) {
-                    Icon(
-                        painterResource(R.drawable.ic_pip), contentDescription = stringResource(R.string.cd_pip),
-                        tint = Color.White.copy(alpha = 0.7f)
-                    )
-                }
                 IconButton(onClick = onExitFullscreen, modifier = Modifier.dpadFocus()) {
                     Icon(
                         Icons.Default.FullscreenExit, contentDescription = stringResource(R.string.cd_exit_fullscreen),
@@ -1066,7 +1064,7 @@ private const val CLIENT_VOLUME_STEP = 1f / 16
 private const val VIDEO_OVERLAY_HIDE_MS = 4000L
 
 @Composable
-private fun DebugOverlay(info: DebugInfo, modifier: Modifier = Modifier) {
+internal fun DebugOverlay(info: DebugInfo, modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
@@ -1086,9 +1084,9 @@ private fun DebugOverlay(info: DebugInfo, modifier: Modifier = Modifier) {
     }
 }
 
-private data class DebugSection(val title: String, val lines: List<String>)
+internal data class DebugSection(val title: String, val lines: List<String>)
 
-private fun debugOverlaySections(context: Context, info: DebugInfo): List<DebugSection> = buildList {
+internal fun debugOverlaySections(context: Context, info: DebugInfo): List<DebugSection> = buildList {
     buildList {
         if (info.videoCodec.isNotEmpty()) {
             add(context.getString(R.string.debug_video, info.videoCodec, info.videoRes))

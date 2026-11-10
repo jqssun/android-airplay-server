@@ -69,6 +69,7 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->on_video_rate = (*env)->GetMethodID(env, cls, "onVideoRate", "(F)V");
     ctx->on_video_stop = (*env)->GetMethodID(env, cls, "onVideoStop", "()V");
     ctx->on_video_session_poll = (*env)->GetMethodID(env, cls, "onVideoSessionPoll", "()V");
+    ctx->on_paired_client = (*env)->GetMethodID(env, cls, "onPairedClient", "(Ljava/lang/String;Ljava/lang/String;)V");
     (*env)->DeleteLocalRef(env, cls);
 }
 
@@ -282,13 +283,24 @@ static void _mirror_video_running(void *cls, bool running) {
 }
 static void _register_client(void *cls, const char *device_id, const char *pk_str, const char *name) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
-    (void)device_id; (void)name;
-    if (ctx->registered_count >= 16) return;
-    for (int i = 0; i < ctx->registered_count; i++) {
-        if (ctx->registered_keys[i] && strcmp(ctx->registered_keys[i], pk_str) == 0) return;
+    if (ctx->registered_count < 16) {
+        int already = 0;
+        for (int i = 0; i < ctx->registered_count; i++) {
+            if (ctx->registered_keys[i] && strcmp(ctx->registered_keys[i], pk_str) == 0) { already = 1; break; }
+        }
+        if (!already) {
+            ctx->registered_keys[ctx->registered_count++] = strdup(pk_str);
+            LOGI("registered client pk (slot %d)", ctx->registered_count);
+        }
     }
-    ctx->registered_keys[ctx->registered_count++] = strdup(pk_str);
-    LOGI("registered client pk (slot %d)", ctx->registered_count);
+    /* forward stable identifiers to Kotlin for de-duplicated pairing records */
+    JNIEnv *env = _get_env(ctx);
+    if (!env || !ctx->on_paired_client) return;
+    jstring jid = (*env)->NewStringUTF(env, device_id ? device_id : (pk_str ? pk_str : ""));
+    jstring jname = (*env)->NewStringUTF(env, name ? name : "");
+    (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_paired_client, jid, jname);
+    (*env)->DeleteLocalRef(env, jid);
+    (*env)->DeleteLocalRef(env, jname);
 }
 
 static bool _check_register(void *cls, const char *pk_str) {
