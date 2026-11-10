@@ -73,6 +73,10 @@ class MainActivity : ComponentActivity() {
         }
     private var sessionEndJob: Job? = null
 
+    // true from onStop until the next onResume: the activity was in the background,
+    // so a session start delivered now is what brings it to the front
+    private var stoppedSinceResume = false
+
     // when the last video/mirroring session ended (elapsedRealtime), for the
     // interaction-clearing holdoff described on summonedBySession
     private var lastSessionEndedAt = 0L
@@ -169,17 +173,19 @@ class MainActivity : ComponentActivity() {
     }
 
     // singleTop relaunches: a session-connect start only counts as a summon when it
-    // actually brings the activity forward (below STARTED here means it was in the
-    // background; onNewIntent runs before onRestart/onStart on that path). Any other
-    // relaunch -- launcher, notification -- is the user deliberately opening the app.
+    // actually brings the activity forward, i.e. it was stopped (in the background)
+    // and hasn't been resumed since. The lifecycle state can't tell us that here:
+    // when the task is brought forward Android runs onRestart/onStart before
+    // onNewIntent, so the activity already reads as STARTED. Any other relaunch --
+    // launcher, notification -- is the user deliberately opening the app.
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra(EXTRA_SESSION_SUMMON, false)) {
-            if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-                Log.i(TAG_SUMMON, "onNewIntent: summon while backgrounded (state=${lifecycle.currentState})")
+            if (stoppedSinceResume) {
+                Log.i(TAG_SUMMON, "onNewIntent: summon while backgrounded")
                 summonedBySession = true
             } else {
-                Log.i(TAG_SUMMON, "onNewIntent: summon while already visible (state=${lifecycle.currentState}); flag unchanged ($summonedBySession)")
+                Log.i(TAG_SUMMON, "onNewIntent: summon while already visible; flag unchanged ($summonedBySession)")
             }
         } else {
             Log.i(TAG_SUMMON, "onNewIntent: user-initiated relaunch")
@@ -324,6 +330,11 @@ class MainActivity : ComponentActivity() {
         _refreshForeground()
     }
 
+    override fun onResume() {
+        super.onResume()
+        stoppedSinceResume = false
+    }
+
     fun enterPip() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         enterPictureInPictureMode(_pipParams())
@@ -361,6 +372,7 @@ class MainActivity : ComponentActivity() {
     // device/path (and PiP itself can be dismissed).
     override fun onStop() {
         super.onStop()
+        stoppedSinceResume = true
         // never stop mid-session
         if (!viewModel.pref(Prefs.RUN_IN_BACKGROUND).value && !isChangingConfigurations &&
             viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&

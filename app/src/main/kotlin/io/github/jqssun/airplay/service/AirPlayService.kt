@@ -28,6 +28,7 @@ import android.view.Surface
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import androidx.core.os.ConfigurationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
@@ -493,7 +494,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         }
 
         _serverState.value = ServerState.RUNNING
-        prefs.edit().putBoolean(Prefs.SERVER_SHOULD_RUN, true).apply()
+        prefs.edit { putBoolean(Prefs.SERVER_SHOULD_RUN, true) }
         WatchdogReceiver.schedule(this)
         if (ensureServiceStarted) {
             ContextCompat.startForegroundService(this, Intent(this, AirPlayService::class.java))
@@ -554,7 +555,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     fun stopServer() {
         _shutdown()
-        prefs.edit().putBoolean(Prefs.SERVER_SHOULD_RUN, false).apply()
+        prefs.edit { putBoolean(Prefs.SERVER_SHOULD_RUN, false) }
         WatchdogReceiver.cancel(this)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         foregroundStarted = false
