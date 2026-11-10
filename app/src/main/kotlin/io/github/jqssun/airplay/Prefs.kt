@@ -1,7 +1,9 @@
 package io.github.jqssun.airplay
 
+import android.content.Context
 import android.content.SharedPreferences
 import android.media.MediaFormat
+import android.provider.Settings
 import androidx.core.content.edit
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -55,6 +57,25 @@ object Prefs {
     const val NAME = "settings"
     const val AUTO = "auto"; const val ON = "on"; const val OFF = "off"
     const val PORTRAIT = "portrait"; const val LANDSCAPE = "landscape"
+
+    /**
+     * Default advertised name when the user hasn't set one: the device name from
+     * Android Settings > About ("device_name" in Settings.Global -- the constant is
+     * API 25+, the row itself exists on API 24), falling back to [DEF_SERVER_NAME].
+     */
+    fun defaultServerName(context: Context): String =
+        runCatching { Settings.Global.getString(context.contentResolver, "device_name") }
+            .getOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: DEF_SERVER_NAME
+
+    /** The configured server name, or [defaultServerName] when unset/blank. */
+    fun serverName(context: Context): String =
+        context.getSharedPreferences(NAME, Context.MODE_PRIVATE)[SERVER_NAME]
+            .ifBlank { defaultServerName(context) }
+
+    // internal bookkeeping (not user-facing settings): lets the watchdog tell a
+    // deliberate stopServer() apart from the process simply having been killed
+    const val SERVER_SHOULD_RUN = "server_should_run"
+
     const val FALLBACK_MAC_ADDRESS = "fallback_mac_address"
     val ADAPTIVE_PERCENTILES = intArrayOf(80, 85, 90, 95, 99)
     private val SIZE = Regex("[1-9]\\d{0,4}x[1-9]\\d{0,4}")
@@ -72,7 +93,9 @@ object Prefs {
 
     fun forced(v: String) = when (v) { ON -> true; OFF -> false; else -> null }
 
-    val SERVER_NAME = str("server_name", "Android AirPlay", restart = true)
+    const val DEF_SERVER_NAME = "Android AirPlay"
+    // empty = advertise the device name (see [serverName])
+    val SERVER_NAME = str("server_name", "", restart = true)
     val SERVER_PORT = int("server_port", 7000, 1..65535, restart = true)
     val AUTO_START = bool("auto_start", true)
     val BOOT_AUTO_START = bool("boot_auto_start", true)
@@ -112,6 +135,8 @@ object Prefs {
     val ADVERTISE_VIDEO = bool("advertise_video", true, restart = true)
     val ADVERTISE_MIRRORING = bool("advertise_mirroring", true, restart = true)
     val ADVERTISE_AUDIO = bool("advertise_audio", true, restart = true)
+    val AUTO_AUDIO_MODE = bool("auto_audio_mode", true)
     val LAUNCH_ON_CONNECT = bool("launch_on_connect", true)
+    val RETURN_TO_PREVIOUS_APP = bool("return_to_previous_app", true)
     val USB_ONLY = bool("usb_only", false, restart = true)
 }

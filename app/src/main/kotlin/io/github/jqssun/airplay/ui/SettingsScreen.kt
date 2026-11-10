@@ -46,10 +46,12 @@ fun SettingsScreen(viewModel: MainViewModel) {
     val idlePreview by viewModel.pref(Prefs.IDLE_PREVIEW).collectAsState()
     val autoFullscreen by viewModel.pref(Prefs.AUTO_FULLSCREEN).collectAsState()
     val keepScreenOn by viewModel.pref(Prefs.KEEP_SCREEN_ON).collectAsState()
+    val autoAudioMode by viewModel.pref(Prefs.AUTO_AUDIO_MODE).collectAsState()
     val advertiseVideo by viewModel.pref(Prefs.ADVERTISE_VIDEO).collectAsState()
     val advertiseMirroring by viewModel.pref(Prefs.ADVERTISE_MIRRORING).collectAsState()
     val advertiseAudio by viewModel.pref(Prefs.ADVERTISE_AUDIO).collectAsState()
     val launchOnConnect by viewModel.pref(Prefs.LAUNCH_ON_CONNECT).collectAsState()
+    val returnToPreviousApp by viewModel.pref(Prefs.RETURN_TO_PREVIOUS_APP).collectAsState()
     val maxFps by viewModel.pref(Prefs.MAX_FPS).collectAsState()
     val overscanned by viewModel.pref(Prefs.OVERSCANNED).collectAsState()
     val requirePin by viewModel.pref(Prefs.REQUIRE_PIN).collectAsState()
@@ -92,13 +94,15 @@ fun SettingsScreen(viewModel: MainViewModel) {
         SettingTextField(
             label = stringResource(R.string.setting_server_name),
             value = serverName,
-            onCommit = { viewModel.set(Prefs.SERVER_NAME, it) }
+            onCommit = { viewModel.set(Prefs.SERVER_NAME, it) },
+            description = stringResource(R.string.setting_server_name_desc)
         )
 
         SettingTextField(
             label = stringResource(R.string.setting_server_port),
             value = serverPort.toString(),
             onCommit = { viewModel.set(Prefs.SERVER_PORT, it.toInt()) },
+            description = stringResource(R.string.setting_server_port_desc),
             range = Prefs.SERVER_PORT.range
         )
 
@@ -143,6 +147,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
             onCheckedChange = { viewModel.set(Prefs.ALLOW_NEW_CONN, it) }
         )
 
+        SettingSwitch(
+            title = stringResource(R.string.setting_auto_audio_mode),
+            description = stringResource(R.string.setting_auto_audio_mode_desc),
+            checked = autoAudioMode,
+            onCheckedChange = { viewModel.set(Prefs.AUTO_AUDIO_MODE, it) }
+        )
+
         val ctx = LocalContext.current
         val lifecycleOwner = LocalLifecycleOwner.current
         var hasOverlayPermission by remember { mutableStateOf(canAutoLaunch(ctx)) }
@@ -176,6 +187,13 @@ fun SettingsScreen(viewModel: MainViewModel) {
             trailingContent = {
                 Switch(checked = autoLaunch, onCheckedChange = null)
             }
+        )
+
+        SettingSwitch(
+            title = stringResource(R.string.setting_return_to_previous_app),
+            description = stringResource(R.string.setting_return_to_previous_app_desc),
+            checked = returnToPreviousApp,
+            onCheckedChange = { viewModel.set(Prefs.RETURN_TO_PREVIOUS_APP, it) }
         )
 
         SectionHeader(stringResource(R.string.section_display))

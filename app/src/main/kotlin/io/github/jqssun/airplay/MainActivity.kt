@@ -10,6 +10,8 @@ import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.os.SystemClock
+import android.util.Log
 import android.util.Rational
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -28,8 +30,10 @@ import io.github.jqssun.airplay.ui.theme.AirPlayTheme
 import io.github.jqssun.airplay.viewmodel.LocalNetworkAccess
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
@@ -41,6 +45,42 @@ class MainActivity : ComponentActivity() {
     private val logCallback: (String) -> Unit = { viewModel.addLog(it) }
     private val pinCallback: (String?) -> Unit = { viewModel.showPin(it) }
 
+    /**
+     * True while this activity is in the foreground only because an AirPlay session
+     * summoned it: the service's "Open this application on connect" start, marked
+     * with [EXTRA_SESSION_SUMMON], brought it up over whatever the user was watching
+     * (an HDMI input, another app).
+     *
+     * When a summoned session ends -- the sender stopping/disconnecting, the video
+     * finishing, or a local TV-remote BACK/STOP -- and the "Return to previous app
+     * after casting" setting is on, the task is sent to the back so Android restores
+     * what was on screen before. The flag is cleared (falling back to the normal
+     * stay-on-the-main-page behaviour) when the user opens the app themselves
+     * (launcher/notification intent without the extra) or interacts with it while no
+     * session is active, and it is NOT set when a session starts while the activity
+     * was already on screen -- in both cases the user chose to be here.
+     *
+     * "Interacts outside a session" deliberately excludes a holdoff window right
+     * after a session ends ([SESSION_END_INTERACTION_HOLDOFF_MS]): the tail of the
+     * very gesture that stopped the session (the UP half of a BACK press) or an
+     * impatient extra press must not clear the flag before the return-to-previous
+     * grace period gets to read it.
+     */
+    private var summonedBySession = false
+        set(value) {
+            if (field != value) Log.i(TAG_SUMMON, "summonedBySession = $value")
+            field = value
+        }
+    private var sessionEndJob: Job? = null
+
+    // true from onStop until the next onResume: the activity was in the background,
+    // so a session start delivered now is what brings it to the front
+    private var stoppedSinceResume = false
+
+    // when the last video/mirroring session ended (elapsedRealtime), for the
+    // interaction-clearing holdoff described on summonedBySession
+    private var lastSessionEndedAt = 0L
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val svc = (binder as? AirPlayService.LocalBinder)?.service ?: return
@@ -48,10 +88,13 @@ class MainActivity : ComponentActivity() {
             svc.logCallback = logCallback
             svc.pinCallback = pinCallback
             viewModel.bindService(svc)
+            watchSessionEnd(svc)
             if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) _refreshForeground()
             _autoStart()
         }
         override fun onServiceDisconnected(name: ComponentName?) {
+            sessionEndJob?.cancel()
+            sessionEndJob = null
             service = null
             viewModel.unbindService()
         }
@@ -64,6 +107,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // fresh instance: session-summoned iff started by the service's on-connect
+        // intent; on recreation (config change / process death) restore the tracked
+        // state instead of re-reading the possibly-stale original intent
+        summonedBySession = savedInstanceState?.getBoolean(STATE_SUMMONED_BY_SESSION)
+            ?: (intent?.getBooleanExtra(EXTRA_SESSION_SUMMON, false) == true)
+        Log.i(TAG_SUMMON, "onCreate: summoned=$summonedBySession restored=${savedInstanceState != null}")
 
         val missing = buildList {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !_granted(Manifest.permission.POST_NOTIFICATIONS)) {
@@ -122,6 +172,119 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // singleTop relaunches: a session-connect start only counts as a summon when it
+    // actually brings the activity forward, i.e. it was stopped (in the background)
+    // and hasn't been resumed since. The lifecycle state can't tell us that here:
+    // when the task is brought forward Android runs onRestart/onStart before
+    // onNewIntent, so the activity already reads as STARTED. Any other relaunch --
+    // launcher, notification -- is the user deliberately opening the app.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_SESSION_SUMMON, false)) {
+            if (stoppedSinceResume) {
+                Log.i(TAG_SUMMON, "onNewIntent: summon while backgrounded")
+                summonedBySession = true
+            } else {
+                Log.i(TAG_SUMMON, "onNewIntent: summon while already visible; flag unchanged ($summonedBySession)")
+            }
+        } else {
+            Log.i(TAG_SUMMON, "onNewIntent: user-initiated relaunch")
+            summonedBySession = false
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(STATE_SUMMONED_BY_SESSION, summonedBySession)
+    }
+
+    // any input while no AV session is active (and none just ended -- see the
+    // holdoff note on summonedBySession) means the user is deliberately using the
+    // app: from here on it behaves as user-opened, not session-summoned
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        if (!summonedBySession) return
+        val svc = service
+        val sessionActive = svc != null &&
+            (svc.videoPlaybackActive.value || svc.mirroringActive.value)
+        val justEnded = SystemClock.elapsedRealtime() - lastSessionEndedAt < SESSION_END_INTERACTION_HOLDOFF_MS
+        if (!sessionActive && !justEnded) {
+            Log.i(TAG_SUMMON, "cleared by user interaction outside a session")
+            summonedBySession = false
+        }
+    }
+
+    /**
+     * Watches AirPlay Video / mirroring activity ending, and the last sender
+     * disconnecting (which is the only end signal for audio-only sessions), so a
+     * session-summoned activity can get out of the way again (see
+     * [summonedBySession]). The service flows are collected directly
+     * (event-driven) so this also covers stops that arrive while the UI poll
+     * isn't scheduled.
+     */
+    private fun watchSessionEnd(svc: AirPlayService) {
+        sessionEndJob?.cancel()
+        sessionEndJob = lifecycleScope.launch {
+            launch {
+                var wasActive = false
+                combine(svc.videoPlaybackActive, svc.mirroringActive) { video, mirror -> video || mirror }
+                    .distinctUntilChanged()
+                    .collect { active ->
+                        if (!active && wasActive) {
+                            lastSessionEndedAt = SystemClock.elapsedRealtime()
+                            onSessionEnded(svc) {
+                                !svc.videoPlaybackActive.value && !svc.mirroringActive.value
+                            }
+                        }
+                        wasActive = active
+                    }
+            }
+            launch {
+                var wasConnected = svc.connectionCount.value > 0
+                svc.connectionCount.collect { conns ->
+                    val isConnected = conns > 0
+                    if (wasConnected && !isConnected) {
+                        lastSessionEndedAt = SystemClock.elapsedRealtime()
+                        onSessionEnded(svc) { svc.connectionCount.value == 0 }
+                    }
+                    wasConnected = isConnected
+                }
+            }
+        }
+    }
+
+    // a session just ended (sender stop/disconnect, playback finished, or local
+    // remote stop): if it summoned us here and the setting allows, return to
+    // whatever the user had on screen before. [stillEnded] is re-checked after the
+    // grace period, so a session that resumes in the meantime cancels the return.
+    private fun onSessionEnded(svc: AirPlayService, stillEnded: () -> Boolean) {
+        Log.i(TAG_SUMMON, "session ended: summoned=$summonedBySession " +
+            "returnToPrevious=${viewModel.pref(Prefs.RETURN_TO_PREVIOUS_APP).value} pip=${isInPip.value}")
+        if (!summonedBySession || !viewModel.pref(Prefs.RETURN_TO_PREVIOUS_APP).value || isInPip.value) return
+        Log.i(TAG_SUMMON, "return-to-previous scheduled in ${SESSION_END_RETURN_GRACE_MS}ms")
+        lifecycleScope.launch {
+            // grace period: senders switching queue items stop one video and play
+            // the next on the same connection a second or two later -- long enough
+            // that the follow-up play (which does re-summon, see the service's
+            // onVideoPlay) cancels the step-aside instead of flashing through it
+            delay(SESSION_END_RETURN_GRACE_MS)
+            if (!stillEnded() || svc.videoPlaybackActive.value || svc.mirroringActive.value) {
+                Log.i(TAG_SUMMON, "return-to-previous aborted: session active again")
+                return@launch
+            }
+            if (!summonedBySession || isInPip.value) {
+                Log.i(TAG_SUMMON, "return-to-previous aborted: summoned=$summonedBySession pip=${isInPip.value}")
+                return@launch
+            }
+            summonedBySession = false
+            // the video UI has already been dismissed (videoPlaybackActive is
+            // mirrored event-driven into the viewmodel); now step aside so Android
+            // restores the previous app / TV input
+            Log.i(TAG_SUMMON, "moveTaskToBack: returning to previous app")
+            moveTaskToBack(true)
+        }
+    }
+
     private fun _granted(permission: String) =
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 
@@ -167,6 +330,11 @@ class MainActivity : ComponentActivity() {
         _refreshForeground()
     }
 
+    override fun onResume() {
+        super.onResume()
+        stoppedSinceResume = false
+    }
+
     fun enterPip() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         enterPictureInPictureMode(_pipParams())
@@ -197,8 +365,14 @@ class MainActivity : ComponentActivity() {
         isInPip.value = inPip
     }
 
+    // "Run in background" off: leaving the app (HOME, or BACK finishing the activity)
+    // shuts the server down instead of leaving the foreground service running. Never
+    // tear down an active session from a lifecycle callback though -- PiP normally
+    // keeps the activity out of the stopped state during sessions, but not on every
+    // device/path (and PiP itself can be dismissed).
     override fun onStop() {
         super.onStop()
+        stoppedSinceResume = true
         // never stop mid-session
         if (!viewModel.pref(Prefs.RUN_IN_BACKGROUND).value && !isChangingConfigurations &&
             viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&
@@ -214,5 +388,20 @@ class MainActivity : ComponentActivity() {
         }
         unbindService(connection)
         super.onDestroy()
+    }
+
+    companion object {
+        /** Intent extra set by AirPlayService when a session summons this activity. */
+        const val EXTRA_SESSION_SUMMON = "io.github.jqssun.airplay.extra.SESSION_SUMMON"
+        private const val STATE_SUMMONED_BY_SESSION = "summonedBySession"
+        /** Logcat tag for the summoned/return-to-previous state machine. */
+        private const val TAG_SUMMON = "AirPlaySummon"
+        // long enough that a sender switching queue items (stop, then play the next
+        // video on the same connection ~1-2s later) cancels the pending step-aside
+        // before it fires, short enough that a real stop still returns promptly
+        private const val SESSION_END_RETURN_GRACE_MS = 2_500L
+        // ignore "user interaction" for this long after a session ends, so the tail
+        // of the stopping gesture / impatient presses don't clear summonedBySession
+        private const val SESSION_END_INTERACTION_HOLDOFF_MS = 4_000L
     }
 }

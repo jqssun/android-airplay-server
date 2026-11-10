@@ -261,10 +261,31 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     // service binding
     fun bindService(svc: AirPlayService) {
         service = svc
+        // Mirror the AirPlay Video active flag event-driven rather than only via the
+        // 200ms lifecycle-gated UI poll: dismissing the video screen when the sender
+        // stops the session must not depend on the poll loop being scheduled at that
+        // moment, or the last decoded frame stays up (frozen) on the SurfaceView.
+        _serviceVideoJob?.cancel()
+        _serviceVideoJob = viewModelScope.launch {
+            svc.videoPlaybackActive.collect { active ->
+                val prev = _videoPlaybackActive.value
+                if (active && !prev) {
+                    // fresh session: reset overlay state
+                    _videoPlaying.value = true
+                    _videoOverlayTick.value = 0L
+                    _videoScrubPositionMs.value = null
+                }
+                _videoPlaybackActive.value = active
+            }
+        }
         updateFromService()
     }
 
+    private var _serviceVideoJob: Job? = null
+
     fun unbindService() {
+        _serviceVideoJob?.cancel()
+        _serviceVideoJob = null
         service = null
     }
 

@@ -28,6 +28,8 @@ object NativeBridge {
     external fun nativeSetHlsEnabled(handle: Long, enabled: Boolean)
     external fun nativeSetLang(handle: Long, lang: String)
     external fun nativeSetFeature(handle: Long, bit: Int, enabled: Boolean)
+
+    // AirPlay Video (HLS) playback info snapshot, polled by native httpd thread
     external fun nativeUpdatePlaybackInfo(
         handle: Long, position: Float, duration: Float, rate: Float, readyToPlay: Boolean
     )

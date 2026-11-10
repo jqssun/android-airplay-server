@@ -28,6 +28,7 @@ import android.view.Surface
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import androidx.core.os.ConfigurationCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
@@ -35,6 +36,7 @@ import androidx.media.app.NotificationCompat as MediaNotificationCompat
 import io.github.jqssun.airplay.MainActivity
 import io.github.jqssun.airplay.Prefs
 import io.github.jqssun.airplay.R
+import io.github.jqssun.airplay.WatchdogReceiver
 import io.github.jqssun.airplay.changes
 import io.github.jqssun.airplay.get
 import io.github.jqssun.airplay.hasLocalNetwork
@@ -67,6 +69,9 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 
+// snapshot of the local AirPlay Video (HLS) ExoPlayer state, refreshed by the same
+// 250ms tick that feeds the native /playback-info handler; the UI transport overlay
+// reads this instead of poking the player from off the main thread
 data class VideoPlaybackInfo(
     val positionMs: Long = 0,
     val durationMs: Long = 0,
@@ -236,6 +241,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         )
         mediaSession = MediaSessionCompat(this, "AirPlay").apply {
             setCallback(object : MediaSessionCompat.Callback() {
+                // during an AirPlay Video (HLS) session transport keys drive the local
+                // ExoPlayer; otherwise they keep controlling the audio sender via DACP
                 override fun onPlay() {
                     if (_videoPlaybackActive.value) {
                         airPlayVideoPlayer.setPlaying(true)
@@ -310,11 +317,16 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             _videoPlaybackSize.value = width to height
         }
         airPlayVideoPlayer.onTitle = { _videoTitle.value = it ?: "" }
+        // natural end-of-stream, or the sender stopping without a POST /stop (its HLS
+        // source just dies and the player errors out): end the session either way so
+        // the UI isn't left frozen on the last decoded frame
         airPlayVideoPlayer.onEnded = { _endVideoPlayback("AirPlay Video stopped (player)") }
         airPlayVideoPlayer.onPlaybackInfo = { snapshot ->
             if (nativeHandle != 0L) {
                 NativeBridge.nativeUpdatePlaybackInfo(nativeHandle, snapshot.position, snapshot.duration, snapshot.rate, snapshot.ready)
             }
+            // keep the media session mirroring the real ExoPlayer state so system
+            // media-button routing (TV remotes, bluetooth) stays on the video session
             if (_videoPlaybackActive.value) {
                 _updateVideoPlaybackState(snapshot.position, snapshot.rate)
                 _videoPlaybackInfo.value = VideoPlaybackInfo(
@@ -348,12 +360,34 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_START_SERVER) {
-            promoteToForeground()
+        // a null intent means the system recreated us after the process was killed
+        // (START_STICKY) -- only resume if we were actually running before, not
+        // after a deliberate stopServer()
+        val isStickyRestart = intent == null && prefs.getBoolean(Prefs.SERVER_SHOULD_RUN, false)
+        if (intent?.action == ACTION_START_SERVER || isStickyRestart) {
+            try {
+                promoteToForeground()
+            } catch (e: Exception) {
+                // android 12+ may refuse a foreground start for a background restart
+                // (ForegroundServiceStartNotAllowedException); the watchdog retries later
+                log("Could not enter foreground: ${e.message}")
+                stopSelf(startId)
+                return START_STICKY
+            }
             _startServer(ensureServiceStarted = false)
             if (_serverState.value != ServerState.RUNNING) stopSelf(startId)
         }
-        return START_NOT_STICKY
+        return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        // some OEM battery managers kill the whole process shortly after the task
+        // card is swiped away, even for an active foreground service -- pull the
+        // watchdog check in close instead of waiting out the full interval
+        if (_serverState.value == ServerState.RUNNING) {
+            WatchdogReceiver.schedule(applicationContext, delayMs = 15_000L)
+        }
     }
 
     fun startServer() {
@@ -367,7 +401,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             _failStart()
             return
         }
-        val effectiveName = prefs[Prefs.SERVER_NAME].ifBlank { Prefs.SERVER_NAME.def }
+        val effectiveName = Prefs.serverName(this)
 
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "airplay:server").apply { acquire() }
@@ -460,6 +494,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         }
 
         _serverState.value = ServerState.RUNNING
+        prefs.edit { putBoolean(Prefs.SERVER_SHOULD_RUN, true) }
+        WatchdogReceiver.schedule(this)
         if (ensureServiceStarted) {
             ContextCompat.startForegroundService(this, Intent(this, AirPlayService::class.java))
         }
@@ -519,6 +555,8 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     fun stopServer() {
         _shutdown()
+        prefs.edit { putBoolean(Prefs.SERVER_SHOULD_RUN, false) }
+        WatchdogReceiver.cancel(this)
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         foregroundStarted = false
         stopSelf()
@@ -587,6 +625,9 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         airPlayVideoPlayer.setPlaying(playing)
     }
 
+    // absolute local seek: the transport overlay accumulates held-key/drag scrubbing
+    // in the viewmodel and commits the final target here once, instead of dozens of
+    // seekBy calls
     fun seekVideoTo(positionMs: Long) {
         airPlayVideoPlayer.scrub(positionMs / 1000f)
     }
@@ -607,12 +648,25 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         airPlayVideoPlayer.seekBy(deltaMs)
     }
 
+    // local stop (TV remote stop/back, or the on-screen back control): same teardown
+    // as the sender's POST /stop; the sender learns about it from ready=false on its
+    // next /playback-info poll
     fun stopVideoPlayback() = _endVideoPlayback("AirPlay Video stopped (local)")
 
     fun downloadVideo() {
         _videoLocation.value?.let { videoDownloader.start(it) }
     }
 
+    /**
+     * Single teardown for the end of an AirPlay Video session, whatever ended it:
+     * the sender's POST /stop or TEARDOWN ([onVideoStop]), the sender dropping its
+     * connections ([onConnectionDestroy]), a local TV-remote BACK/STOP
+     * ([stopVideoPlayback]) or the local player finishing/erroring out
+     * ([AirPlayVideoPlayer.onEnded]). Clearing [videoPlaybackActive] here is what
+     * dismisses the video screen in the UI (MainViewModel mirrors this flow
+     * event-driven) and what lets a session-summoned MainActivity return to the
+     * previously foregrounded app.
+     */
     private fun _endVideoPlayback(message: String) {
         if (!_videoPlaybackActive.value) return
         // lingering polls after a stop must not bounce the UI back to a pending session
@@ -661,9 +715,18 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         _videoTitle.value = ""
         _videoPlaybackActive.value = true
         airPlayVideoPlayer.play(location, startPositionSeconds)
-        // claim media-button routing for keys that arrive as media-session events
+        // claim media-button routing so remote play/pause/stop keys reach the video
+        // player even when they arrive as media-session events rather than KeyEvents
         mediaSession?.isActive = true
         log("AirPlay Video play: $location @ ${startPositionSeconds}s")
+        // (re-)summon the UI for EVERY play, not only the first client connection:
+        // switching videos in the sender app stops one item and plays the next on
+        // the same connection -- possibly after a summoned activity has already
+        // stepped back to the previous app -- and without this the new video would
+        // play its audio into an invisible activity with no surface. Harmless when
+        // the activity is already frontmost (singleTop redelivery; the summon flag
+        // is only set when the start actually brings the activity forward).
+        if (shouldLaunchOnConnect()) launchMainActivity()
     }
 
     override fun onVideoScrub(positionSeconds: Float) {
@@ -1142,10 +1205,15 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         return builder.build()
     }
 
+    // "Open this application on connect": summon the UI for an incoming session. The
+    // extra marks the start as session-driven so MainActivity can step back out of the
+    // way (return to the previously foregrounded app/input) once the session ends --
+    // unlike launcher/notification starts, which carry no extra.
     private fun launchMainActivity() {
         Handler(Looper.getMainLooper()).post {
             val launchIntent = Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                .putExtra(MainActivity.EXTRA_SESSION_SUMMON, true)
             try {
                 startActivity(launchIntent)
             } catch (e: Exception) {
