@@ -68,7 +68,7 @@ Java_io_github_jqssun_airplay_bridge_NativeBridge_nativeInit(
     }
     ctx->cb_ctx.raop = ctx->raop;
 
-    raop_set_log_level(ctx->raop, LOGGER_ERR);
+    raop_set_log_level(ctx->raop, LOGGER_DEBUG);
     raop_set_log_callback(ctx->raop, _log_callback, NULL);
 
     const char *keyfile_c = env->GetStringUTFChars(keyFile, NULL);

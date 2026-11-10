@@ -34,6 +34,7 @@ typedef struct {
     jmethodID on_video_rate;
     jmethodID on_video_stop;
     jmethodID on_video_session_poll;
+    jmethodID on_paired_client;
     int h265_enabled;
     int require_pin;
     char *registered_keys[16];

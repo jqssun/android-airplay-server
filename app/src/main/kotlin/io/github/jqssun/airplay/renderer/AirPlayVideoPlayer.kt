@@ -49,12 +49,22 @@ class AirPlayVideoPlayer(private val context: Context) {
 
     private val _listener = object : Player.Listener {
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-            Log.w(TAG, "playback error", error)
+            Log.e(TAG, "ExoPlayer ERROR code=${error.errorCode} name=${error.errorCodeName} msg=${error.message}", error)
             onEnded?.invoke()
         }
         override fun onPlaybackStateChanged(state: Int) {
-            if (state == Player.STATE_ENDED) onEnded?.invoke()
+            android.util.Log.i("AirPlayVideoPlayer", "ExoPlayer state=$state " +
+                "(${when (state) { 1 -> "IDLE"; 2 -> "BUFFERING"; 3 -> "READY"; 4 -> "ENDED"; else -> "?" }})")
+            if (state == Player.STATE_ENDED) {
+                // Pause but DO NOT tear down: for YouTube Shorts and similar short clips, the
+                // sender often queues the next /play immediately. Sending the duration=-1 "finished"
+                // sentinel to iOS triggers a full RTSP TEARDOWN that also kills the mirror
+                // session, forcing the user to re-select AirPlay from Control Center.
+                player?.playWhenReady = false
+                onEnded?.invoke()
+            }
         }
+
         override fun onTimelineChanged(timeline: Timeline, reason: Int) {
             // duration is usually established here (esp. hls): report so the held /play releases
             _reportPlaybackInfo()
@@ -65,7 +75,13 @@ class AirPlayVideoPlayer(private val context: Context) {
         override fun onVideoSizeChanged(videoSize: VideoSize) {
             if (videoSize.height == 0) return
             val width = (videoSize.width * videoSize.pixelWidthHeightRatio).toInt()
-            onVideoSize?.invoke(width, videoSize.height, width.toFloat() / videoSize.height)
+            val aspect = width.toFloat() / videoSize.height
+            android.util.Log.i("AirPlayVideoPlayer",
+                "ExoPlayer videoSize=${videoSize.width}x${videoSize.height} " +
+                "sar=${videoSize.pixelWidthHeightRatio} " +
+                "unappliedRotation=${videoSize.unappliedRotationDegrees} " +
+                "corrected=${width}x${videoSize.height} aspect=$aspect")
+            onVideoSize?.invoke(width, videoSize.height, aspect)
         }
     }
 
