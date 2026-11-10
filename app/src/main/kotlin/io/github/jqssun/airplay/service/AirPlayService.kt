@@ -87,7 +87,6 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private var usbAdvertiser: UsbMdnsAdvertiser? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var foregroundStarted = false
-    private val mainHandler = Handler(Looper.getMainLooper())
     private var lastOrientation = Configuration.ORIENTATION_UNDEFINED
 
     val videoRenderer = VideoRenderer(this)
@@ -365,7 +364,15 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         // after a deliberate stopServer()
         val isStickyRestart = intent == null && prefs.getBoolean(Prefs.SERVER_SHOULD_RUN, false)
         if (intent?.action == ACTION_START_SERVER || isStickyRestart) {
-            promoteToForeground()
+            try {
+                promoteToForeground()
+            } catch (e: Exception) {
+                // android 12+ may refuse a foreground start for a background restart
+                // (ForegroundServiceStartNotAllowedException); the watchdog retries later
+                log("Could not enter foreground: ${e.message}")
+                stopSelf(startId)
+                return START_STICKY
+            }
             _startServer(ensureServiceStarted = false)
             if (_serverState.value != ServerState.RUNNING) stopSelf(startId)
         }

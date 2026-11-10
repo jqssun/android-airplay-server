@@ -6,6 +6,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.content.ContextCompat
 import io.github.jqssun.airplay.service.AirPlayService
 
@@ -22,12 +23,20 @@ class WatchdogReceiver : BroadcastReceiver() {
         if (prefs.getBoolean(Prefs.SERVER_SHOULD_RUN, false)) {
             val serviceIntent = Intent(context, AirPlayService::class.java)
                 .setAction(AirPlayService.ACTION_START_SERVER)
-            ContextCompat.startForegroundService(context, serviceIntent)
+            try {
+                ContextCompat.startForegroundService(context, serviceIntent)
+            } catch (e: Exception) {
+                // android 12+ blocks foreground service starts from the background
+                // unless the app is exempt (ForegroundServiceStartNotAllowedException);
+                // don't crash, just try again on the next check
+                Log.w(TAG, "watchdog restart refused: ${e.message}")
+            }
         }
         schedule(context.applicationContext)
     }
 
     companion object {
+        private const val TAG = "AirPlayWatchdog"
         private const val INTERVAL_MS = 5 * 60 * 1000L
 
         private fun pendingIntent(context: Context): PendingIntent =

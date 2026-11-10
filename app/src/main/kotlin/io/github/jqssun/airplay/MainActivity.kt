@@ -141,22 +141,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                // mirrors launchMainActivity()'s auto-launch-on-connect: send ourselves back
-                // to whatever was showing before (e.g. Home Assistant) once the session that
-                // brought us to the front actually ends, instead of just sitting on screen.
-                var wasConnected = viewModel.connectionCount.value > 0
-                viewModel.connectionCount.collect { conns ->
-                    val isConnected = conns > 0
-                    if (wasConnected && !isConnected && viewModel.pref(Prefs.LAUNCH_ON_CONNECT).value) {
-                        moveTaskToBack(true)
-                    }
-                    wasConnected = isConnected
-                }
-            }
-        }
-
         // auto-enter pre-declared in pip params
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             lifecycleScope.launch {
@@ -225,31 +209,49 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Watches AirPlay Video / mirroring activity ending so a session-summoned
-     * activity can get out of the way again (see [summonedBySession]). The service
-     * flows are collected directly (event-driven) so this also covers stops that
-     * arrive while the UI poll isn't scheduled.
+     * Watches AirPlay Video / mirroring activity ending, and the last sender
+     * disconnecting (which is the only end signal for audio-only sessions), so a
+     * session-summoned activity can get out of the way again (see
+     * [summonedBySession]). The service flows are collected directly
+     * (event-driven) so this also covers stops that arrive while the UI poll
+     * isn't scheduled.
      */
     private fun watchSessionEnd(svc: AirPlayService) {
         sessionEndJob?.cancel()
         sessionEndJob = lifecycleScope.launch {
-            var wasActive = false
-            combine(svc.videoPlaybackActive, svc.mirroringActive) { video, mirror -> video || mirror }
-                .distinctUntilChanged()
-                .collect { active ->
-                    if (!active && wasActive) {
-                        lastSessionEndedAt = SystemClock.elapsedRealtime()
-                        onSessionEnded(svc)
+            launch {
+                var wasActive = false
+                combine(svc.videoPlaybackActive, svc.mirroringActive) { video, mirror -> video || mirror }
+                    .distinctUntilChanged()
+                    .collect { active ->
+                        if (!active && wasActive) {
+                            lastSessionEndedAt = SystemClock.elapsedRealtime()
+                            onSessionEnded(svc) {
+                                !svc.videoPlaybackActive.value && !svc.mirroringActive.value
+                            }
+                        }
+                        wasActive = active
                     }
-                    wasActive = active
+            }
+            launch {
+                var wasConnected = svc.connectionCount.value > 0
+                svc.connectionCount.collect { conns ->
+                    val isConnected = conns > 0
+                    if (wasConnected && !isConnected) {
+                        lastSessionEndedAt = SystemClock.elapsedRealtime()
+                        onSessionEnded(svc) { svc.connectionCount.value == 0 }
+                    }
+                    wasConnected = isConnected
                 }
+            }
         }
     }
 
     // a session just ended (sender stop/disconnect, playback finished, or local
     // remote stop): if it summoned us here and the setting allows, return to
-    // whatever the user had on screen before
-    private fun onSessionEnded(svc: AirPlayService) {
+    // whatever the user had on screen before. [stillEnded] is re-checked after the
+    // grace period, so a session that resumes in the meantime cancels the return.
+    private fun onSessionEnded(svc: AirPlayService, stillEnded: () -> Boolean) {
         Log.i(TAG_SUMMON, "session ended: summoned=$summonedBySession " +
             "returnToPrevious=${viewModel.pref(Prefs.RETURN_TO_PREVIOUS_APP).value} pip=${isInPip.value}")
         if (!summonedBySession || !viewModel.pref(Prefs.RETURN_TO_PREVIOUS_APP).value || isInPip.value) return
@@ -260,7 +262,7 @@ class MainActivity : ComponentActivity() {
             // that the follow-up play (which does re-summon, see the service's
             // onVideoPlay) cancels the step-aside instead of flashing through it
             delay(SESSION_END_RETURN_GRACE_MS)
-            if (svc.videoPlaybackActive.value || svc.mirroringActive.value) {
+            if (!stillEnded() || svc.videoPlaybackActive.value || svc.mirroringActive.value) {
                 Log.i(TAG_SUMMON, "return-to-previous aborted: session active again")
                 return@launch
             }

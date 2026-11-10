@@ -930,13 +930,15 @@ private fun AudioMiniController(viewModel: MainViewModel, visible: Boolean, onCl
 private fun NowPlayingContent(viewModel: MainViewModel) {
     val track by viewModel.trackInfo.collectAsState()
 
-    // TV remote: land focus on play/pause when the Now Playing screen appears
+    // TV remote: land focus on play/pause when the Now Playing controls appear
     // (otherwise it stays on the server start/stop button, where DPAD CENTER
-    // would stop the server); LEFT/RIGHT on it skip tracks via DACP directly
+    // would stop the server)
     val tv = isTv()
+    val hasPlayer = viewModel.dacpPlayer != null
     val playPauseFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        if (tv) playPauseFocus.requestFocus()
+    var playPauseFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(tv, hasPlayer) {
+        if (tv && hasPlayer) playPauseFocus.requestFocusUntilLanded(attempts = 20) { playPauseFocused }
     }
 
     Column(
@@ -1029,7 +1031,11 @@ private fun NowPlayingContent(viewModel: MainViewModel) {
                 PreviousButton(player, modifier = Modifier.dpadFocus())
                 PlayPauseButton(
                     player,
-                    modifier = Modifier.size(63.dp).dpadFocus(CircleShape),
+                    modifier = Modifier
+                        .size(63.dp)
+                        .focusRequester(playPauseFocus)
+                        .onFocusChanged { playPauseFocused = it.hasFocus }
+                        .dpadFocus(CircleShape),
                     iconSize = 40.dp
                 )
                 NextButton(player, modifier = Modifier.dpadFocus())
