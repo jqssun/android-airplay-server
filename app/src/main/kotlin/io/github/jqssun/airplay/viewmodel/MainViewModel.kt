@@ -93,6 +93,19 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     private val _clientVolumeAdjustable = MutableStateFlow(false)
     val clientVolumeAdjustable: StateFlow<Boolean> = _clientVolumeAdjustable.asStateFlow()
     fun setClientVolume(frac: Float) { service?.setClientVolume(frac) }
+    fun audioMuteToggle() { service?.dacpController?.muteToggle() }
+    fun refreshAudioRemote() { service?.dacpController?.ensureResolved() }
+    fun audioTogglePlayPause() {
+        service?.togglePlayPause()
+        // sync immediately so the bar freezes before the next poll
+        service?.let {
+            _audioPlaying.value = it.playing.value
+            _audioPositionMs.value = it.currentPositionMs()
+            _audioDurationMs.value = it.durationMs.value
+        }
+    }
+    fun audioNext() { service?.dacpController?.nextItem() }
+    fun audioPrev() { service?.dacpController?.prevItem() }
 
     private val _serverState = MutableStateFlow(ServerState.STOPPED)
     val serverState: StateFlow<ServerState> = _serverState.asStateFlow()
@@ -128,6 +141,15 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
     // audio mode
     private val _audioOnly = MutableStateFlow(false)
     val audioOnly: StateFlow<Boolean> = _audioOnly.asStateFlow()
+
+    private val _audioPlaying = MutableStateFlow(true)
+    val audioPlaying: StateFlow<Boolean> = _audioPlaying.asStateFlow()
+
+    private val _audioPositionMs = MutableStateFlow(0L)
+    val audioPositionMs: StateFlow<Long> = _audioPositionMs.asStateFlow()
+
+    private val _audioDurationMs = MutableStateFlow(0L)
+    val audioDurationMs: StateFlow<Long> = _audioDurationMs.asStateFlow()
 
     private val _videoPlaybackActive = MutableStateFlow(false)
     val videoPlaybackActive: StateFlow<Boolean> = _videoPlaybackActive.asStateFlow()
@@ -424,6 +446,9 @@ class MainViewModel @Inject constructor(app: Application) : AndroidViewModel(app
             _trackInfo.value = it.trackInfo.value
             _clientVolume.value = it.clientVolume()
             _clientVolumeAdjustable.value = it.dacpController?.ready == true
+            _audioPlaying.value = it.playing.value
+            _audioPositionMs.value = it.currentPositionMs()
+            _audioDurationMs.value = it.durationMs.value
             if (pref(Prefs.DEBUG_ENABLED).value) {
                 _debugInfo.value = it.collectDebugInfo()
             }

@@ -30,6 +30,8 @@
     <string name="local_network_label">Nearby devices access needed</string>
     <string name="local_network_desc">Allow access to nearby devices so AirPlay devices can find and connect to this device</string>
     <string name="unknown_track">Unknown</string>
+    <string name="music_press_ok_controls">Press OK for controls</string>
+    <string name="music_press_ok_fullscreen">Press OK for full-screen now playing</string>
 
     <!-- Content descriptions -->
     <string name="cd_pip">Picture-in-Picture</string>
@@ -37,6 +39,8 @@
     <string name="cd_exit_fullscreen">Exit fullscreen</string>
     <string name="cd_cover_art">Cover art</string>
     <string name="cd_play_pause">Play/Pause</string>
+    <string name="cd_previous">Previous</string>
+    <string name="cd_next">Next</string>
     <string name="cd_rewind">Rewind</string>
     <string name="cd_fast_forward">Fast forward</string>
     <string name="volume_server">Receiver volume</string>

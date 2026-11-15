@@ -69,6 +69,9 @@ void android_callbacks_init(android_callback_ctx_t *ctx, JNIEnv *env, jobject ca
     ctx->on_video_rate = (*env)->GetMethodID(env, cls, "onVideoRate", "(F)V");
     ctx->on_video_stop = (*env)->GetMethodID(env, cls, "onVideoStop", "()V");
     ctx->on_video_session_poll = (*env)->GetMethodID(env, cls, "onVideoSessionPoll", "()V");
+    ctx->on_audio_flush = (*env)->GetMethodID(env, cls, "onAudioFlush", "()V");
+    ctx->on_audio_resume = (*env)->GetMethodID(env, cls, "onAudioResume", "()V");
+    ctx->audio_flushed = 0;
     (*env)->DeleteLocalRef(env, cls);
 }
 
@@ -105,6 +108,11 @@ void android_callbacks_update_playback_info(android_callback_ctx_t *ctx, double 
 static void _audio_process(void *cls, raop_ntp_t *ntp, audio_decode_struct *data) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
     if (!ctx->audio_engine || !data->data || data->data_len <= 0) return;
+    /* first packet after a flush: the sender resumed (or skipped) */
+    if (__atomic_exchange_n(&ctx->audio_flushed, 0, __ATOMIC_ACQ_REL)) {
+        JNIEnv *env = _get_env(ctx);
+        if (env) (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_audio_resume);
+    }
     audio_engine_decode(ctx->audio_engine, data->data, data->data_len,
                         (int)data->ct, (int64_t)data->ntp_time_local);
 }
@@ -218,7 +226,14 @@ static void _video_reset(void *cls, reset_type_t t) {
         raop_remove_hls_connections(ctx->raop);
     }
 }
-static void _audio_flush(void *cls) { LOGI("audio_flush"); }
+/* sent right away on pause (and before a seek or skip); teardown only comes seconds later */
+static void _audio_flush(void *cls) {
+    android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;
+    LOGI("audio_flush");
+    __atomic_store_n(&ctx->audio_flushed, 1, __ATOMIC_RELEASE);
+    JNIEnv *env = _get_env(ctx);
+    if (env) (*env)->CallVoidMethod(env, ctx->callback_obj, ctx->on_audio_flush);
+}
 
 static void _audio_stop_coverart_rendering(void *cls) {
     android_callback_ctx_t *ctx = (android_callback_ctx_t *)cls;

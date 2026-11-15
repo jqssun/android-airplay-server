@@ -24,6 +24,7 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
+import android.view.KeyEvent
 import android.view.Surface
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -235,7 +236,48 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             setPlaying = ::_setPlaying,
         )
         mediaSession = MediaSessionCompat(this, "AirPlay").apply {
+            setFlags(
+                MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or
+                    MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
+            )
             setCallback(object : MediaSessionCompat.Callback() {
+                override fun onMediaButtonEvent(mediaButtonEvent: Intent): Boolean {
+                    val ke = if (Build.VERSION.SDK_INT >= 33) {
+                        mediaButtonEvent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        mediaButtonEvent.getParcelableExtra(Intent.EXTRA_KEY_EVENT) as? KeyEvent
+                    } ?: return super.onMediaButtonEvent(mediaButtonEvent)
+                    if (ke.action != KeyEvent.ACTION_DOWN || ke.repeatCount != 0) {
+                        return true
+                    }
+                    return when (ke.keyCode) {
+                        KeyEvent.KEYCODE_MEDIA_NEXT,
+                        KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD -> {
+                            Log.i(TAG, "media next")
+                            if (!_videoPlaybackActive.value) dacpController?.nextItem()
+                            true
+                        }
+                        KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+                        KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD -> {
+                            Log.i(TAG, "media previous")
+                            if (!_videoPlaybackActive.value) dacpController?.prevItem()
+                            true
+                        }
+                        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                        KeyEvent.KEYCODE_HEADSETHOOK -> {
+                            if (!_videoPlaybackActive.value) togglePlayPause()
+                            true
+                        }
+                        KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                            onPlay(); true
+                        }
+                        KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                            onPause(); true
+                        }
+                        else -> super.onMediaButtonEvent(mediaButtonEvent)
+                    }
+                }
                 override fun onPlay() {
                     if (_videoPlaybackActive.value) {
                         airPlayVideoPlayer.setPlaying(true)
@@ -265,12 +307,14 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
                     if (_videoPlaybackActive.value) airPlayVideoPlayer.scrub(pos / 1000f)
                 }
                 override fun onSkipToNext() {
+                    Log.i(TAG, "onSkipToNext")
                     if (!_videoPlaybackActive.value) dacpController?.nextItem()
                 }
                 override fun onSkipToPrevious() {
+                    Log.i(TAG, "onSkipToPrevious")
                     if (!_videoPlaybackActive.value) dacpController?.prevItem()
                 }
-            })
+            }, _mainHandler)
         }
         mediaReceiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
@@ -868,15 +912,34 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         if (durMs <= 0) return
         _positionMs.value = posMs
         _durationMs.value = durMs
-        _progressBaseMs = posMs
-        _progressBaseTime = SystemClock.elapsedRealtime()
-        _playing.value = true
+        // Do not force playing=true: buffered RAOP progress keeps arriving after a local
+        // pause and would restart the extrapolation clock. Resume comes from play()/onAudioFormat.
+        if (_playing.value) {
+            _progressBaseMs = posMs
+            _progressBaseTime = SystemClock.elapsedRealtime()
+        } else {
+            _progressBaseMs = posMs
+            _progressBaseTime = 0
+        }
         _updatePlaybackState()
         _refreshDacpPlayer()
     }
 
     override fun onAudioTeardown() {
         _setPlaying(false)
+    }
+
+    // a flush also precedes skips and seeks: pause only if audio doesn't come back shortly
+    private val _flushPause = Runnable { if (_audioOnly.value) _setPlaying(false) }
+
+    override fun onAudioFlush() {
+        _mainHandler.removeCallbacks(_flushPause)
+        _mainHandler.postDelayed(_flushPause, FLUSH_PAUSE_DELAY_MS)
+    }
+
+    override fun onAudioResume() {
+        _mainHandler.removeCallbacks(_flushPause)
+        if (_audioOnly.value && !_playing.value) _mainHandler.post { _setPlaying(true) }
     }
 
     override fun onDacpId(dacpId: String, activeRemote: String) {
@@ -929,17 +992,26 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     }
 
     private fun _setPlaying(playing: Boolean) {
-        _playing.value = playing
-        _refreshDacpPlayer()
         if (playing) {
-            // resume extrapolation from current position
+            _playing.value = true
+            // resume extrapolation from the frozen position
             _progressBaseMs = _positionMs.value
             _progressBaseTime = SystemClock.elapsedRealtime()
         } else {
-            // freeze position
-            _positionMs.value = currentPositionMs()
+            // freeze extrapolated position before clearing the playing flag
+            // (currentPositionMs() short-circuits once _playing is false)
+            val frozen = if (_progressBaseTime != 0L) {
+                val elapsed = SystemClock.elapsedRealtime() - _progressBaseTime
+                (_progressBaseMs + elapsed).coerceIn(0, _durationMs.value.coerceAtLeast(0))
+            } else {
+                _positionMs.value
+            }
+            _positionMs.value = frozen
+            _progressBaseMs = frozen
             _progressBaseTime = 0
+            _playing.value = false
         }
+        _refreshDacpPlayer()
         _updatePlaybackState()
     }
 
@@ -1181,6 +1253,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         private const val CLIENT_VOL_EPS = 0.033f
         private const val CLIENT_VOL_MAX_STEPS = 32
         private const val CLIENT_VOL_TIMEOUT_MS = 800L
+        private const val FLUSH_PAUSE_DELAY_MS = 350L
         private const val CHANNEL_ID = "airplay_service"
         private const val NOTIFICATION_ID = 1
         const val ACTION_PLAY_PAUSE = "io.github.jqssun.airplay.PLAY_PAUSE"

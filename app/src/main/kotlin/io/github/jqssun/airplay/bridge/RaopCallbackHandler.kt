@@ -9,6 +9,8 @@ interface RaopCallbackHandler {
     // /info initialVolume
     fun onClientVolumeQuery(): Float
     fun onAudioTeardown()
+    fun onAudioFlush()
+    fun onAudioResume()
     fun onConnectionInit()
     fun onConnectionDestroy()
     fun onConnectionReset(reason: Int)
