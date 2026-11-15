@@ -38,10 +38,14 @@ fun isTv(): Boolean {
     return remember(ctx) { ctx.isTvDevice() }
 }
 
-fun Modifier.dpadFocus(shape: Shape = RoundedCornerShape(12.dp)): Modifier = composed {
+fun Modifier.dpadFocus(
+    shape: Shape = RoundedCornerShape(12.dp),
+    focusColor: Color? = null,
+): Modifier = composed {
     var focused by remember { mutableStateOf(false) }
+    val ring = focusColor ?: MaterialTheme.colorScheme.primary
     onFocusChanged { focused = it.isFocused }
-        .border(2.dp, if (focused) MaterialTheme.colorScheme.primary else Color.Transparent, shape)
+        .border(2.dp, if (focused) ring else Color.Transparent, shape)
 }
 
 fun Modifier.dpadAdjust(onLeft: () -> Unit, onRight: () -> Unit): Modifier = composed {

@@ -1,12 +1,31 @@
 package io.github.jqssun.airplay.ui
 
 import android.app.Activity
+import android.content.Context
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn as AndroidxOptIn
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
+import kotlinx.coroutines.launch
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.produceState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,24 +39,33 @@ import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.rounded.BrightnessHigh
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import android.content.Context
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -49,6 +77,8 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.github.jqssun.airplay.Prefs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import io.github.jqssun.airplay.R
 import io.github.jqssun.airplay.service.AirPlayService.ServerState
 import io.github.jqssun.airplay.ui.gestures.BrightnessState
@@ -71,14 +101,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSourceBitmapLoader
 import androidx.media3.ui.compose.material3.MiniController
-import androidx.media3.ui.compose.material3.buttons.NextButton
-import androidx.media3.ui.compose.material3.buttons.PlayPauseButton
-import androidx.media3.ui.compose.material3.buttons.PreviousButton
-import androidx.media3.ui.compose.material3.indicator.DurationText
-import androidx.media3.ui.compose.material3.indicator.PositionText
-import androidx.media3.ui.compose.material3.indicator.ProgressSlider
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.pow
 import kotlinx.coroutines.delay
 
 private enum class Tab(val labelRes: Int, val icon: ImageVector) {
@@ -98,6 +123,8 @@ fun MainScreen(
 ) {
     var tab by remember { mutableStateOf(Tab.OVERVIEW) }
     var fullscreen by remember { mutableStateOf(false) }
+    // Apple Music TV-style: full-screen artwork while audio plays; Back returns to the main UI
+    var musicFullscreen by remember { mutableStateOf(false) }
     val pin by viewModel.pinCode.collectAsState()
     val connections by viewModel.connectionCount.collectAsState()
     val audioOnly by viewModel.audioOnly.collectAsState()
@@ -105,6 +132,16 @@ fun MainScreen(
     val videoSessionPending by viewModel.videoSessionPending.collectAsState()
     val mirroringActive by viewModel.mirroringActive.collectAsState()
     val autoFullscreen by viewModel.pref(Prefs.AUTO_FULLSCREEN).collectAsState()
+
+    val musicActive = audioOnly && connections > 0
+    LaunchedEffect(musicActive) {
+        if (musicActive) {
+            musicFullscreen = true
+            tab = Tab.OVERVIEW
+        } else {
+            musicFullscreen = false
+        }
+    }
 
     // don't use movableContentOf: moving AndroidView across subcomposition boundaries makes it crash on reparent
     val video: @Composable () -> Unit = {
@@ -138,15 +175,32 @@ fun MainScreen(
 
     val activity = LocalContext.current as? Activity
     val videoScreen = videoPlaybackActive || videoSessionPending
-    LaunchedEffect(fullscreen, videoScreen) {
+    LaunchedEffect(fullscreen, videoScreen, musicFullscreen) {
         val window = activity?.window ?: return@LaunchedEffect
         val controller = WindowInsetsControllerCompat(window, window.decorView)
-        if (fullscreen || videoScreen) {
+        if (fullscreen || videoScreen || musicFullscreen) {
             controller.hide(WindowInsetsCompat.Type.systemBars())
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         } else {
             controller.show(WindowInsetsCompat.Type.systemBars())
         }
+    }
+
+    if (musicFullscreen && musicActive && !videoScreen) {
+        if (isInPip) {
+            Box(
+                modifier = Modifier.fillMaxSize().background(Color.Black),
+                contentAlignment = Alignment.Center
+            ) {
+                NowPlayingCoverArt(viewModel, fill = true)
+            }
+            return
+        }
+        FullscreenNowPlaying(
+            viewModel = viewModel,
+            onExit = { musicFullscreen = false }
+        )
+        return
     }
 
     if (videoScreen) {
@@ -521,8 +575,11 @@ fun MainScreen(
                 Column {
                     AudioMiniController(
                         viewModel,
-                        visible = audioOnly && connections > 0 && tab != Tab.OVERVIEW,
-                        onClick = { tab = Tab.OVERVIEW }
+                        visible = musicActive && !musicFullscreen && tab != Tab.OVERVIEW,
+                        onClick = {
+                            tab = Tab.OVERVIEW
+                            musicFullscreen = true
+                        }
                     )
                     NavigationBar {
                         Tab.entries.forEach { t ->
@@ -542,7 +599,8 @@ fun MainScreen(
                 TabContent(
                     tab, viewModel, video,
                     onFullscreen = { fullscreen = true }, onPip = onPip, onLocalNetwork = onLocalNetwork,
-                    showAudioMode = audioOnly
+                    showAudioMode = musicActive,
+                    onOpenMusicFullscreen = { musicFullscreen = true }
                 )
             }
         }
@@ -577,12 +635,14 @@ private fun TabContent(
     onFullscreen: () -> Unit,
     onPip: () -> Unit,
     onLocalNetwork: () -> Unit,
-    showAudioMode: Boolean
+    showAudioMode: Boolean,
+    onOpenMusicFullscreen: () -> Unit
 ) {
     when (tab) {
         Tab.OVERVIEW -> OverviewContent(
             viewModel, video,
-            onFullscreen = onFullscreen, onPip = onPip, onLocalNetwork = onLocalNetwork, showAudioMode = showAudioMode
+            onFullscreen = onFullscreen, onPip = onPip, onLocalNetwork = onLocalNetwork, showAudioMode = showAudioMode,
+            onOpenMusicFullscreen = onOpenMusicFullscreen
         )
         Tab.LOGS -> LogsScreen(viewModel)
         Tab.SETTINGS -> SettingsScreen(viewModel)
@@ -596,7 +656,8 @@ private fun OverviewContent(
     onFullscreen: () -> Unit,
     onPip: () -> Unit,
     onLocalNetwork: () -> Unit,
-    showAudioMode: Boolean = false
+    showAudioMode: Boolean = false,
+    onOpenMusicFullscreen: () -> Unit = {}
 ) {
     val state by viewModel.serverState.collectAsState()
     val localNetwork by viewModel.localNetwork.collectAsState()
@@ -629,7 +690,11 @@ private fun OverviewContent(
             val connecting = state == ServerState.RUNNING && connections > 0 &&
                 !mirroringActive && !videoPlaybackActive
             if (showAudioMode && state == ServerState.RUNNING && connections > 0) {
-                NowPlayingContent(viewModel)
+                // Compact overview while music continues in the background after Back
+                MusicPlayingOverview(
+                    viewModel = viewModel,
+                    onOpenFullscreen = onOpenMusicFullscreen
+                )
             } else {
                 if (state == ServerState.RUNNING && (mirroringActive || idlePreview)) {
                     video()
@@ -840,33 +905,379 @@ private fun FullscreenVideo(
     }
 }
 
-// dacp scanning is press-and-hold: beginff/beginrew while held, playresume on release
+// Soft edge-to-edge scrim (accent) behind chrome that matches the title color.
 @Composable
-private fun HoldScanButton(
-    icon: ImageVector,
-    contentDescription: String,
-    onBegin: () -> Unit,
-    onEnd: () -> Unit,
+private fun MinimalAudioProgress(
+    viewModel: MainViewModel,
+    accent: Color,
+    chrome: Color
+) {
+    val positionMs by viewModel.audioPositionMs.collectAsState()
+    val durationMs by viewModel.audioDurationMs.collectAsState()
+    val fraction = if (durationMs > 0L) {
+        (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val timeStyle = MaterialTheme.typography.labelSmall
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Gradient follows the independently detected top-zone contrast.
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colorStops = arrayOf(
+                            0f to accent.copy(alpha = 0.55f),
+                            0.45f to accent.copy(alpha = 0.28f),
+                            1f to Color.Transparent
+                        )
+                    )
+                )
+        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 48.dp, vertical = 8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .clip(RoundedCornerShape(1.dp))
+                    .background(chrome.copy(alpha = 0.25f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(fraction)
+                        .background(chrome.copy(alpha = 0.95f))
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = formatAudioTime(positionMs),
+                    style = timeStyle,
+                    color = chrome.copy(alpha = 0.78f)
+                )
+                Text(
+                    text = formatAudioTime(durationMs),
+                    style = timeStyle,
+                    color = chrome.copy(alpha = 0.78f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AmbientProgress(
+    viewModel: MainViewModel,
+    color: Color,
+    showTimes: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val positionMs by viewModel.audioPositionMs.collectAsState()
+    val durationMs by viewModel.audioDurationMs.collectAsState()
+    if (durationMs <= 0L) return
+    val fraction = (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+    Column(modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(3.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(color.copy(alpha = 0.2f))
+        ) {
+            Box(
+                Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(fraction)
+                    .background(color.copy(alpha = 0.75f))
+            )
+        }
+        // fixed height so revealing the times doesn't move anything
+        Box(Modifier.fillMaxWidth().height(24.dp)) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showTimes,
+                enter = androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.fadeOut()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    val style = MaterialTheme.typography.labelMedium
+                    Text(formatAudioTime(positionMs), style = style, color = color.copy(alpha = 0.7f))
+                    Text(formatAudioTime(durationMs), style = style, color = color.copy(alpha = 0.7f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NowPlayingClock(color: Color, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val time by produceState(initialValue = "") {
+        val fmt = android.text.format.DateFormat.getTimeFormat(context)
+        while (true) {
+            value = fmt.format(java.util.Date())
+            delay(60_000 - System.currentTimeMillis() % 60_000)
+        }
+    }
+    Text(
+        text = time,
+        style = MaterialTheme.typography.titleLarge,
+        color = color,
+        modifier = modifier
+    )
+}
+
+// new content fades in over the old one, which stays opaque: no dip to the background mid-way
+private fun overlayFade(ms: Int): ContentTransform =
+    androidx.compose.animation.fadeIn(tween(ms)) togetherWith
+        androidx.compose.animation.fadeOut(tween(durationMillis = 0, delayMillis = ms))
+
+@Composable
+private fun rememberStableBitmap(bitmap: Bitmap?): Bitmap? {
+    val last = remember { arrayOfNulls<Bitmap>(1) }
+    val prev = last[0]
+    val stable = if (bitmap != null && prev != null && bitmap !== prev && bitmap.sameAs(prev)) prev else bitmap
+    last[0] = stable
+    return stable
+}
+
+// Apple TV-style press: the button dips and springs back instead of a ripple
+@Composable
+private fun TransportButton(
+    onClick: () -> Unit,
+    color: Color,
+    modifier: Modifier = Modifier,
+    pressEffect: Boolean = true,
+    content: @Composable () -> Unit
+) {
+    val source = remember { MutableInteractionSource() }
+    val scale = remember { Animatable(1f) }
+    if (pressEffect) LaunchedEffect(source) {
+        source.interactions.collect { interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> launch { scale.animateTo(PRESS_SCALE, tween(80)) }
+                is PressInteraction.Release, is PressInteraction.Cancel -> launch {
+                    // a quick tap still shows the full dip
+                    if (scale.value > PRESS_SCALE + 0.01f) scale.animateTo(PRESS_SCALE, tween(80))
+                    scale.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = 600f))
+                }
+            }
+        }
+    }
     Box(
         modifier = modifier
-            .size(48.dp)
-            .clip(CircleShape)
-            .pointerInput(Unit) {
-                detectTapGestures(onPress = {
-                    onBegin()
-                    try {
-                        awaitRelease()
-                    } finally {
-                        onEnd()
-                    }
-                })
-            },
+            .graphicsLayer { scaleX = scale.value; scaleY = scale.value }
+            .clickable(interactionSource = source, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Icon(icon, contentDescription)
+        CompositionLocalProvider(LocalContentColor provides color, content = content)
     }
+}
+
+private const val PRESS_SCALE = 0.88f
+
+@Composable
+private fun CoverArtShadow(
+    accent: Color,
+    modifier: Modifier = Modifier,
+    content: @Composable BoxScope.() -> Unit
+) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        // Soft radial glow (smooth fade like the progress scrim), max ~25% opacity
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.radialGradient(
+                        colorStops = arrayOf(
+                            0.00f to accent.copy(alpha = 0.25f),
+                            0.45f to accent.copy(alpha = 0.18f),
+                            0.70f to accent.copy(alpha = 0.10f),
+                            0.88f to accent.copy(alpha = 0.04f),
+                            1.00f to Color.Transparent
+                        )
+                    )
+                )
+        )
+        // Cover inset so the glow halo is visible around the edges
+        Box(
+            modifier = Modifier
+                .fillMaxSize(0.86f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF2C2C2E)),
+            content = content
+        )
+    }
+}
+
+private fun formatAudioTime(ms: Long): String {
+    if (ms <= 0L) return "0:00"
+    val totalSec = (ms / 1000).toInt()
+    val m = totalSec / 60
+    val s = totalSec % 60
+    return "%d:%02d".format(m, s)
+}
+
+/** Foreground and its opposite-color ambient scrim for one screen region. */
+private data class ZoneContrast(val chrome: Color, val scrim: Color)
+
+private data class NowPlayingContrast(
+    val top: ZoneContrast,
+    val middle: ZoneContrast,
+    val bottom: ZoneContrast,
+)
+
+/**
+ * Samples a rectangle expressed in viewport coordinates from the exact source
+ * crop produced by ContentScale.Crop.
+ */
+private fun viewportRegionLuminances(
+    bitmap: Bitmap,
+    viewportAspect: Float,
+    x0: Float,
+    y0: Float,
+    x1: Float,
+    y1: Float,
+    columns: Int = 24,
+    rows: Int = 16,
+): FloatArray {
+    val width = bitmap.width.coerceAtLeast(1)
+    val height = bitmap.height.coerceAtLeast(1)
+    val sourceAspect = width.toFloat() / height.toFloat()
+    val safeViewportAspect = viewportAspect.coerceAtLeast(0.1f)
+
+    var cropX = 0f
+    var cropY = 0f
+    var visibleWidth = 1f
+    var visibleHeight = 1f
+    if (sourceAspect > safeViewportAspect) {
+        visibleWidth = safeViewportAspect / sourceAspect
+        cropX = (1f - visibleWidth) / 2f
+    } else {
+        visibleHeight = sourceAspect / safeViewportAspect
+        cropY = (1f - visibleHeight) / 2f
+    }
+
+    fun linearChannel(channel: Int): Double {
+        val srgb = channel / 255.0
+        return if (srgb <= 0.04045) {
+            srgb / 12.92
+        } else {
+            ((srgb + 0.055) / 1.055).pow(2.4)
+        }
+    }
+
+    return FloatArray(columns * rows) { index ->
+        val column = index % columns
+        val row = index / columns
+        val viewportX = x0 + (x1 - x0) * ((column + 0.5f) / columns)
+        val viewportY = y0 + (y1 - y0) * ((row + 0.5f) / rows)
+        val sourceX = cropX + viewportX.coerceIn(0f, 1f) * visibleWidth
+        val sourceY = cropY + viewportY.coerceIn(0f, 1f) * visibleHeight
+        val pixelX = (sourceX * (width - 1)).toInt().coerceIn(0, width - 1)
+        val pixelY = (sourceY * (height - 1)).toInt().coerceIn(0, height - 1)
+        val pixel = bitmap.getPixel(pixelX, pixelY)
+        val red = linearChannel((pixel shr 16) and 0xff)
+        val green = linearChannel((pixel shr 8) and 0xff)
+        val blue = linearChannel(pixel and 0xff)
+        (0.2126 * red + 0.7152 * green + 0.0722 * blue).toFloat()
+    }
+}
+
+// downscale + repeated box blur ≈ heavy gaussian; bilinear upscaling keeps it smooth
+private fun ambientBackdrop(src: Bitmap): Bitmap {
+    val w = 56
+    val h = (w * src.height / src.width.coerceAtLeast(1)).coerceAtLeast(1)
+    val small = Bitmap.createScaledBitmap(src, w, h, true)
+    val px = IntArray(w * h)
+    small.getPixels(px, 0, w, 0, 0, w, h)
+    repeat(3) {
+        boxBlur(px, w, h, 4, horizontal = true)
+        boxBlur(px, w, h, 4, horizontal = false)
+    }
+    return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
+}
+
+private fun boxBlur(px: IntArray, w: Int, h: Int, r: Int, horizontal: Boolean) {
+    val lines = if (horizontal) h else w
+    val len = if (horizontal) w else h
+    val line = IntArray(len)
+    val n = 2 * r + 1
+    for (l in 0 until lines) {
+        fun idx(i: Int) = if (horizontal) l * w + i else i * w + l
+        for (i in 0 until len) line[i] = px[idx(i)]
+        var rs = 0; var gs = 0; var bs = 0
+        for (k in -r..r) {
+            val c = line[k.coerceIn(0, len - 1)]
+            rs += (c shr 16) and 0xff; gs += (c shr 8) and 0xff; bs += c and 0xff
+        }
+        for (i in 0 until len) {
+            px[idx(i)] = (0xff shl 24) or ((rs / n) shl 16) or ((gs / n) shl 8) or (bs / n)
+            val out = line[(i - r).coerceIn(0, len - 1)]
+            val inc = line[(i + r + 1).coerceIn(0, len - 1)]
+            rs += ((inc shr 16) and 0xff) - ((out shr 16) and 0xff)
+            gs += ((inc shr 8) and 0xff) - ((out shr 8) and 0xff)
+            bs += (inc and 0xff) - (out and 0xff)
+        }
+    }
+}
+
+/**
+ * Strongly prefers white and switches to black only when the zone is predominantly
+ * bright. The median drives the choice while the 10th percentile still gives
+ * sizeable bright patches limited influence.
+ */
+private fun contrastFromSamples(luminances: FloatArray): ZoneContrast {
+    if (luminances.isEmpty()) return ZoneContrast(Color.White, Color.Black)
+
+    fun robustScore(ratios: FloatArray): Float {
+        ratios.sort()
+        val low = ratios[((ratios.lastIndex * 0.10f).toInt()).coerceIn(ratios.indices)]
+        val median = ratios[ratios.size / 2]
+        return low * 0.25f + median * 0.75f
+    }
+
+    val whiteRatios = FloatArray(luminances.size) { 1.05f / (luminances[it] + 0.05f) }
+    return if (robustScore(whiteRatios) < 2.25f) {
+        ZoneContrast(chrome = Color(0xFF101010), scrim = Color.White)
+    } else {
+        ZoneContrast(chrome = Color.White, scrim = Color.Black)
+    }
+}
+
+private fun nowPlayingContrastFromCover(
+    bitmap: Bitmap?,
+    viewportAspect: Float,
+    topEnd: Float,
+    bottomStart: Float,
+): NowPlayingContrast {
+    val fallback = ZoneContrast(chrome = Color.White, scrim = Color.Black)
+    if (bitmap == null) return NowPlayingContrast(fallback, fallback, fallback)
+
+    val top = contrastFromSamples(
+        viewportRegionLuminances(bitmap, viewportAspect, 0.02f, 0f, 0.98f, topEnd)
+    )
+    val middle = contrastFromSamples(
+        viewportRegionLuminances(bitmap, viewportAspect, 0.46f, 0.36f, 0.98f, 0.64f)
+    )
+    val bottom = contrastFromSamples(
+        viewportRegionLuminances(bitmap, viewportAspect, 0.02f, bottomStart, 0.98f, 1f)
+    )
+    return NowPlayingContrast(top = top, middle = middle, bottom = bottom)
 }
 
 @Composable
@@ -883,47 +1294,36 @@ private fun AudioMiniController(viewModel: MainViewModel, visible: Boolean, onCl
 }
 
 @Composable
-@AndroidxOptIn(UnstableApi::class)
-private fun NowPlayingContent(viewModel: MainViewModel) {
+private fun MusicPlayingOverview(
+    viewModel: MainViewModel,
+    onOpenFullscreen: () -> Unit
+) {
     val track by viewModel.trackInfo.collectAsState()
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
+            .padding(24.dp)
+            .focusRequester(focus)
+            .focusable()
+            .clickable(onClick = onOpenFullscreen)
+            .onPreviewKeyEvent { e ->
+                if (e.type == KeyEventType.KeyDown &&
+                    (e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter)
+                ) {
+                    onOpenFullscreen()
+                    true
+                } else {
+                    false
+                }
+            },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // cover art
-        Box(
-            modifier = Modifier
-                .weight(1f, fill = false)
-                .aspectRatio(1f)
-                .fillMaxWidth(0.7f)
-                .clip(RoundedCornerShape(16.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-            contentAlignment = Alignment.Center
-        ) {
-            if (track.coverArt != null) {
-                Image(
-                    bitmap = track.coverArt!!.asImageBitmap(),
-                    contentDescription = stringResource(R.string.cd_cover_art),
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
-                )
-            } else {
-                Icon(
-                    Icons.Default.MusicNote,
-                    contentDescription = null,
-                    modifier = Modifier.size(64.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                )
-            }
-        }
-
-        Spacer(Modifier.height(20.dp))
-
-        // track info
+        NowPlayingCoverArt(viewModel, fill = false, modifier = Modifier.fillMaxWidth(0.45f))
+        Spacer(Modifier.height(16.dp))
         Text(
             text = track.title.ifEmpty { stringResource(R.string.unknown_track) },
             style = MaterialTheme.typography.titleMedium,
@@ -940,82 +1340,413 @@ private fun NowPlayingContent(viewModel: MainViewModel) {
                 overflow = TextOverflow.Ellipsis
             )
         }
-        if (track.album.isNotEmpty()) {
-            Text(
-                text = track.album,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = stringResource(R.string.music_press_ok_fullscreen),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+        )
+    }
+}
+
+@Composable
+private fun NowPlayingCoverArt(
+    viewModel: MainViewModel,
+    fill: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val track by viewModel.trackInfo.collectAsState()
+    Box(
+        modifier = modifier
+            .then(if (fill) Modifier.fillMaxSize() else Modifier.aspectRatio(1f))
+            .clip(if (fill) RoundedCornerShape(0.dp) else RoundedCornerShape(12.dp))
+            .background(Color(0xFF1C1C1E)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (track.coverArt != null) {
+            Image(
+                bitmap = track.coverArt!!.asImageBitmap(),
+                contentDescription = stringResource(R.string.cd_cover_art),
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Icon(
+                Icons.Default.MusicNote,
+                contentDescription = null,
+                modifier = Modifier.size(if (fill) 96.dp else 64.dp),
+                tint = Color.White.copy(alpha = 0.35f)
             )
         }
+    }
+}
 
-        Spacer(Modifier.height(16.dp))
+/**
+ * Apple Music (tvOS)-style now playing: full-screen artwork, chrome hidden until Select/OK.
+ * Back leaves this view and returns to the main tabs without stopping playback.
+ */
+@Composable
+@AndroidxOptIn(UnstableApi::class)
+private fun FullscreenNowPlaying(
+    viewModel: MainViewModel,
+    onExit: () -> Unit
+) {
+    val track by viewModel.trackInfo.collectAsState()
+    val audioPlaying by viewModel.audioPlaying.collectAsState()
+    var controlsVisible by remember { mutableStateOf(false) }
+    var showTick by remember { mutableIntStateOf(0) }
+    val rootFocus = remember { FocusRequester() }
+    val playPauseFocus = remember { FocusRequester() }
+    var playPauseFocused by remember { mutableStateOf(false) }
 
-        val player = viewModel.dacpPlayer
-        if (player != null) {
-            // BottomControls' default row, minus its video-overlay gradient
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                PositionText(player, Modifier.padding(end = 8.dp))
-                Box(modifier = Modifier.weight(1f)) { ProgressSlider(player) }
-                DurationText(player, Modifier.padding(start = 8.dp))
+    val configuration = LocalConfiguration.current
+    val viewportAspect = configuration.screenWidthDp.toFloat() /
+        configuration.screenHeightDp.coerceAtLeast(1).toFloat()
+    val topEnd = (72f / configuration.screenHeightDp.coerceAtLeast(1)).coerceIn(0.04f, 0.16f)
+    val bottomStart = (1f - 104f / configuration.screenHeightDp.coerceAtLeast(1))
+        .coerceIn(0.80f, 0.94f)
+    // the sender resends the same artwork on play/pause: keep one instance so nothing re-animates
+    val coverArt = rememberStableBitmap(track.coverArt)
+    // Sampling is intentionally synchronous: it is small enough to finish within
+    // the composition frame, keeping artwork and chrome color updates atomic.
+    val contrast = remember(
+        coverArt,
+        viewportAspect,
+        topEnd,
+        bottomStart,
+    ) {
+        nowPlayingContrastFromCover(coverArt, viewportAspect, topEnd, bottomStart)
+    }
+    val top = contrast.top
+    val middle = contrast.middle
+    val bottom = contrast.bottom
+    val artistColor = middle.chrome.copy(alpha = 0.78f)
+
+    fun revealControls() {
+        controlsVisible = true
+        showTick++
+    }
+
+    fun bumpIdle() {
+        if (controlsVisible) showTick++
+    }
+
+    // Auto-hide only while playing and idle; stay up while paused or while user keeps interacting
+    LaunchedEffect(showTick, controlsVisible, audioPlaying) {
+        if (!controlsVisible || !audioPlaying) return@LaunchedEffect
+        delay(MUSIC_CONTROLS_HIDE_MS)
+        controlsVisible = false
+    }
+
+    LaunchedEffect(controlsVisible) {
+        if (controlsVisible) {
+            playPauseFocus.requestFocusUntilLanded(attempts = 16) { playPauseFocused }
+        } else {
+            runCatching { rootFocus.requestFocus() }
+        }
+    }
+
+    BackHandler {
+        if (controlsVisible) controlsVisible = false else onExit()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .focusRequester(rootFocus)
+            .focusable()
+            .pointerInput(Unit) {
+                detectTapGestures {
+                    if (controlsVisible) controlsVisible = false else revealControls()
+                }
             }
+            .onPreviewKeyEvent { e ->
+                if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (e.key) {
+                    Key.MediaNext, Key.MediaSkipForward -> {
+                        viewModel.audioNext()
+                        revealControls()
+                        true
+                    }
+                    Key.MediaPrevious, Key.MediaSkipBackward -> {
+                        viewModel.audioPrev()
+                        revealControls()
+                        true
+                    }
+                    Key.MediaPlayPause -> {
+                        viewModel.audioTogglePlayPause()
+                        revealControls()
+                        true
+                    }
+                    Key.MediaPlay -> {
+                        if (!audioPlaying) viewModel.audioTogglePlayPause()
+                        revealControls()
+                        true
+                    }
+                    Key.MediaPause -> {
+                        if (audioPlaying) viewModel.audioTogglePlayPause()
+                        revealControls()
+                        true
+                    }
+                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter,
+                    Key.DirectionLeft, Key.DirectionRight, Key.DirectionUp, Key.DirectionDown -> {
+                        if (!controlsVisible) {
+                            revealControls()
+                            true
+                        } else {
+                            bumpIdle()
+                            false
+                        }
+                    }
+                    Key.Back, Key.Escape -> {
+                        if (controlsVisible) {
+                            controlsVisible = false
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    else -> false
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        // Ambient backdrop: software-blurred so it is smooth on every API level; slow zoom keeps it alive
+        val drift by rememberInfiniteTransition(label = "drift").animateFloat(
+            initialValue = 1f,
+            targetValue = 1.12f,
+            animationSpec = infiniteRepeatable(tween(30_000, easing = LinearEasing), RepeatMode.Reverse),
+            label = "driftScale"
+        )
+        AnimatedContent(targetState = coverArt, transitionSpec = { overlayFade(800) }, label = "backdrop") { art ->
+            val backdrop = remember(art) { art?.let(::ambientBackdrop)?.asImageBitmap() }
+            if (backdrop != null) {
+                Image(
+                    bitmap = backdrop,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { scaleX = drift; scaleY = drift },
+                    contentScale = ContentScale.Crop,
+                    filterQuality = FilterQuality.High
+                )
+            } else {
+                Box(Modifier.fillMaxSize())
+            }
+        }
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)))
 
-            Spacer(Modifier.height(8.dp))
+        // Always-on thin progress and clock while the chrome is hidden
+        androidx.compose.animation.AnimatedVisibility(
+            visible = !controlsVisible,
+            enter = androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.fadeOut(),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(Modifier.fillMaxSize()) {
+                NowPlayingClock(
+                    color = top.chrome.copy(alpha = 0.7f),
+                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 32.dp, end = 48.dp)
+                )
+            }
+        }
 
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(vertical = 0.dp)
+        ) {
+            // Top spacer keeps the middle band where it was; progress now lives under the title
+            Spacer(Modifier.fillMaxWidth().height(72.dp))
+
+            // Cover left, title/artist right — fixed middle band
             Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 96.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
+                horizontalArrangement = Arrangement.spacedBy(56.dp)
             ) {
-                HoldScanButton(
-                    icon = Icons.Default.FastRewind,
-                    contentDescription = stringResource(R.string.cd_rewind),
-                    onBegin = { viewModel.audioScanBegin(false) },
-                    onEnd = { viewModel.audioScanEnd() }
+                // Apple Music-style pause: the cover shrinks back
+                val coverScale by animateFloatAsState(
+                    targetValue = if (audioPlaying) 1f else 0.84f,
+                    animationSpec = tween(450),
+                    label = "coverScale"
                 )
-                PreviousButton(player, modifier = Modifier.dpadFocus())
-                PlayPauseButton(
-                    player,
-                    modifier = Modifier.size(63.dp).dpadFocus(CircleShape),
-                    iconSize = 40.dp
-                )
-                NextButton(player, modifier = Modifier.dpadFocus())
-                HoldScanButton(
-                    icon = Icons.Default.FastForward,
-                    contentDescription = stringResource(R.string.cd_fast_forward),
-                    onBegin = { viewModel.audioScanBegin(true) },
-                    onEnd = { viewModel.audioScanEnd() }
-                )
+                CoverArtShadow(
+                    accent = middle.chrome,
+                    modifier = Modifier
+                        .fillMaxHeight(0.6f)
+                        .aspectRatio(1f)
+                        .graphicsLayer {
+                            scaleX = coverScale
+                            scaleY = coverScale
+                        }
+                ) {
+                    AnimatedContent(targetState = coverArt, transitionSpec = { overlayFade(600) }, label = "cover") { art ->
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            if (art != null) {
+                                Image(
+                                    bitmap = art.asImageBitmap(),
+                                    contentDescription = stringResource(R.string.cd_cover_art),
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.MusicNote,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(96.dp),
+                                    tint = Color.White.copy(alpha = 0.35f)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = track.title.ifEmpty { stringResource(R.string.unknown_track) },
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ),
+                        color = middle.chrome,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (track.artist.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = track.artist,
+                            style = MaterialTheme.typography.titleLarge,
+                            color = artistColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    val details = listOf(track.album, track.genre).filter { it.isNotEmpty() }.joinToString(" · ")
+                    if (details.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = details,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = middle.chrome.copy(alpha = 0.55f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Spacer(Modifier.height(28.dp))
+                    AmbientProgress(
+                        viewModel = viewModel,
+                        color = middle.chrome,
+                        showTimes = controlsVisible,
+                        modifier = Modifier.fillMaxWidth(0.85f)
+                    )
+                }
             }
 
-            Spacer(Modifier.height(8.dp))
-
-            val context = LocalContext.current
-            val serverVolume = remember { ServerVolumeState(context) }
-            DisposableEffect(serverVolume) { serverVolume.handleLifecycle(this) }
-            VolumeSlider(
-                icon = painterResource(R.drawable.ic_download),
-                label = stringResource(R.string.volume_server),
-                value = serverVolume.percentage / 100f,
-                onValueChange = { serverVolume.update((it * 100).roundToInt()) },
-                onStep = { serverVolume.adjust(it > 0) }
-            )
-
-            val clientVolume by viewModel.clientVolume.collectAsState()
-            val clientAdjustable by viewModel.clientVolumeAdjustable.collectAsState()
-            // sender reports back only after each dacp step
-            var clientDrag by remember { mutableStateOf<Float?>(null) }
-            val clientShown = clientDrag ?: clientVolume
-            VolumeSlider(
-                icon = painterResource(R.drawable.ic_upload),
-                label = stringResource(R.string.volume_client),
-                value = clientShown,
-                enabled = clientAdjustable,
-                onValueChange = { clientDrag = it; viewModel.setClientVolume(it) },
-                onValueChangeFinished = { clientDrag = null },
-                onStep = { viewModel.setClientVolume((clientShown + it * CLIENT_VOLUME_STEP).coerceIn(0f, 1f)) }
-            )
+            // Fixed slot so transport fades in below without shifting cover/text
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(104.dp),
+                contentAlignment = Alignment.BottomCenter
+            ) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = controlsVisible,
+                    enter = androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.fadeOut()
+                ) {
+                    Box(Modifier.fillMaxSize()) {
+                        // Edge-to-edge gradient from the bottom up
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        colorStops = arrayOf(
+                                            0f to Color.Transparent,
+                                            0.4f to bottom.scrim.copy(alpha = 0.28f),
+                                            1f to bottom.scrim.copy(alpha = 0.55f)
+                                        )
+                                    )
+                                )
+                        )
+                        CompositionLocalProvider(LocalContentColor provides bottom.chrome) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally),
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .align(Alignment.Center)
+                                    .padding(horizontal = 48.dp, vertical = 8.dp)
+                            ) {
+                                TransportButton(
+                                    onClick = {
+                                        bumpIdle()
+                                        viewModel.audioPrev()
+                                    },
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .dpadFocus(CircleShape, bottom.chrome)
+                                        .onFocusChanged { if (it.hasFocus) bumpIdle() },
+                                    color = bottom.chrome
+                                ) {
+                                    Icon(
+                                        Icons.Default.SkipPrevious,
+                                        contentDescription = stringResource(R.string.cd_previous),
+                                        modifier = Modifier.size(36.dp)
+                                    )
+                                }
+                                TransportButton(
+                                    onClick = {
+                                        bumpIdle()
+                                        viewModel.audioTogglePlayPause()
+                                    },
+                                    modifier = Modifier
+                                        .size(72.dp)
+                                        .focusRequester(playPauseFocus)
+                                        .onFocusChanged {
+                                            playPauseFocused = it.hasFocus
+                                            if (it.hasFocus) bumpIdle()
+                                        }
+                                        .dpadFocus(CircleShape, bottom.chrome),
+                                    color = bottom.chrome,
+                                    pressEffect = false
+                                ) {
+                                    Icon(
+                                        if (audioPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                        contentDescription = stringResource(R.string.cd_play_pause),
+                                        modifier = Modifier.size(44.dp)
+                                    )
+                                }
+                                TransportButton(
+                                    onClick = {
+                                        bumpIdle()
+                                        viewModel.audioNext()
+                                    },
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .dpadFocus(CircleShape, bottom.chrome)
+                                        .onFocusChanged { if (it.hasFocus) bumpIdle() },
+                                    color = bottom.chrome
+                                ) {
+                                    Icon(
+                                        Icons.Default.SkipNext,
+                                        contentDescription = stringResource(R.string.cd_next),
+                                        modifier = Modifier.size(36.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1064,6 +1795,7 @@ private fun VolumeSlider(
 private const val CLIENT_VOLUME_STEP = 1f / 16
 
 private const val VIDEO_OVERLAY_HIDE_MS = 4000L
+private const val MUSIC_CONTROLS_HIDE_MS = 5000L
 
 @Composable
 private fun DebugOverlay(info: DebugInfo, modifier: Modifier = Modifier) {
