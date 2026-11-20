@@ -61,9 +61,7 @@ import java.security.SecureRandom
 import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.roundToInt
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.filter
@@ -106,10 +104,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private val _connectionCount = MutableStateFlow(0)
     val connectionCount = _connectionCount.asStateFlow()
 
-    // UI brought up by a sender (launch on connect) steps aside once the last sender leaves
-    private var _launchedForConnection = false
-    private val _dismissUi = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
-    val dismissUi = _dismissUi.asSharedFlow()
+    private var _sessionId = 0L
+    @Volatile private var _shuttingDown = false
+    private val _endedSession = MutableStateFlow(0L)
+    val endedSession = _endedSession.asStateFlow()
 
     private val _videoAspect = MutableStateFlow(16f / 9f)
     val videoAspect = _videoAspect.asStateFlow()
@@ -541,9 +539,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
     private fun _shutdown() {
         audioRenderer.detachEngine()
         if (nativeHandle != 0L) {
+            _shuttingDown = true
             NativeBridge.nativeStop(nativeHandle)
             NativeBridge.nativeDestroy(nativeHandle)
             nativeHandle = 0L
+            _shuttingDown = false
         }
         dacpController?.reset()
         usbAdvertiser?.stop()
@@ -802,12 +802,10 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
 
     override fun onConnectionInit() {
         val firstConnection = _connectionCount.value == 0
+        if (firstConnection) _sessionId++
         _connectionCount.value++
         log("Sender connected (${_connectionCount.value})")
-        if (firstConnection && shouldLaunchOnConnect()) {
-            _launchedForConnection = true
-            launchMainActivity()
-        }
+        if (firstConnection && shouldLaunchOnConnect()) launchMainActivity(_sessionId)
     }
 
     override fun onConnectionDestroy() {
@@ -837,10 +835,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
             mediaSession?.isActive = false
             _refreshDacpPlayer()
             _updateMediaNotification()
-            if (_launchedForConnection) {
-                _launchedForConnection = false
-                _dismissUi.tryEmit(Unit)
-            }
+            if (!_shuttingDown) _endedSession.value = _sessionId
         }
         log("Sender disconnected (${_connectionCount.value})")
     }
@@ -1156,10 +1151,11 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         return builder.build()
     }
 
-    private fun launchMainActivity() {
+    private fun launchMainActivity(sessionId: Long) {
         Handler(Looper.getMainLooper()).post {
             val launchIntent = Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                .putExtra(EXTRA_LAUNCHED_FOR_SESSION, sessionId)
             try {
                 startActivity(launchIntent)
             } catch (e: Exception) {
@@ -1201,6 +1197,7 @@ class AirPlayService : LifecycleService(), RaopCallbackHandler, LogListener {
         const val ACTION_NEXT = "io.github.jqssun.airplay.NEXT"
         const val ACTION_PREV = "io.github.jqssun.airplay.PREV"
         const val ACTION_START_SERVER = "io.github.jqssun.airplay.START_SERVER"
+        const val EXTRA_LAUNCHED_FOR_SESSION = "io.github.jqssun.airplay.LAUNCHED_FOR_SESSION"
         // shared with dpad/double-tap seeks
         const val VIDEO_SEEK_STEP_MS = 10_000L
         const val VIDEO_POLL_PENDING_TIMEOUT_MS = 3_000L
