@@ -29,6 +29,7 @@ import io.github.jqssun.airplay.viewmodel.LocalNetworkAccess
 import io.github.jqssun.airplay.viewmodel.MainViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
@@ -37,6 +38,8 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
     private var service: AirPlayService? = null
+    private val _dismissAfterSession = MutableStateFlow(0L)
+    private var _resumedSinceStop = false
     val isInPip = mutableStateOf(false)
     private val logCallback: (String) -> Unit = { viewModel.addLog(it) }
     private val pinCallback: (String?) -> Unit = { viewModel.showPin(it) }
@@ -48,6 +51,16 @@ class MainActivity : ComponentActivity() {
             svc.logCallback = logCallback
             svc.pinCallback = pinCallback
             viewModel.bindService(svc)
+            lifecycleScope.launch {
+                combine(svc.endedSession, _dismissAfterSession) { ended, session ->
+                    session != 0L && ended == session
+                }.collect { sessionEnded ->
+                    if (sessionEnded) {
+                        _dismissAfterSession.value = 0L
+                        moveTaskToBack(true)
+                    }
+                }
+            }
             if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) _refreshForeground()
             _autoStart()
         }
@@ -63,6 +76,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) _noteLaunchIntent(intent)
         enableEdgeToEdge()
 
         val missing = buildList {
@@ -161,6 +175,21 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        _noteLaunchIntent(intent)
+    }
+
+    private fun _noteLaunchIntent(intent: Intent) {
+        val session = intent.getLongExtra(AirPlayService.EXTRA_LAUNCHED_FOR_SESSION, 0L)
+        if (session != 0L && !_resumedSinceStop) _dismissAfterSession.value = session
+    }
+
+    override fun onResume() {
+        super.onResume()
+        _resumedSinceStop = true
+    }
+
     override fun onStart() {
         super.onStart()
         _syncLocalNetwork()
@@ -199,6 +228,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        _resumedSinceStop = false
+        if (!isChangingConfigurations && !isInPip.value) _dismissAfterSession.value = 0L
         // never stop mid-session
         if (!viewModel.pref(Prefs.RUN_IN_BACKGROUND).value && !isChangingConfigurations &&
             viewModel.serverState.value == AirPlayService.ServerState.RUNNING &&
